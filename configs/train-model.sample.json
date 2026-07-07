@@ -1,0 +1,8 @@
+{
+  "modelId": "model-001",
+  "modelName": "示例列车模型",
+  "maxSpeed": 80.0,
+  "acceleration": 1.0,
+  "deceleration": 1.2,
+  "capacity": 1200
+}

@@ -1,0 +1,9 @@
+{
+  "lineId": "line-001",
+  "lineName": "示例线路",
+  "stations": [
+    { "id": "s1", "name": "车站A", "position": 0.0 },
+    { "id": "s2", "name": "车站B", "position": 2.5 }
+  ],
+  "totalLength": 5.0
+}

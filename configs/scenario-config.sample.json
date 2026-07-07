@@ -1,0 +1,7 @@
+{
+  "scenarioId": "scenario-001",
+  "scenarioName": "示例仿真场景",
+  "lineProfile": "line-profile.sample.json",
+  "trainModels": ["train-model.sample.json"],
+  "simulationDuration": 3600
+}
