@@ -8,9 +8,15 @@ export interface TrainCar {
 export interface TrainState {
   trainId: string;
   trainName: string;
+  trainNumber: string;      // 正式车次号 (如 90101)
+  direction: 'UP' | 'DOWN'; // 运行方向
+  routePattern: string;     // 交路模式 FULL | SHORT_N | SHORT_S
+  operationLevel: string;   // 运行等级 NORMAL | ENERGY_SAVE | EXPRESS | SLOW
+  skipNextStation: boolean; // 下一站甩站通过
+  turnbackCount: number;    // 已完成折返次数
   positionMeters: number;
   speed: number; // km/h
-  status: 'STOPPED' | 'RUNNING' | 'ARRIVING' | 'DEPARTING' | 'FINISHED';
+  status: 'DEPOT_WAITING' | 'DEPARTING' | 'ACCELERATING' | 'CRUISING' | 'BRAKING' | 'DWELLING' | 'TURNING_BACK' | 'FINISHED';
   currentStationIndex: number;
   nextStationIndex: number;
   departureTime: string;
@@ -18,6 +24,19 @@ export interface TrainState {
   carCount: number;
   carLength: number;
   cars: TrainCar[];
+  delaySeconds: number;
+  plannedDwellSeconds: number;
+  actualDwellSeconds: number;
+  plannedDepartureFromDepot: number;
+  plannedArrivalAtStation: number;
+  actualArrivalAtStation: number;
+  actualDepartureFromStation: number;
+  maxSpeedLimit: number;
+  acceleration: number;
+  sectionDistance: number;  // 当前区间距离 (m)
+  sectionProgress: number;  // 当前区间已行进 (m)
+  emergencyBraking: boolean;
+  movementAuthority: number;
 }
 
 export interface HeadwayInfo {
@@ -25,20 +44,26 @@ export interface HeadwayInfo {
   toTrainId: string;
   distanceMeters: number;
   timeSeconds: number;
-  status: 'SAFE' | 'WARNING' | 'DANGER';
+  status: 'SAFE' | 'CAUTION' | 'WARNING' | 'DANGER';
+  safetyDistanceMeters: number;
 }
 
 export interface TrainCommand {
   trainId: string;
-  commandType: 'DEPART' | 'HOLD' | 'SLOW' | 'ARRIVE' | 'TERMINATE';
+  commandType: 'DEPART' | 'HOLD' | 'SLOW' | 'ARRIVE' | 'TERMINATE' | 'SPEED_UP' | 'EMERGENCY_BRAKE' | 'TURN_BACK' | 'SKIP_STATION' | 'CHANGE_LEVEL' | 'SHORT_TURN' | 'RESUME_NORMAL';
   targetValue: number;
   reason: string;
+  issuedTime: number;
+  effectiveTime: number;
+  completedTime: number;
+  status: 'ISSUED' | 'ACKED' | 'EXECUTING' | 'COMPLETED' | 'REJECTED';
 }
 
 export interface TrainPositionPoint {
   trainId: string;
   timeSeconds: number;
   positionKm: number;
+  direction?: string; // UP | DOWN
 }
 
 export interface StationArrival {
@@ -48,6 +73,11 @@ export interface StationArrival {
   arrivalTimeSeconds: number;
   departureTimeSeconds: number;
   dwellSeconds: number;
+  plannedArrivalSeconds: number;
+  plannedDepartureSeconds: number;
+  plannedDwellSeconds: number;
+  arrivalDeviation: number;
+  departureDeviation: number;
 }
 
 export interface SimulationSnapshot {
@@ -61,10 +91,59 @@ export interface SimulationSnapshot {
   positionHistory: TrainPositionPoint[];
   stationArrivals: StationArrival[];
   totalEnergyKwh: number;
-  totalTractionKwh: number;
-  totalRegenKwh: number;
-  peakPowerKw: number;
-  maxSpeedLimit: number;
+  delayEvents: DelayEvent[];
+  passengerFlow: PassengerFlowInfo;
+  dispatchInfo: DispatchInfo;
+  /** 计划运行图点位 */
+  plannedDiagramPoints: TrainPositionPoint[];
+  /** 计划偏差 */
+  planDeviations: StationArrival[];
+}
+
+export interface DelayEvent {
+  timeSeconds: number;
+  trainId: string;
+  delaySeconds: number;
+  cause: string;
+  affectedTrainId: string;
+  positionKm: number;
+  eventType: 'PRIMARY_DELAY' | 'PROPAGATED' | 'RECOVERED';
+}
+
+export interface PassengerFlowInfo {
+  simTimeSeconds: number;
+  period: string;
+  periodMultiplier: number;
+  eventMultiplier: number;
+  /** 最大断面客流量 人次/h */
+  peakSectionFlow: number;
+  /** 峰值断面所在站点ID */
+  peakSectionStationId: number;
+  /** 各断面明细 */
+  sectionFlows: SectionFlowItem[];
+  demandHeadway: number;
+  requiredTrains: number;
+  availableTrains: number;
+  targetLoadFactor: number;
+}
+
+export interface SectionFlowItem {
+  fromStationId: number;
+  toStationId: number;
+  load: number;
+  boarding: number;
+  alighting: number;
+  loadFactor: number;
+}
+
+export interface DispatchInfo {
+  recommendedHeadway: number;
+  actualHeadway: number;
+  onlineTrains: number;
+  maxAvailableTrains: number;
+  requiredTrains: number;
+  fleetSufficient: boolean;
+  dispatchMode: string;
 }
 
 export interface StationGeo {
@@ -76,135 +155,8 @@ export interface StationGeo {
   km: number;
 }
 
-export interface TrackWaypoint {
-  km: number;
-  lat: number;
-  lng: number;
-  name: string;
-  direction: number;
-}
-
-export interface TrackSegment {
-  id: number;
-  lengthM: number;
-  startPointId: number;
-  endPointId: number;
-  forwardNextSegId: number | null;
-  sideNextSegId: number | null;
-  endForwardSegId: number | null;
-  endSideSegId: number | null;
-  zcId: number;
-  atsId: number;
-  ciId: number;
-}
-
-export interface PlatformGeo {
-  id: number;
-  km: number;
-  direction: string;
-}
-
-export interface TrackGeometryData {
-  trackWaypoints: TrackWaypoint[];
-  segments: TrackSegment[];
-  platforms: PlatformGeo[];
-}
-
 export interface ApiResponse<T> {
   success: boolean;
   message: string;
   data: T;
-}
-
-// ==================== 能耗 ====================
-export interface EnergyRecord {
-  trainId: number;
-  totalTractionEnergyKwh: number;
-  totalRegenEnergyKwh: number;
-  netEnergyKwh: number;
-  maxTractionPowerKw: number;
-  avgTractionPowerKw: number;
-}
-
-export interface EnergySnapshot {
-  energyRecords: EnergyRecord[];
-  totalTractionKwh: number;
-  totalRegenKwh: number;
-  netEnergyKwh: number;
-  maxPeakKw: number;
-  timeOfPeak: number;
-  vehiclesAtPeak: number[];
-  riskLevel: string; // "safe" | "warning" | "danger"
-  powerSupplyThreshold: number;
-  thresholdRatio: number;
-}
-
-// ==================== 线路设备 ====================
-
-export interface Signal {
-  索引编号: number;
-  名称: string;
-  类型: number;
-  属性: string;
-  所处Seg编号: number;
-  所处Seg偏移量: number;
-  防护方向: string;
-  灯列信息: string;
-  互联互通编号: number;
-}
-
-export interface SwitchGeo {
-  索引编号: number;
-  名称: string;
-  联动道岔编号: number;
-  方向: number;
-  定位SegID: number;
-  反位SegID: number;
-  汇合SegID: number;
-  侧向静态限速: number;
-  互联互通编号: number;
-}
-
-export interface RouteInfo {
-  索引编号: number;
-  进路名称: string;
-  进路性质: string;
-  始端信号机编号: number;
-  终端信号机编号: number;
-  所属CI区域编号: number;
-}
-
-export interface SpeedLimitZone {
-  索引编号: number;
-  限速区段所处seg编号: number;
-  起点所处seg偏移量: number;
-  终点所处seg偏移量: number;
-  关联道岔编号: number;
-  限速值: number;
-}
-
-export interface GradientInfo {
-  索引编号: number;
-  坡度起点所处seg编号: number;
-  坡度终点所处seg编号: number;
-  坡度值: number;
-  倾斜方向: string;
-}
-
-export interface DataSummary {
-  signals: number;
-  switches: number;
-  routes: number;
-  balises: number;
-  speedLimits: number;
-  gradients: number;
-  tunnels: number;
-  bumpers: number;
-  floodGates: number;
-  platformDoors: number;
-  axleCounterSections: number;
-  depotDoors: number;
-  trackPoints: number;
-  logicalSections: number;
-  collisionZones: number;
 }
