@@ -1,5 +1,6 @@
 package com.bjtu.railtransit.domain.model;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class SimulationSnapshot {
@@ -25,6 +26,8 @@ public class SimulationSnapshot {
     private List<TrainPositionPoint> plannedDiagramPoints;
     /** 各列车在各站的计划时刻与偏差 */
     private List<StationArrival> planDeviations;
+    /** 能源优化信息 */
+    private EnergyOptimizationInfo energyOptimization;
 
     public SimulationSnapshot() {
     }
@@ -131,6 +134,9 @@ public class SimulationSnapshot {
     public void setPlannedDiagramPoints(List<TrainPositionPoint> v) { this.plannedDiagramPoints = v; }
     public List<StationArrival> getPlanDeviations() { return planDeviations; }
     public void setPlanDeviations(List<StationArrival> v) { this.planDeviations = v; }
+
+    public EnergyOptimizationInfo getEnergyOptimization() { return energyOptimization; }
+    public void setEnergyOptimization(EnergyOptimizationInfo v) { this.energyOptimization = v; }
 
     public static class HeadwayInfo {
         private String fromTrainId;
@@ -348,5 +354,42 @@ public class SimulationSnapshot {
         public void setFleetSufficient(boolean v) { this.fleetSufficient = v; }
         public String getDispatchMode() { return dispatchMode; }
         public void setDispatchMode(String v) { this.dispatchMode = v; }
+    }
+
+    /**
+     * 能源优化摘要信息 (供前端能耗看板展示)
+     */
+    public static class EnergyOptimizationInfo {
+        private double currentPeakKw;
+        private double powerSupplyThresholdKw;
+        private String peakRiskLevel;           // safe | warning | danger
+        private int tractionCount;
+        private int maxTractionCount;
+        private double totalRecoverableEnergyKw;
+        private int regenCoordinationCount;
+        private int coastingOpportunityCount;
+        private List<String> recommendations = new ArrayList<>();
+        private double currentLoadFactor;
+
+        public double getCurrentPeakKw() { return currentPeakKw; }
+        public void setCurrentPeakKw(double v) { this.currentPeakKw = v; }
+        public double getPowerSupplyThresholdKw() { return powerSupplyThresholdKw; }
+        public void setPowerSupplyThresholdKw(double v) { this.powerSupplyThresholdKw = v; }
+        public String getPeakRiskLevel() { return peakRiskLevel; }
+        public void setPeakRiskLevel(String v) { this.peakRiskLevel = v; }
+        public int getTractionCount() { return tractionCount; }
+        public void setTractionCount(int v) { this.tractionCount = v; }
+        public int getMaxTractionCount() { return maxTractionCount; }
+        public void setMaxTractionCount(int v) { this.maxTractionCount = v; }
+        public double getTotalRecoverableEnergyKw() { return totalRecoverableEnergyKw; }
+        public void setTotalRecoverableEnergyKw(double v) { this.totalRecoverableEnergyKw = v; }
+        public int getRegenCoordinationCount() { return regenCoordinationCount; }
+        public void setRegenCoordinationCount(int v) { this.regenCoordinationCount = v; }
+        public int getCoastingOpportunityCount() { return coastingOpportunityCount; }
+        public void setCoastingOpportunityCount(int v) { this.coastingOpportunityCount = v; }
+        public List<String> getRecommendations() { return recommendations; }
+        public void setRecommendations(List<String> v) { this.recommendations = v; }
+        public double getCurrentLoadFactor() { return currentLoadFactor; }
+        public void setCurrentLoadFactor(double v) { this.currentLoadFactor = v; }
     }
 }

@@ -31,6 +31,7 @@ public class SimulationService {
 
     private final DispatchEngine dispatchEngine;
     private final LineDataService lineDataService;
+    private final EnergyOptimizer energyOptimizer;
 
     private boolean simulationRunning = false;
     private double simulationTimeSeconds = 0;
@@ -57,9 +58,11 @@ public class SimulationService {
     private static final double EBRAKE_KMH_PER_S = 4.68; // 紧急制动 km/h/s (≈1.3 m/s²)
     private static final double CRUISE_SPEED     = 70.0; // 默认巡航速度 km/h
 
-    public SimulationService(LineDataService lineDataService, DispatchEngine dispatchEngine) {
+    public SimulationService(LineDataService lineDataService, DispatchEngine dispatchEngine,
+                              EnergyOptimizer energyOptimizer) {
         this.lineDataService = lineDataService;
         this.dispatchEngine = dispatchEngine;
+        this.energyOptimizer = energyOptimizer;
     }
 
     // ================================================================
@@ -107,7 +110,13 @@ public class SimulationService {
             train.setTrainNumber(trainNum);
             train.setDirection(isUp ? "UP" : "DOWN");
             train.setRoutePattern(rp.getPatternId());
-            train.setOperationLevel(OperationLevel.NORMAL);
+            // ── 能源感知: 根据满载率自动选择运行等级 ──
+            String opLevel = OperationLevel.NORMAL;
+            PassengerFlowModel.TimePeriod period = dispatchEngine.getFlowModel().getCurrentPeriod(0);
+            if (period == PassengerFlowModel.TimePeriod.EARLY_MORNING || period == PassengerFlowModel.TimePeriod.NIGHT) {
+                opLevel = OperationLevel.ENERGY_SAVE;
+            }
+            train.setOperationLevel(opLevel);
             train.setSkipNextStation(false);
             train.setTurnbackCount(0);
             train.setPositionMeters(0);
@@ -145,6 +154,16 @@ public class SimulationService {
 
             trains.put(tid, train);
         }
+
+        // ── 能源优化: 错峰启动 —— 为发车时间叠加微偏移，避免多车同时加速造成供电峰值 ──
+        Map<String, Double> offsets = energyOptimizer.computeStaggeredDepartures(trains);
+        for (Map.Entry<String, Double> entry : offsets.entrySet()) {
+            TrainState ts = trains.get(entry.getKey());
+            if (ts != null) {
+                double offset = entry.getValue();
+                ts.setPlannedDepartureFromDepot(ts.getPlannedDepartureFromDepot() + offset);
+            }
+        }
     }
 
     // ================================================================
@@ -170,10 +189,13 @@ public class SimulationService {
                 atoTrainStep(train, stations, stationCount);
             }
 
-            // ═══ Layer 4: 指令执行 ── 晚点传播评估 ═══
+            // ═══ Layer 4: 能源优化 ── 惰行窗口 + 再生协同 + 峰值监控 ═══
+            energyOptimizeStep();
+
+            // ═══ Layer 5: 指令执行 ── 晚点传播评估 ═══
             commandExecuteDelays();
 
-            // ═══ Layer 5: 记录 ── 位置采样 + 能耗 ═══
+            // ═══ Layer 6: 记录 ── 位置采样 + 能耗 ═══
             recordSample();
         }
     }
@@ -755,7 +777,109 @@ public class SimulationService {
     }
 
     // ================================================================
-    // Layer 4: 指令执行 + 晚点传播
+    // Layer 4: 能源优化 —— 惰行窗口 + 再生协同 + 峰值监控
+    // ================================================================
+
+    /** 最近一次能源优化结果 (供快照使用) */
+    private EnergyOptimizer.EnergyOptimizationResult lastEnergyResult;
+
+    private void energyOptimizeStep() {
+        // 每20仿真秒评估一次 (避免每步都计算)
+        if (simulationTimeSeconds % 20 != 0) return;
+
+        lastEnergyResult = energyOptimizer.evaluate(trains, simulationTimeSeconds, dispatchEngine);
+
+        // ── 策略1: 应用惰行窗口 ──
+        for (EnergyOptimizer.CoastingDecision cd : lastEnergyResult.coastingOpportunities) {
+            TrainState t = trains.get(cd.trainId);
+            if (t != null && t.getSpeed() > EnergyOptimizer.COAST_MIN_SPEED) {
+                // 惰行: 通过降低目标速度来实现滑行效果
+                // 不直接切断牵引，而是将目标巡航速度设为节能模式的55km/h
+                t.setTargetSpeed(EnergyOptimizer.COAST_CRUISE_SPEED);
+
+                // 记录惰行指令
+                SimulationSnapshot.TrainCommand coastCmd = new SimulationSnapshot.TrainCommand();
+                coastCmd.setTrainId(cd.trainId);
+                coastCmd.setCommandType("SPEED_UP"); // 复用SPEED_UP类型表示惰行节能
+                coastCmd.setTargetValue(EnergyOptimizer.COAST_CRUISE_SPEED);
+                coastCmd.setReason(cd.reason);
+                coastCmd.setIssuedTime(simulationTimeSeconds);
+                coastCmd.setStatus("EXECUTING");
+                commandLog.add(coastCmd);
+            }
+        }
+
+        // ── 策略2: 再生制动协同 ──
+        for (EnergyOptimizer.RegenCoordination rc : lastEnergyResult.regenCoordinations) {
+            TrainState absorbing = trains.get(rc.absorbingTrainId);
+            if (absorbing != null && (absorbing.getAcceleration() >= 0 || "CRUISING".equals(absorbing.getStatus()) || "DWELLING".equals(absorbing.getStatus()))) {
+                // 优先让附近可吸收列车恢复/维持正常加速（不用限速）
+                absorbing.setMaxSpeedLimit(OperationLevel.normal().getCruiseSpeedKmh());
+
+                SimulationSnapshot.TrainCommand regenCmd = new SimulationSnapshot.TrainCommand();
+                regenCmd.setTrainId(rc.absorbingTrainId);
+                regenCmd.setCommandType("SPEED_UP");
+                regenCmd.setTargetValue(rc.recoverableEnergyKw);
+                regenCmd.setReason(rc.reason);
+                regenCmd.setIssuedTime(simulationTimeSeconds);
+                regenCmd.setStatus("EXECUTING");
+                commandLog.add(regenCmd);
+            }
+        }
+
+        // ── 策略3: 峰值功率控制 ──
+        if ("danger".equals(lastEnergyResult.peakRiskLevel) && lastEnergyResult.tractionCount > EnergyOptimizer.MAX_SIMULTANEOUS_TRACTION) {
+            // 同时牵引列车过多 → 对晚出发的列车施加微延迟
+            List<TrainState> accelTrains = trains.values().stream()
+                    .filter(t -> "ACCELERATING".equals(t.getStatus()) || "DEPARTING".equals(t.getStatus()))
+                    .filter(t -> !"FINISHED".equals(t.getStatus()))
+                    .sorted(Comparator.comparingDouble(TrainState::getPlannedDepartureFromDepot))
+                    .collect(Collectors.toList());
+
+            // 超过阈值的列车施加SLOW限速
+            for (int i = EnergyOptimizer.MAX_SIMULTANEOUS_TRACTION; i < accelTrains.size(); i++) {
+                TrainState t = accelTrains.get(i);
+                if (t.getMaxSpeedLimit() > 40) {
+                    t.setMaxSpeedLimit(40);
+
+                    SimulationSnapshot.TrainCommand peakCmd = new SimulationSnapshot.TrainCommand();
+                    peakCmd.setTrainId(t.getTrainId());
+                    peakCmd.setCommandType("SLOW");
+                    peakCmd.setTargetValue(40);
+                    peakCmd.setReason(String.format("峰值功率控制: 同时牵引%d列 > %d列上限, 对%s限速40km/h",
+                            lastEnergyResult.tractionCount, EnergyOptimizer.MAX_SIMULTANEOUS_TRACTION, t.getTrainId()));
+                    peakCmd.setIssuedTime(simulationTimeSeconds);
+                    peakCmd.setStatus("EXECUTING");
+                    applyCommand(peakCmd);
+                }
+            }
+        }
+
+        // ── 策略4: 运行等级自适应 ──
+        for (TrainState t : trains.values()) {
+            if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus())) continue;
+            if ("ACCELERATING".equals(t.getStatus()) || "CRUISING".equals(t.getStatus()) || "DWELLING".equals(t.getStatus())) {
+                String recommendedLevel = energyOptimizer.recommendOperationLevel(
+                        Math.max(0, lastEnergyResult.currentLoadFactor),
+                        EnergyOptimizer.TimePeriod.fromSimTime(simulationTimeSeconds));
+
+                if (OperationLevel.ENERGY_SAVE.equals(recommendedLevel)
+                        && !OperationLevel.ENERGY_SAVE.equals(t.getOperationLevel())
+                        && !"DWELLING".equals(t.getStatus())) {
+                    t.setOperationLevel(OperationLevel.ENERGY_SAVE);
+                    t.setTargetSpeed(OperationLevel.energySaving().getCruiseSpeedKmh());
+                }
+            }
+        }
+    }
+
+    /** 获取最新能源优化结果 */
+    public EnergyOptimizer.EnergyOptimizationResult getLastEnergyResult() {
+        return lastEnergyResult;
+    }
+
+    // ================================================================
+    // Layer 5: 指令执行 + 晚点传播
     // ================================================================
 
     private void commandExecuteDelays() {
@@ -1025,6 +1149,23 @@ public class SimulationService {
 
         snapshot.setPositionHistory(new ArrayList<>(positionHistory));
         snapshot.setTotalEnergyKwh(totalEnergyKwh);
+
+        // ── 能源优化数据 ──
+        if (lastEnergyResult != null) {
+            SimulationSnapshot.EnergyOptimizationInfo eoi = new SimulationSnapshot.EnergyOptimizationInfo();
+            eoi.setCurrentPeakKw(lastEnergyResult.currentPeakKw);
+            eoi.setPowerSupplyThresholdKw(lastEnergyResult.powerSupplyThresholdKw);
+            eoi.setPeakRiskLevel(lastEnergyResult.peakRiskLevel);
+            eoi.setTractionCount(lastEnergyResult.tractionCount);
+            eoi.setMaxTractionCount(lastEnergyResult.maxTractionCount);
+            eoi.setTotalRecoverableEnergyKw(lastEnergyResult.totalRecoverableEnergyKw);
+            eoi.setRegenCoordinationCount(lastEnergyResult.regenCoordinations.size());
+            eoi.setCoastingOpportunityCount(lastEnergyResult.coastingOpportunities.size());
+            eoi.setRecommendations(new ArrayList<>(lastEnergyResult.recommendations));
+            eoi.setCurrentLoadFactor(lastEnergyResult.currentLoadFactor);
+            snapshot.setEnergyOptimization(eoi);
+        }
+
         return snapshot;
     }
 
