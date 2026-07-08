@@ -9,16 +9,14 @@ import {
   Table,
   Tag,
   Empty,
-  message,
 } from "antd";
 import {
   ThunderboltOutlined,
   CheckCircleOutlined,
   ExperimentOutlined,
 } from "@ant-design/icons";
-import type { EvaluationReport, SimulationLog } from "../../types";
+import type { EvaluationReport } from "../../types";
 import { generateReport } from "../../api/evaluation";
-import { getSimulationLogs } from "../../api/dispatch";
 
 /* ---- Helpers ---- */
 const riskLevelLabel: Record<string, string> = {
@@ -69,7 +67,7 @@ function Metric({
   color: string;
 }) {
   return (
-    <Card variant="borderless" className="rounded-xl!">
+    <Card bordered={false} className="rounded-xl!">
       <Statistic
         title={
           <span className="text-xs text-slate-400 font-medium">{label}</span>
@@ -96,28 +94,17 @@ export default function EnergyEvaluation() {
     setLoading(true);
     setError(null);
     try {
-      // 从仿真服务获取真实日志
-      let simulationLogs: SimulationLog[] = [];
-      try {
-        simulationLogs = await getSimulationLogs();
-      } catch {
-        // 日志获取失败，使用空数组
-      }
-      if (simulationLogs.length === 0) {
-        message.warning("未获取到仿真日志，请先在调度页面启动仿真");
-      }
-
       const result = await generateReport(
         {
           scenarioName: "北京9号线仿真场景",
-          simulationLogs,
+          simulationLogs: [],
           tractionEfficiency: 0.85,
           regenEfficiency: 0.65,
           powerSupplyThreshold: 2000,
         },
         {
           scenarioName: "北京9号线仿真场景",
-          simulationLogs,
+          simulationLogs: [],
           stationPositions: {
             1: 313,
             2: 1660,
@@ -203,7 +190,7 @@ export default function EnergyEvaluation() {
             ))}
           </Row>
 
-          <Card title="供电风险评估" variant="borderless" className="rounded-xl!">
+          <Card title="供电风险评估" bordered={false} className="rounded-xl!">
             <div className="flex items-center gap-5">
               <div
                 className="w-[72px] h-[72px] rounded-full flex items-center justify-center text-sm font-bold"
@@ -248,7 +235,7 @@ export default function EnergyEvaluation() {
           </Card>
         </>
       ) : (
-        <Card variant="borderless" className="rounded-xl!">
+        <Card bordered={false} className="rounded-xl!">
           <Empty description="点击「运行评估」开始分析" />
         </Card>
       )}
@@ -259,7 +246,7 @@ export default function EnergyEvaluation() {
     <div className="space-y-4">
       {report ? (
         <>
-          <Card title="停站误差分析" variant="borderless" className="rounded-xl!">
+          <Card title="停站误差分析" bordered={false} className="rounded-xl!">
             <Table
               dataSource={(report.stopErrors || []).map((e, i) => ({
                 ...e,
@@ -319,7 +306,7 @@ export default function EnergyEvaluation() {
           </Card>
 
           {report.punctuality && (
-            <Card title="准点率评估" variant="borderless" className="rounded-xl!">
+            <Card title="准点率评估" bordered={false} className="rounded-xl!">
               <Row gutter={[16, 16]}>
                 {[
                   [
@@ -369,7 +356,7 @@ export default function EnergyEvaluation() {
           )}
 
           {report.comfort && (
-            <Card title="舒适性评估" variant="borderless" className="rounded-xl!">
+            <Card title="舒适性评估" bordered={false} className="rounded-xl!">
               <Row gutter={[16, 16]}>
                 {[
                   [
@@ -416,7 +403,7 @@ export default function EnergyEvaluation() {
             </Card>
           )}
 
-          <Card title="安全事件日志" variant="borderless" className="rounded-xl!">
+          <Card title="安全事件日志" bordered={false} className="rounded-xl!">
             {(report.safetyEvents || []).length > 0 ? (
               <Table
                 dataSource={(report.safetyEvents || []).map((e, i) => ({
@@ -473,7 +460,7 @@ export default function EnergyEvaluation() {
           </Card>
         </>
       ) : (
-        <Card variant="borderless" className="rounded-xl!">
+        <Card bordered={false} className="rounded-xl!">
           <Empty description="点击「运行评估」开始分析" />
         </Card>
       )}
@@ -483,7 +470,7 @@ export default function EnergyEvaluation() {
   const reportTab = (
     <div className="space-y-4">
       {report ? (
-        <Card variant="borderless" className="rounded-xl!">
+        <Card bordered={false} className="rounded-xl!">
           <div className="space-y-6">
             <h4 className="text-[15px] font-semibold text-slate-200 m-0">
               评估概要
@@ -583,7 +570,7 @@ export default function EnergyEvaluation() {
           </div>
         </Card>
       ) : (
-        <Card variant="borderless" className="rounded-xl!">
+        <Card bordered={false} className="rounded-xl!">
           <Empty description="点击「运行评估」开始分析" />
         </Card>
       )}
