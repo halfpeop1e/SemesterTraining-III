@@ -27,6 +27,11 @@ bjtu大三小学期实训
 │       │   ├── dispatch/        # 总控调度与多车协同模块
 │       │   ├── signal/          # 轨道线路与信号控制模块
 │       │   ├── vehicle/         # 车载系统与车辆运行仿真模块
+│       │   │   ├── controller/  # 车辆仿真接口
+│       │   │   ├── service/     # 内置场景配置与车辆仿真计算
+│       │   │   ├── model/       # 线路、车型、场景输入模型
+│       │   │   ├── dto/         # 仿真结果、状态序列、停站结果、安全事件响应结构
+│       │   │   └── enums/       # 运行阶段枚举
 │       │   ├── energy/          # 供电能源模块
 │       │   ├── evaluation/      # 结果评估分析模块
 │       │   ├── simulation/      # 仿真引擎模块
@@ -62,10 +67,12 @@ bjtu大三小学期实训
 │       ├── main.tsx
 │       ├── App.tsx
 │       ├── api/                 # API 请求层
+│       │   └── vehicle.ts       # 车辆仿真接口调用
 │       ├── components/          # 公共组件
 │       ├── pages/               # 页面模块
-│       │   └── Vehicle/         # 车辆仿真
+│       │   └── Vehicle/         # 车载仿真页面与样式
 │       ├── types/               # TypeScript 类型定义
+│       │   └── vehicle.ts       # 车辆仿真前端类型
 │       └── styles/              # 全局样式
 ├── configs/                     # 示例配置文件
 │   ├── line-profile.sample.json
@@ -112,11 +119,12 @@ npm run dev
 
 ## 模块分工说明
 
-| 模块 | 后端包 | 前端页面 | 前端项目 | 说明 |
-|------|--------|----------|----------|------|
-| 总控调度与多车协同 | `dispatch/` | `Dispatch/` | frontend-control-center | 列车调度、多车协同控制 |
-| 轨道线路与信号控制 | `signal/` | `LineSignal/` | frontend-control-center | 线路管理、信号灯控制 |
-| 车载系统与车辆运行仿真 | `vehicle/` | `Vehicle/` | frontend-onboard-system | 车辆模型、运行仿真 |
-| 供电能源评估与分析 | `energy/` `evaluation/` | `EnergyEvaluation/` | frontend-control-center | 能耗计算、结果评估 |
-| 仿真引擎 | `simulation/` | - | - | 仿真核心调度引擎 |
-| 仪表盘 | - | `Dashboard/` | frontend-control-center | 系统概览与实时监控 |
+| 模块 | 后端包 | 前端页面 | 前端项目 | 负责成员 | 说明 |
+|------|--------|----------|----------|----------|------|
+| 总控调度与多车协同 | `dispatch/` | `Dispatch/` | frontend-control-center | 成员一 | 列车调度、多车协同控制 |
+| 轨道线路与信号控制 | `signal/` | `LineSignal/` | frontend-control-center | 成员二 | 线路管理、信号灯控制 |
+| 车载系统与车辆运行仿真 | `vehicle/` | `Vehicle/` | frontend-onboard-system | 成员三（郭逸晨） | 车辆模型、运行仿真 |
+| 供电能源评估与分析 | `energy/` `evaluation/` | `EnergyEvaluation/` | frontend-control-center | 成员四 | 能耗计算、结果评估 |
+| 仿真引擎 | `simulation/` | - | - | 成员一 | 仿真核心调度引擎 |
+| 仪表盘 | - | `Dashboard/` | frontend-control-center | 成员四 | 系统概览与实时监控 |
+
