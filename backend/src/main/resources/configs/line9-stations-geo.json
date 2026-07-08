@@ -1,0 +1,22 @@
+{
+  "lineId": "line-9",
+  "lineName": "北京地铁9号线",
+  "dataSource": "OpenStreetMap / findit.city (WGS-84)",
+  "accuracy": "~5m",
+  "note": "坐标来自 OpenStreetMap 开源数据，WGS-84 坐标系。与 Leaflet/OSM 底图天然对齐。",
+  "stations": [
+    { "id": 1,  "name": "郭公庄",     "code": "GGZ", "km": 0.313,  "longitude": 116.29606, "latitude": 39.81338 },
+    { "id": 2,  "name": "丰台科技园", "code": "FSP", "km": 1.661,  "longitude": 116.29128, "latitude": 39.82377 },
+    { "id": 3,  "name": "科怡路",     "code": "KYL", "km": 2.449,  "longitude": 116.29148, "latitude": 39.83088 },
+    { "id": 4,  "name": "丰台南路",   "code": "FTN", "km": 3.429,  "longitude": 116.29054, "latitude": 39.83957 },
+    { "id": 5,  "name": "丰台东大街", "code": "FTD", "km": 5.014,  "longitude": 116.28787, "latitude": 39.85417 },
+    { "id": 6,  "name": "七里庄",     "code": "QLZ", "km": 6.340,  "longitude": 116.28824, "latitude": 39.86602 },
+    { "id": 7,  "name": "六里桥",     "code": "LLQ", "km": 8.119,  "longitude": 116.29814, "latitude": 39.87930 },
+    { "id": 8,  "name": "六里桥东",   "code": "LLE", "km": 9.429,  "longitude": 116.30883, "latitude": 39.88569 },
+    { "id": 9,  "name": "北京西站",   "code": "BWR", "km": 10.599, "longitude": 116.31528, "latitude": 39.89354 },
+    { "id": 10, "name": "军事博物馆", "code": "JBG", "km": 11.997, "longitude": 116.31537, "latitude": 39.90624 },
+    { "id": 11, "name": "白堆子",     "code": "BDZ", "km": 13.907, "longitude": 116.31971, "latitude": 39.92257 },
+    { "id": 12, "name": "白石桥南",   "code": "BQS", "km": 14.954, "longitude": 116.31943, "latitude": 39.93239 },
+    { "id": 13, "name": "国家图书馆", "code": "GTG", "km": 16.049, "longitude": 116.31906, "latitude": 39.94184 }
+  ]
+}
