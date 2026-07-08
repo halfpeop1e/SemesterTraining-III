@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import LayoutFrame from './components/Layout';
+import { SimulationProvider } from './context/SimulationContext';
 import Dashboard from './pages/Dashboard/index';
 import Dispatch from './pages/Dispatch/index';
 import LineSignal from './pages/LineSignal/index';
@@ -19,7 +20,9 @@ function App() {
 
   return (
     <LayoutFrame currentModule={module} onModuleChange={setModule}>
-      <PageComponent />
+      <SimulationProvider>
+        <PageComponent />
+      </SimulationProvider>
     </LayoutFrame>
   );
 }

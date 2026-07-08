@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import { Alert, Spin } from 'antd';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
@@ -9,13 +10,8 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers';
 
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
-import {
-  startSimulation,
-  stepSimulation,
-  getSnapshot,
-  getLineMap,
-  applyStrategy,
-} from '../../api/dispatch';
+import { getLineMap, applyStrategy } from '../../api/dispatch';
+import { useSimulation } from '../../context/SimulationContext';
 import type {
   SimulationSnapshot,
   StationGeo,
@@ -387,61 +383,19 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
    ================================================================ */
 
 export default function Dispatch() {
-  const [snapshot, setSnapshot] = useState<SimulationSnapshot | null>(null);
+  const { snapshot, isRunning, loading, error, speedIndex, start, stop, step, setSpeed, setError } = useSimulation();
   const [stations, setStations] = useState<StationGeo[]>([]);
-  const [isRunning, setIsRunning] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
   const [tileMode, setTileMode] = useState<TileMode>('dark');
-  const [speedIndex, setSpeedIndex] = useState(0);
   const [rightTab, setRightTab] = useState<'trains'|'arrivals'|'commands'|'flow'|'deviation'>('trains');
-  const autoRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     getLineMap().then((d) => { if (Array.isArray(d) && d.length > 0) setStations(d); else setError('failed load line'); })
       .catch((e) => setError('Line load: ' + (e?.message || 'network')));
   }, []);
 
-  useEffect(() => () => { if (autoRef.current) clearInterval(autoRef.current); }, []);
-
-  const refresh = useCallback(async () => {
-    try { setError(''); setSnapshot(await getSnapshot()); } catch (e: any) { setError(e.message); }
-  }, []);
-
-  const start = useCallback(async () => {
-    setLoading(true); setError('');
-    try { await startSimulation(3600); await refresh(); setIsRunning(true); }
-    catch (e: any) { setError(e.message); }
-    finally { setLoading(false); }
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!isRunning) return;
-    if (autoRef.current) clearInterval(autoRef.current);
-    autoRef.current = setInterval(async () => {
-      try {
-        await stepSimulation(SPEED_OPTIONS[speedIndex].steps);
-        setSnapshot(await getSnapshot());
-      } catch {}
-    }, 500);
-    return () => { if (autoRef.current) clearInterval(autoRef.current); };
-  }, [isRunning, speedIndex]);
-
-  const stop = useCallback(() => {
-    if (autoRef.current) { clearInterval(autoRef.current); autoRef.current = null; }
-    setIsRunning(false);
-  }, []);
-
-  const step = useCallback(async () => {
-    setLoading(true);
-    try { await stepSimulation(1); await refresh(); } catch (e: any) { setError(e.message); }
-    finally { setLoading(false); }
-  }, [refresh]);
-
   const doStrategy = useCallback(async (trainId: string, type: string, val: number = 0) => {
-    try { await applyStrategy(trainId, type, val); await refresh(); } catch (e: any) { setError(e.message); }
-  }, [refresh]);
-
+    try { await applyStrategy(trainId, type, val); } catch (e: any) { setError(e.message); }
+  }, []);
   const trains = snapshot?.trains ?? [];
   const headways = snapshot?.headways ?? [];
   const commands = snapshot?.commands ?? [];
@@ -453,6 +407,18 @@ export default function Dispatch() {
   const plannedHistory = snapshot?.plannedDiagramPoints ?? [];
   const planDeviations = snapshot?.planDeviations ?? [];
   const energy = snapshot?.totalEnergyKwh ?? 0;
+
+  if (stations.length === 0 && !error) {
+    return (
+      <div className="d-root">
+        <div className="d-topbar"><div className="d-tb-left"><div className="d-tb-brand"><div className="d-tb-logo"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg></div><div><span className="d-tb-title">总控调度中心</span><span className="d-tb-sub">DISPATCH</span></div></div></div></div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Spin tip="加载线路数据..." size="large" />
+        </div>
+        <style>{STYLES}</style>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -476,7 +442,7 @@ export default function Dispatch() {
           </div>
           <div className="d-tb-right">
             {error && <span className="d-tb-err">{error}</span>}
-            <div className="d-speed-group">{SPEED_OPTIONS.map((o,i)=><button key={o.label} className={`d-speed-btn${i===speedIndex?' active':''}`} onClick={()=>setSpeedIndex(i)} disabled={loading&&!isRunning}>{o.label}</button>)}</div>
+            <div className="d-speed-group">{SPEED_OPTIONS.map((o,i)=><button key={o.label} className={`d-speed-btn${i===speedIndex?' active':''}`} onClick={()=>setSpeed(i)} disabled={loading&&!isRunning}>{o.label}</button>)}</div>
             <div className="d-map-mode">{(Object.keys(TILE_LAYERS) as TileMode[]).map(m=><button key={m} className={`d-mode-btn${tileMode===m?' active':''}`} onClick={()=>setTileMode(m)}>{TILE_LAYERS[m].label}</button>)}</div>
             <button className="d-btn d-btn-start" onClick={start} disabled={loading||isRunning}><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>启动</button>
             <button className="d-btn d-btn-step" onClick={step} disabled={loading||isRunning}>推进</button>
@@ -485,6 +451,18 @@ export default function Dispatch() {
         </header>
 
         {/* ════ Body ════ */}
+        {error && (
+          <div style={{ padding: '8px 12px 0' }}>
+            <Alert
+              type="warning"
+              message={error}
+              showIcon
+              closable
+              onClose={() => setError('')}
+              style={{ borderRadius: 8, fontSize: 12 }}
+            />
+          </div>
+        )}
         <div className="d-body">
           {/* Flow + Dispatch info banner */}
           {flow && (

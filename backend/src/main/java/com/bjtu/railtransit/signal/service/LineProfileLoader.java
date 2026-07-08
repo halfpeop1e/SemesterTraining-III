@@ -3,6 +3,7 @@ package com.bjtu.railtransit.signal.service;
 import com.bjtu.railtransit.signal.model.*;
 import com.bjtu.railtransit.signal.util.Units;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Component;
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -23,6 +24,7 @@ import java.util.Map;
  *     —— 站台中心里程、静态限速 km/h、车站中心里程、里程索引、道岔中心里程、线路总长。
  * 任何换算都必须走 {@link Units}，保证“真实口径 → 契约口径”单一入口。
  */
+@Component
 public class LineProfileLoader {
 
     private final ObjectMapper mapper = new ObjectMapper();

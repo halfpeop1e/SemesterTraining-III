@@ -7,6 +7,7 @@ import com.bjtu.railtransit.signal.domain.MovingAuthority;
 import com.bjtu.railtransit.signal.domain.SignalEvent;
 import com.bjtu.railtransit.signal.domain.TrainState;
 import com.bjtu.railtransit.signal.model.LineProfile;
+import com.bjtu.railtransit.signal.service.LineProfileLoader;
 import com.bjtu.railtransit.signal.service.MaConfig;
 import com.bjtu.railtransit.signal.service.MovingAuthorityService;
 import com.bjtu.railtransit.signal.web.MaRequest;
@@ -57,7 +58,7 @@ public class Task5Verification {
 
     static void checkMaEndpoint() throws Exception {
         System.out.println("REST 入口 + 数值算例（§2.5）：");
-        SignalController ctrl = new SignalController(new MovingAuthorityService(MaConfig.exampleConfig()));
+        SignalController ctrl = new SignalController(new MovingAuthorityService(MaConfig.exampleConfig()), new LineProfileLoader());
         MaRequest req = new MaRequest();
         req.setLineProfile(flatLine(2000));
         List<TrainState> trains = Arrays.asList(
@@ -86,7 +87,7 @@ public class Task5Verification {
 
     static void checkFailSafeViaApi() {
         System.out.println("fail-safe 经 REST 入口：");
-        SignalController ctrl = new SignalController(new MovingAuthorityService(MaConfig.exampleConfig()));
+        SignalController ctrl = new SignalController(new MovingAuthorityService(MaConfig.exampleConfig()), new LineProfileLoader());
         MaRequest req = new MaRequest();
         req.setLineProfile(flatLine(2000));
         // 前车状态未知
@@ -102,7 +103,7 @@ public class Task5Verification {
 
     static void checkInvalidRequest() {
         System.out.println("非法请求兜底：");
-        SignalController ctrl = new SignalController(new MovingAuthorityService(MaConfig.exampleConfig()));
+        SignalController ctrl = new SignalController(new MovingAuthorityService(MaConfig.exampleConfig()), new LineProfileLoader());
         MaRequest req = new MaRequest();
         req.setTrains(Arrays.asList(t("T2", 0, 0, 140, Direction.UP))); // lineProfile=null
         ApiResponse<?> resp = ctrl.ma(req);

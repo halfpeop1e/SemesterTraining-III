@@ -4,7 +4,9 @@ import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
 import com.bjtu.railtransit.signal.domain.TrainState;
 import com.bjtu.railtransit.signal.model.LineProfile;
+import com.bjtu.railtransit.signal.service.LineProfileLoader;
 import com.bjtu.railtransit.signal.service.MovingAuthorityService;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,7 +19,8 @@ import java.util.Map;
 /**
  * 移动授权 REST 接口。
  *  - `POST /api/signal/ma`，入参 MaRequest{lineProfile, trains[, routes, nowSec]}
- *  - 返回真实 ApiResponse{success, message, data}，data 为 Map<trainId, MovingAuthority>
+ *    返回真实 ApiResponse{success, message, data}，data 为 Map<trainId, MovingAuthority>
+ *  - `GET /api/signal/line`，返回换算好的 LineProfile（含里程索引），供前端画平面图
  *  - 解析/计算异常 → success=false + 错误信息，不抛 500
  */
 @RestController
@@ -25,9 +28,21 @@ import java.util.Map;
 public class SignalController {
 
     private final MovingAuthorityService maService;
+    private final LineProfileLoader lineProfileLoader;
 
-    public SignalController(MovingAuthorityService maService) {
+    public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader) {
         this.maService = maService;
+        this.lineProfileLoader = lineProfileLoader;
+    }
+
+    @GetMapping("/line")
+    public ApiResponse<LineProfile> getLine() {
+        try {
+            LineProfile lp = lineProfileLoader.loadFromClasspath("line-profile.json");
+            return ApiResponse.ok("", lp);
+        } catch (Exception e) {
+            return new ApiResponse<>(false, "load line failed: " + e.getMessage(), null);
+        }
     }
 
     @PostMapping("/ma")
