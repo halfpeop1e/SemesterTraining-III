@@ -13,6 +13,15 @@ export interface DriverCabViewProps {
   stopResult: StopResult | null;
   safetyEventCount?: number;
   isPaused?: boolean;
+  // ---- 驾驶员控制回调（本轮新增，全部可选，不传则保持纯 UI 本地状态）----
+  /** 司机申请人工接管时回调（ATO → MANUAL 切换请求）。 */
+  onModeRequest?: (requestedMode: 'manual') => void;
+  /** 手动制动手柄：传入 level(0-7)，换算 targetDecel 后由 Vehicle/index.tsx 调用后端。 */
+  onBrakeLevel?: (level: number, targetDecel: number) => void;
+  /** 紧急制动按钮。 */
+  onEmergencyBrake?: () => void;
+  /** 当前有效驾驶模式（由父组件控制，用于同步显示）。 */
+  externalMode?: 'ato' | 'manual' | 'emergency' | null;
 }
 
 interface ProjectionPoint {
@@ -521,14 +530,25 @@ function DriverCabView({
   stopResult,
   safetyEventCount = 0,
   isPaused = false,
+  onModeRequest,
+  onBrakeLevel,
+  onEmergencyBrake,
+  externalMode,
 }: DriverCabViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // 驾驶员控制面板 UI 状态（纯前端，不接后端）
+  // 驾驶员控制面板 UI 状态
+  // externalMode 有值时以 externalMode 为准，否则用本地 driveMode
   const [driveMode, setDriveMode] = useState<DriveMode>('ato');
+  const effectiveDriveMode: DriveMode = (externalMode === 'emergency' ? 'manual' : externalMode) ?? driveMode;
   const [brakeLevelUI, setBrakeLevelUI] = useState(0);
   const [emergencyActive, setEmergencyActive] = useState(false);
   const [manualRequestState, setManualRequestState] = useState<'idle' | 'pending'>('idle');
+  // 每当父组件确认模式时，同步本地 state（让 UI 对齐）
+  if (externalMode === 'manual' && driveMode !== 'manual') setDriveMode('manual');
+  if (externalMode === 'ato' && driveMode !== 'ato') setDriveMode('ato');
+  // EMERGENCY 模式下重置 emergencyActive 按钮为激活状态
+  const isEmergencyMode = externalMode === 'emergency';
   const propsRef = useRef<DriverCabViewProps>({
     status,
     currentState,
@@ -812,12 +832,16 @@ function DriverCabView({
           {/* 驾驶员控制面板 */}
           <div className="driver-control-panel" aria-label="驾驶员控制面板">
             <div className="dcp-section dcp-section--mode">
-              <span className="dcp-section__label">驾驶模式</span>
+              <span className="dcp-section__label">驾驶模式{isEmergencyMode ? ' ⚠ 紧急' : ''}</span>
               <div className="dcp-mode-buttons" role="group">
-                <button type="button" className={`dcp-mode-btn dcp-mode-btn--ato ${driveMode === 'ato' ? 'is-active' : ''}`} onClick={() => setDriveMode('ato')}>
+                <button type="button" className={`dcp-mode-btn dcp-mode-btn--ato ${effectiveDriveMode === 'ato' ? 'is-active' : ''}`}
+                  onClick={() => setDriveMode('ato')}
+                  disabled={isEmergencyMode}>
                   <span className="dcp-mode-btn__dot" />ATO 自动
                 </button>
-                <button type="button" className={`dcp-mode-btn dcp-mode-btn--manual ${driveMode === 'manual' ? 'is-active' : ''}`} onClick={() => { setDriveMode('manual'); setManualRequestState('idle'); }}>
+                <button type="button" className={`dcp-mode-btn dcp-mode-btn--manual ${effectiveDriveMode === 'manual' ? 'is-active' : ''}`}
+                  onClick={() => { setDriveMode('manual'); setManualRequestState('idle'); }}
+                  disabled={isEmergencyMode}>
                   <span className="dcp-mode-btn__dot" />人工驾驶
                 </button>
               </div>
@@ -825,21 +849,47 @@ function DriverCabView({
 
             <div className="dcp-section dcp-section--brake-handle">
               <span className="dcp-section__label">制动手柄（级位 {brakeLevelUI}）</span>
-              <div className={`dcp-brake-levels ${driveMode !== 'manual' ? 'is-disabled' : ''}`} role="group">
+              {/* ATO 模式或 EMERGENCY 模式下制动手柄 disabled（真实业务状态，非视觉假禁用）*/}
+              <div className={`dcp-brake-levels ${effectiveDriveMode !== 'manual' ? 'is-disabled' : ''}`} role="group">
                 {[0,1,2,3,4,5,6,7].map((level) => (
-                  <button key={level} type="button" className={`dcp-brake-level-btn ${brakeLevelUI === level ? 'is-active' : ''}`} disabled={driveMode !== 'manual'} onClick={() => setBrakeLevelUI(level)}>{level}</button>
+                  <button key={level} type="button"
+                    className={`dcp-brake-level-btn ${brakeLevelUI === level ? 'is-active' : ''}`}
+                    disabled={effectiveDriveMode !== 'manual'}
+                    onClick={() => {
+                      setBrakeLevelUI(level);
+                      // MANUAL 模式：制动手柄真实触发后端续算
+                      // 8 级制动：0=无制动, 7=最大常用制动，线性换算
+                      const targetDecel = (level / 7) * 1.2; // 最大常用制动 1.2 m/s2
+                      if (onBrakeLevel) onBrakeLevel(level, targetDecel);
+                    }}>
+                    {level}
+                  </button>
                 ))}
               </div>
             </div>
 
             <div className="dcp-bottom-row">
               <div className="dcp-section dcp-section--emergency">
-                <button type="button" className={`dcp-emergency-btn ${emergencyActive ? 'is-triggered' : ''}`} onClick={() => setEmergencyActive((v) => !v)}>
-                  ⚠ {emergencyActive ? '已施加' : '紧急制动'}
+                <button type="button"
+                  className={`dcp-emergency-btn ${(emergencyActive || isEmergencyMode) ? 'is-triggered' : ''}`}
+                  onClick={() => {
+                    setEmergencyActive(true);
+                    // EB 任意模式可用，触发后端续算
+                    if (onEmergencyBrake) onEmergencyBrake();
+                  }}>
+                  ⚠ {(emergencyActive || isEmergencyMode) ? '已施加' : '紧急制动'}
                 </button>
               </div>
               <div className="dcp-section dcp-section--manual-req">
-                <button type="button" className={`dcp-manual-req-btn ${manualRequestState === 'pending' ? 'is-pending' : ''}`} disabled={driveMode !== 'ato'} onClick={() => setManualRequestState(manualRequestState === 'idle' ? 'pending' : 'idle')}>
+                <button type="button"
+                  className={`dcp-manual-req-btn ${manualRequestState === 'pending' ? 'is-pending' : ''}`}
+                  disabled={effectiveDriveMode !== 'ato' || isEmergencyMode}
+                  onClick={() => {
+                    const next = manualRequestState === 'idle' ? 'pending' : 'idle';
+                    setManualRequestState(next);
+                    // 申请人工接管：通知父组件（第一版：非 EMERGENCY 即允许切换）
+                    if (next === 'pending' && onModeRequest) onModeRequest('manual');
+                  }}>
                   {manualRequestState === 'pending' ? '等待批准…' : '申请人工接管'}
                 </button>
               </div>

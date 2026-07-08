@@ -1,10 +1,13 @@
 package com.bjtu.railtransit.vehicle.service;
 
+import com.bjtu.railtransit.vehicle.dto.ControlCommand;
 import com.bjtu.railtransit.vehicle.dto.SafetyEvent;
+import com.bjtu.railtransit.vehicle.dto.SimulationControlRequest;
 import com.bjtu.railtransit.vehicle.dto.SimulationResult;
 import com.bjtu.railtransit.vehicle.dto.SimulationSummary;
 import com.bjtu.railtransit.vehicle.dto.StopResult;
 import com.bjtu.railtransit.vehicle.dto.TrainState;
+import com.bjtu.railtransit.vehicle.enums.DrivingMode;
 import com.bjtu.railtransit.vehicle.enums.SimulationPhase;
 import com.bjtu.railtransit.vehicle.enums.StopWindowState;
 import com.bjtu.railtransit.vehicle.model.LineProfile;
@@ -281,6 +284,432 @@ public class VehicleSimulationService {
         double resistanceDecel = w0 * GRAVITY / 1000.0;
         double gradeDecel = GRAVITY * line.gradientAt(pos);
         return resistanceDecel + gradeDecel;
+    }
+
+    // ==================== 驾驶员控制续算（本轮新增）====================
+
+    /**
+     * 驾驶员控制续算：从请求中携带的 currentState 开始，根据 currentMode 和 controlCommand
+     * 重新积分后续状态序列，返回与 {@link #run} 相同格式的 {@link SimulationResult}。
+     *
+     * <p>驾驶模式状态机（本项目为课程仿真原型，不代表真实 CBTC/ATP/ATO 系统）：</p>
+     * <ul>
+     *   <li>ATO 模式下：普通 brake 指令被拒绝（保持 ATO 续算）；EB 直接进入 EMERGENCY。</li>
+     *   <li>MANUAL 模式下：brake 指令真实参与续算，targetDecel 不超过 normalBrakeDeceleration；EB 直接进入 EMERGENCY。</li>
+     *   <li>EMERGENCY 模式下：使用 emergencyBrakeDeceleration 续算到停车，ATO 指令冻结。</li>
+     * </ul>
+     *
+     * <p>SafetyGuard（最小实现）：续算每一步检查速度是否超过区间限速，超速则生成
+     * SafetyEvent 并强制施加 emergencyBrakeDeceleration 保护（ATP 保护层）。</p>
+     *
+     * @param request  包含 currentState、fromStationId、toStationId、currentMode、controlCommand
+     * @param scenario 由控制器基于 fromStationId/toStationId 构造的场景配置
+     * @return 续算结果，summary.currentMode 携带续算后模式，summary.nextMode 给出建议的后续模式
+     * @throws IllegalArgumentException 当请求参数缺失或非法时
+     */
+    public SimulationResult runContinuation(SimulationControlRequest request, ScenarioConfig scenario) {
+        if (request.getCurrentState() == null) {
+            throw new IllegalArgumentException("controlRequest.currentState 不能为空");
+        }
+        if (request.getCurrentMode() == null) {
+            throw new IllegalArgumentException("controlRequest.currentMode 不能为空");
+        }
+        if (request.getControlCommand() == null) {
+            throw new IllegalArgumentException("controlRequest.controlCommand 不能为空");
+        }
+
+        LineProfile line = scenario.getLineProfile();
+        TrainModel train = scenario.getTrainModel();
+        double dt = scenario.getDt();
+        double dtSub = dt / SUB_STEPS_PER_SAMPLE;
+
+        double targetStopPosition = line.getTargetStopPosition();
+        double speedLimit = line.getSpeedLimit();
+
+        ControlCommand cmd = request.getControlCommand();
+        DrivingMode inputMode = request.getCurrentMode();
+
+        // ---- 解析控制指令，确定实际执行模式 ----
+        DrivingMode effectiveMode;
+        String commandStr = cmd.getCommand() != null ? cmd.getCommand().toLowerCase() : "";
+        boolean isEmergencyBrake = "emergency_brake".equals(commandStr);
+
+        if (isEmergencyBrake) {
+            // EB 任意模式直接进入 EMERGENCY
+            effectiveMode = DrivingMode.EMERGENCY;
+        } else if (inputMode == DrivingMode.ATO && "brake".equals(commandStr)) {
+            // ATO 模式下普通 brake 被拒绝，保持 ATO 续算（使用 ATO 自动策略）
+            effectiveMode = DrivingMode.ATO;
+        } else {
+            effectiveMode = inputMode;
+        }
+
+        // 初始条件来自 currentState
+        TrainState initState = request.getCurrentState();
+        double startT = initState.getTime();
+        double pos = initState.getPosition();
+        double v = initState.getVelocity();
+
+        List<TrainState> states = new ArrayList<>();
+        List<SafetyEvent> safetyEvents = new ArrayList<>();
+
+        double t = startT;
+        boolean brakingTriggered = false;
+        boolean coastEntered = false;
+        double brakeResponseRemaining = 0.0;
+        double brakeTriggerPosition = pos;
+        double predictedStopPositionAtTrigger = pos;
+
+        // MANUAL 模式下的目标减速度（不超过 normalBrakeDeceleration）
+        double manualTargetDecel = 0.0;
+        if (effectiveMode == DrivingMode.MANUAL && "brake".equals(commandStr)) {
+            double requestedDecel = cmd.getTargetDecel();
+            manualTargetDecel = Math.min(
+                    Math.max(requestedDecel, 0.0),
+                    train.getNormalBrakeDeceleration()
+            );
+            // MANUAL brake 直接触发制动
+            brakingTriggered = true;
+            brakeTriggerPosition = pos;
+            brakeResponseRemaining = train.getBrakeResponseTime();
+        }
+
+        // EMERGENCY 模式：直接触发紧急制动
+        if (effectiveMode == DrivingMode.EMERGENCY) {
+            brakingTriggered = true;
+            brakeTriggerPosition = pos;
+            brakeResponseRemaining = train.getBrakeResponseTime();
+            // 生成 EB SafetyEvent（司机主动 EB 或 ATP 保护）
+            String ebReason = isEmergencyBrake ? "DRIVER_EMERGENCY_BRAKE" : "EMERGENCY_MODE_ENGAGED";
+            safetyEvents.add(new SafetyEvent(ebReason, t, pos, v, "emergency_brake"));
+        }
+
+        final double finalManualTargetDecel = manualTargetDecel;
+        final DrivingMode finalEffectiveMode = effectiveMode;
+
+        for (int step = 0; step < MAX_STEPS; step++) {
+            if (brakingTriggered && v <= VELOCITY_EPSILON) {
+                states.add(new TrainState(t, pos, 0.0, 0.0, SimulationPhase.STOPPED, "T1"));
+                break;
+            }
+
+            double sampleT = t;
+            double samplePos = pos;
+            double sampleV = v;
+            SimulationPhase samplePhase = null;
+            double sampleAcceleration = 0.0;
+
+            for (int sub = 0; sub < SUB_STEPS_PER_SAMPLE; sub++) {
+                if (brakingTriggered && v <= VELOCITY_EPSILON) {
+                    if (samplePhase == null) {
+                        samplePhase = SimulationPhase.STOPPED;
+                        sampleAcceleration = 0.0;
+                    }
+                    break;
+                }
+
+                SimulationPhase phase;
+                double acceleration;
+                double drag = computeNetDrag(pos, v, train, line);
+
+                if (brakingTriggered) {
+                    // ---- 制动中（MANUAL / EMERGENCY / ATO-EB 都走这里）----
+                    phase = SimulationPhase.BRAKING;
+                    if (brakeResponseRemaining > 0) {
+                        acceleration = -drag;
+                        brakeResponseRemaining -= dtSub;
+                    } else {
+                        double brakeDecel = (finalEffectiveMode == DrivingMode.EMERGENCY)
+                                ? train.getEmergencyBrakeDeceleration()
+                                : (finalEffectiveMode == DrivingMode.MANUAL)
+                                        ? finalManualTargetDecel
+                                        : train.getNormalBrakeDeceleration();
+                        acceleration = -brakeDecel - drag;
+                    }
+                } else if (finalEffectiveMode == DrivingMode.ATO) {
+                    // ATO 自动策略（复用 run() 中的预测式触发逻辑）
+                    double predictedStop = predictStopPosition(pos, v, train, line, dtSub);
+                    if (predictedStop >= targetStopPosition) {
+                        brakingTriggered = true;
+                        brakeTriggerPosition = pos;
+                        predictedStopPositionAtTrigger = predictedStop;
+                        brakeResponseRemaining = train.getBrakeResponseTime();
+                        phase = SimulationPhase.BRAKING;
+                        acceleration = -drag; // 响应时间第一步
+                    } else if (!coastEntered && v < speedLimit - VELOCITY_EPSILON) {
+                        phase = SimulationPhase.TRACTION;
+                        acceleration = train.getMaxAcceleration() - drag;
+                    } else {
+                        coastEntered = true;
+                        phase = SimulationPhase.COAST;
+                        acceleration = -drag;
+                    }
+                } else {
+                    // MANUAL coast/traction（无制动指令）
+                    if (!coastEntered && v < speedLimit - VELOCITY_EPSILON) {
+                        phase = SimulationPhase.TRACTION;
+                        acceleration = train.getMaxAcceleration() - drag;
+                    } else {
+                        coastEntered = true;
+                        phase = SimulationPhase.COAST;
+                        acceleration = -drag;
+                    }
+                }
+
+                double vNext = v + acceleration * dtSub;
+                if (vNext < 0.0) vNext = 0.0;
+                if (phase == SimulationPhase.TRACTION && vNext >= speedLimit) {
+                    vNext = speedLimit;
+                    coastEntered = true;
+                }
+                double posNext = pos + 0.5 * (v + vNext) * dtSub;
+
+                // ---- SafetyGuard：超速检查 ----
+                if (vNext > speedLimit && !brakingTriggered) {
+                    safetyEvents.add(new SafetyEvent(
+                            "OVERSPEED",
+                            t + (sub + 1) * dtSub,
+                            posNext,
+                            vNext,
+                            "emergency_brake"
+                    ));
+                    // ATP 保护层：强制紧急制动
+                    brakingTriggered = true;
+                    brakeTriggerPosition = posNext;
+                    predictedStopPositionAtTrigger = predictStopPosition(posNext, vNext, train, line, dtSub);
+                    brakeResponseRemaining = 0.0; // ATP 保护无响应延迟
+                    phase = SimulationPhase.BRAKING;
+                }
+
+                if (sub == 0) {
+                    samplePhase = phase;
+                    sampleAcceleration = acceleration;
+                }
+
+                t += dtSub;
+                pos = posNext;
+                v = vNext;
+            }
+
+            if (samplePhase == null) {
+                samplePhase = SimulationPhase.STOPPED;
+            }
+            states.add(new TrainState(sampleT, samplePos, sampleV, sampleAcceleration, samplePhase, "T1"));
+        }
+
+        if (states.isEmpty() || states.get(states.size() - 1).getPhase() != SimulationPhase.STOPPED) {
+            throw new IllegalStateException("驾驶员控制续算未在最大步数内收敛到停车状态");
+        }
+
+        // ---- 计算续算结果 ----
+        SimulationResult result = buildResult(
+                states, targetStopPosition, speedLimit, dt,
+                brakeTriggerPosition, predictedStopPositionAtTrigger
+        );
+
+        // 填充 safetyEvents（可能来自 EB 触发或 SafetyGuard 超速）
+        result.setSafetyEvents(safetyEvents);
+
+        // 确定续算后的模式及建议后续模式
+        boolean stopped = states.get(states.size() - 1).getPhase() == SimulationPhase.STOPPED;
+        DrivingMode resultMode = finalEffectiveMode;
+        DrivingMode resultNextMode = null;
+        if (finalEffectiveMode == DrivingMode.EMERGENCY && stopped) {
+            // EMERGENCY 停稳后建议 MANUAL（不自动恢复 ATO）
+            resultNextMode = DrivingMode.MANUAL;
+        }
+        result.getSummary().setCurrentMode(resultMode);
+        result.getSummary().setNextMode(resultNextMode);
+
+        return result;
+    }
+
+    // ==================== 多站连续仿真（本轮新增）====================
+
+    /**
+     * 默认驻留时间，单位 s。运行图下发时由 {@link com.bjtu.railtransit.vehicle.dto.SimulationRunRequest#resolvedDwellTime()} 覆盖。
+     */
+    static final double DEFAULT_DWELL_TIME_SECONDS = 30.0;
+
+    /**
+     * 多站连续仿真：从 stationEntries[0] 出发，经若干中间站，到达最后一站。
+     *
+     * <p>实现方式：复用 {@link #run(ScenarioConfig)} 的单区间逻辑，循环串联每个相邻区间：</p>
+     * <ol>
+     *   <li>对每段 fromSeg→toSeg 调用 {@link #run(ScenarioConfig)} 得到区间 states。</li>
+     *   <li>把区间 states 的 time 平移（加上已累积时间），absolutePosition 加上起站绝对里程。</li>
+     *   <li>如果不是最后一段，在停车后插入 dwellTimeSeconds 的 DWELL 状态帧。</li>
+     *   <li>所有区间 states 拼接成全程 states，safetyEvents 汇总。</li>
+     * </ol>
+     *
+     * @param stationEntries 按 id 顺序的站点列表（至少 2 个）
+     * @param dwellTimeSeconds 中间站驻留时间，单位 s（null 时使用默认 30s）
+     * @param demoProvider 场景配置工厂
+     * @return 全程连续 SimulationResult
+     */
+    public SimulationResult runMultiStation(
+            List<com.bjtu.railtransit.vehicle.service.LineProfileJsonLoader.StationEntry> stationEntries,
+            Double dwellTimeSeconds,
+            DemoScenarioProvider demoProvider) {
+
+        if (stationEntries == null || stationEntries.size() < 2) {
+            throw new IllegalArgumentException("多站仿真至少需要 2 个站点");
+        }
+
+        double dwell = dwellTimeSeconds != null ? dwellTimeSeconds : DEFAULT_DWELL_TIME_SECONDS;
+        double dt = 0.5; // 与 DemoScenarioProvider.DT 保持一致（0.5s），不改 dtPerFrame
+
+        List<TrainState> allStates = new ArrayList<>();
+        List<SafetyEvent> allSafetyEvents = new ArrayList<>();
+        List<com.bjtu.railtransit.vehicle.dto.StationStop> stationStops = new ArrayList<>();
+
+        double timeOffset = 0.0;    // 全程累积时间，单位 s
+        double absOffset = 0.0;     // 全程累积绝对里程，单位 m（= 第一站的绝对里程）
+        double firstStationAbsM = stationEntries.get(0).km * 1000.0;
+        double maxVelocityAll = 0.0;
+
+        StopResult finalStopResult = null;
+
+        for (int seg = 0; seg < stationEntries.size() - 1; seg++) {
+            com.bjtu.railtransit.vehicle.service.LineProfileJsonLoader.StationEntry fromSt = stationEntries.get(seg);
+            com.bjtu.railtransit.vehicle.service.LineProfileJsonLoader.StationEntry toSt = stationEntries.get(seg + 1);
+            boolean isLastSeg = (seg == stationEntries.size() - 2);
+
+            double segFromAbsM = fromSt.km * 1000.0;
+            double segToAbsM = toSt.km * 1000.0;
+            double segDistM = segToAbsM - segFromAbsM;
+            if (segDistM <= 0) {
+                throw new IllegalArgumentException(
+                        "区间 " + fromSt.name + " -> " + toSt.name + " 距离为 0 或负值，无法仿真");
+            }
+
+            com.bjtu.railtransit.vehicle.model.LineProfile lineProfile =
+                    new com.bjtu.railtransit.vehicle.model.LineProfile(
+                            0.0,
+                            segDistM,
+                            LineProfileJsonLoader.ASSUMED_SPEED_LIMIT_MPS,
+                            java.util.Collections.emptyList()
+                    );
+            com.bjtu.railtransit.vehicle.model.ScenarioConfig scenario = demoProvider.buildScenario(lineProfile);
+
+            SimulationResult segResult = run(scenario);
+            List<TrainState> segStates = segResult.getStates();
+
+            // 追加区间 states，修正 time / absolutePosition / segmentIndex / stationId
+            for (TrainState st : segStates) {
+                TrainState adjusted = new TrainState(
+                        st.getTime() + timeOffset,
+                        st.getPosition(),
+                        st.getVelocity(),
+                        st.getAcceleration(),
+                        st.getPhase(),
+                        "T1"
+                );
+                // absolutePosition = 起站绝对里程 + 区间内相对位置
+                adjusted.setAbsolutePosition(segFromAbsM + st.getPosition());
+                adjusted.setSegmentIndex(seg);
+                adjusted.setStationId(toSt.id);
+                adjusted.setStationName(toSt.name);
+                allStates.add(adjusted);
+                if (st.getVelocity() > maxVelocityAll) {
+                    maxVelocityAll = st.getVelocity();
+                }
+            }
+
+            // 追加区间 safetyEvents（time 平移）
+            for (SafetyEvent se : segResult.getSafetyEvents()) {
+                allSafetyEvents.add(new SafetyEvent(
+                        se.getReason(),
+                        se.getTime() + timeOffset,
+                        se.getPosition(),
+                        se.getVelocity(),
+                        se.getAction()
+                ));
+            }
+
+            // 记录本站停车
+            TrainState lastSeg = segStates.get(segStates.size() - 1);
+            double arrivalTime = lastSeg.getTime() + timeOffset;
+            double actualAbsM = segFromAbsM + lastSeg.getPosition();
+            double segStopError = lastSeg.getPosition() - segDistM;
+            boolean inWindow = Math.abs(segStopError) <= STOP_POSITION_TOLERANCE
+                    && lastSeg.getVelocity() <= STOP_VELOCITY_TOLERANCE;
+
+            if (isLastSeg) {
+                // 最终站：构造 stopResult（与单区间语义保持一致）
+                StopWindowState wsState = deriveStopWindowState(segStopError, lastSeg.getVelocity());
+                finalStopResult = new StopResult(
+                        segDistM, lastSeg.getPosition(), segStopError,
+                        inWindow, inWindow ? null : "停站误差或末速度超出阈值",
+                        wsState,
+                        segResult.getStopResult() != null ? segResult.getStopResult().getBrakeTriggerPosition() : 0.0,
+                        segResult.getStopResult() != null ? segResult.getStopResult().getPredictedStopPosition() : 0.0
+                );
+                stationStops.add(new com.bjtu.railtransit.vehicle.dto.StationStop(
+                        toSt.id, toSt.name,
+                        arrivalTime, arrivalTime,  // 终点站不驻留
+                        0.0, segStopError, inWindow,
+                        segToAbsM, actualAbsM
+                ));
+            } else {
+                stationStops.add(new com.bjtu.railtransit.vehicle.dto.StationStop(
+                        toSt.id, toSt.name,
+                        arrivalTime, arrivalTime + dwell,
+                        dwell, segStopError, inWindow,
+                        segToAbsM, actualAbsM
+                ));
+
+                // 更新 timeOffset 到停车时刻
+                timeOffset += lastSeg.getTime();
+
+                // 插入 dwell 帧：velocity=0, acceleration=0, position 不变，time 递增
+                double dwellPos = lastSeg.getPosition();
+                double dwellAbsPos = segFromAbsM + dwellPos;
+                int dwellFrames = (int) Math.round(dwell / dt);
+                for (int f = 1; f <= dwellFrames; f++) {
+                    TrainState dSt = new TrainState(
+                            timeOffset + f * dt,
+                            dwellPos,
+                            0.0, 0.0,
+                            SimulationPhase.DWELL,
+                            "T1"
+                    );
+                    dSt.setAbsolutePosition(dwellAbsPos);
+                    dSt.setSegmentIndex(seg);
+                    dSt.setStationId(toSt.id);
+                    dSt.setStationName(toSt.name);
+                    allStates.add(dSt);
+                }
+
+                // 更新偏移（dwell 结束后的 timeOffset 是下一区间起点）
+                timeOffset += dwell;
+                absOffset = segToAbsM;
+            }
+        }
+
+        // 构造汇总 summary
+        TrainState lastAll = allStates.get(allStates.size() - 1);
+        SimulationSummary summary = new SimulationSummary(
+                maxVelocityAll,
+                lastAll.getTime(),
+                lastAll.getPosition(),
+                LineProfileJsonLoader.ASSUMED_SPEED_LIMIT_MPS,
+                dt
+        );
+        summary.setLineStartPosition(firstStationAbsM);
+        summary.setLineTargetPosition(stationEntries.get(stationEntries.size() - 1).km * 1000.0);
+        summary.setFromStationName(stationEntries.get(0).name);
+        summary.setToStationName(stationEntries.get(stationEntries.size() - 1).name);
+        summary.setFromStationId(stationEntries.get(0).id);
+        summary.setToStationId(stationEntries.get(stationEntries.size() - 1).id);
+        summary.setTotalStations(stationEntries.size());
+        summary.setCompletedStops(stationStops.size());
+        double totalDwell = stationStops.stream().mapToDouble(com.bjtu.railtransit.vehicle.dto.StationStop::getDwellTime).sum();
+        summary.setTotalDwellTime(totalDwell);
+
+        SimulationResult result = new SimulationResult(allStates, summary, finalStopResult, allSafetyEvents);
+        result.setStationStops(stationStops);
+        return result;
     }
 
     private SimulationResult buildResult(List<TrainState> states, double targetStopPosition, double speedLimit,

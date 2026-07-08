@@ -1,14 +1,12 @@
 // 郭逸晨车载模块（成员三）—— Vehicle 页面
 //
-// 阶段4B 新增：起止站选择器（fromStationId / toStationId），
-// 使用 lineMap.ts STATIONS 构造选项，不新增后端站点列表接口。
-// 页面显示当前仿真区间：fromStationName → toStationName。
-// LineRunView 接收 positionOffset prop，让列车在全线地图上显示真实绝对位置。
-// DriverCabView 仍接收相对 targetStopPosition，不受影响。
+// 本轮新增：驾驶员控制回调接线（手动制动、EB、ATO→MANUAL 申请），
+// SafetyEvent 展示区域（放在现有 summary 下方，不新增大块布局）。
+// 多站连续仿真：toStationId > fromStationId+1 时后端自动多站，前端照常播放。
 
-import { useEffect, useState } from 'react';
-import { runVehicleSimulation } from '../../api/vehicle';
-import type { SimulationResult, TrainState } from '../../types/vehicle';
+import { useCallback, useEffect, useState } from 'react';
+import { callVehicleControl, runVehicleSimulation } from '../../api/vehicle';
+import type { DrivingMode, SafetyEvent, SimulationResult, TrainState } from '../../types/vehicle';
 import { STATIONS } from './data/lineMap';
 import DriverCabView from './components/DriverCabView';
 import LineRunView from './components/LineRunView';
@@ -28,9 +26,15 @@ function Vehicle() {
   const [isPaused, setIsPaused] = useState(false);
   const [speedMultiplier, setSpeedMultiplier] = useState<SpeedMultiplier>(1);
 
-  // 阶段4B：起止站选择，默认 1→2（郭公庄→丰台科技园）
+  // 起止站选择，默认 1→2
   const [fromStationId, setFromStationId] = useState(1);
   const [toStationId, setToStationId] = useState(2);
+
+  // 驾驶模式（由后端 control 接口返回的 currentMode 驱动，初始为 ATO）
+  const [drivingMode, setDrivingMode] = useState<DrivingMode>('ato');
+
+  // 累积 safetyEvents（续算时可能追加新事件）
+  const [allSafetyEvents, setAllSafetyEvents] = useState<SafetyEvent[]>([]);
 
   useEffect(() => {
     const existingIcon = document.querySelector<HTMLLinkElement>(
@@ -75,13 +79,15 @@ function Vehicle() {
     setFrameIndex(0);
     setIsPaused(false);
     setSpeedMultiplier(1);
+    setDrivingMode('ato');
+    setAllSafetyEvents([]);
     try {
-      // 阶段4B：把起止站 id 传给后端
       const simulationResult = await runVehicleSimulation({ fromStationId, toStationId });
       if (!simulationResult.states || simulationResult.states.length === 0) {
         throw new Error('后端返回的仿真结果不包含任何 states 数据');
       }
       setResult(simulationResult);
+      setAllSafetyEvents(simulationResult.safetyEvents ?? []);
       setStatus('playing');
       setFrameIndex(0);
     } catch (err) {
@@ -90,6 +96,64 @@ function Vehicle() {
     }
   };
 
+  /**
+   * 驾驶员控制续算：取当前帧，发给后端续算，用新 states 替换当前帧之后的旧 states。
+   * 前后端架构保持"后端计算，前端播放"，控制按钮真正影响仿真。
+   */
+  const handleControl = useCallback(async (
+    command: string,
+    targetDecel: number,
+    mode: DrivingMode,
+  ) => {
+    if (!result || !currentStateRef.current) return;
+    const currentFrame = currentStateRef.current;
+    const curIdx = currentFrameIndexRef.current;
+    const curFromId = fromStationIdRef.current;
+    const curToId = toStationIdRef.current;
+
+    try {
+      const controlResult = await callVehicleControl({
+        fromStationId: curFromId,
+        toStationId: curToId,
+        currentState: currentFrame,
+        currentMode: mode,
+        controlCommand: { command, targetDecel },
+      });
+
+      // 用新 states 替换当前帧之后的旧 states
+      setResult((prev) => {
+        if (!prev) return prev;
+        const before = prev.states.slice(0, curIdx + 1);
+        const newStates = [...before, ...controlResult.states];
+        return {
+          ...prev,
+          states: newStates,
+          stopResult: controlResult.stopResult,
+          safetyEvents: [...(prev.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
+          stationStops: prev.stationStops,
+        };
+      });
+
+      // 更新驾驶模式
+      if (controlResult.summary.currentMode) {
+        setDrivingMode(controlResult.summary.currentMode);
+      }
+      // 追加 safetyEvents
+      if (controlResult.safetyEvents && controlResult.safetyEvents.length > 0) {
+        setAllSafetyEvents((prev) => [...prev, ...controlResult.safetyEvents]);
+      }
+    } catch (err) {
+      // 控制续算失败不中断播放，只在 console 记录
+      console.warn('控制续算失败:', err);
+    }
+  }, [result]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 使用 ref 避免 handleControl 闭包陈旧问题
+  const currentStateRef = { current: null as TrainState | null };
+  const currentFrameIndexRef = { current: 0 };
+  const fromStationIdRef = { current: fromStationId };
+  const toStationIdRef = { current: toStationId };
+
   const handleReset = () => {
     setStatus('idle');
     setErrorMessage(null);
@@ -97,6 +161,8 @@ function Vehicle() {
     setFrameIndex(0);
     setIsPaused(false);
     setSpeedMultiplier(1);
+    setDrivingMode('ato');
+    setAllSafetyEvents([]);
   };
 
   const handleTogglePause = () => {
@@ -106,15 +172,19 @@ function Vehicle() {
   const currentState: TrainState | null =
     result && result.states.length > 0 ? result.states[frameIndex] : null;
 
+  // 同步 ref（用于 handleControl 闭包）
+  currentStateRef.current = currentState;
+  currentFrameIndexRef.current = frameIndex;
+  fromStationIdRef.current = fromStationId;
+  toStationIdRef.current = toStationId;
+
   // DriverCabView 仍使用相对 targetStopPosition（0 → runDistanceM）
   const targetStopPosition = result?.stopResult?.targetStopPosition ?? 1200;
   const speedLimitValue = result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
 
-  // 阶段4B：真实线路绝对起点里程，供 LineRunView 把相对 position 映射到全线地图
-  // absolutePosition = lineStartPosition + currentState.position
+  // 真实线路绝对起点里程，供 LineRunView
   const lineStartPosition = result?.summary?.lineStartPosition ?? 0;
 
-  // 当前仿真区间展示（来自后端 summary）
   const fromStationName = result?.summary?.fromStationName ?? null;
   const toStationName = result?.summary?.toStationName ?? null;
 
@@ -122,8 +192,30 @@ function Vehicle() {
   const isPlaying = status === 'playing';
   const canReset = result !== null || status === 'error';
 
-  // 阶段4B：toStationId 选项只允许大于 fromStationId
   const toStationOptions = STATIONS.filter((s) => s.stationId > fromStationId);
+
+  // 驾驶员控制回调
+  const handleModeRequest = useCallback(() => {
+    // ATO → MANUAL：第一版简化为允许（真实系统需要地面授权，此处标注为仿真原型假设）
+    setDrivingMode('manual');
+    handleControl('coast', 0, 'manual');
+  }, [handleControl]);
+
+  const handleBrakeLevel = useCallback((level: number, targetDecel: number) => {
+    if (level === 0) return; // 0 级 = 无制动，不触发续算
+    handleControl('brake', targetDecel, 'manual');
+  }, [handleControl]);
+
+  const handleEmergencyBrake = useCallback(() => {
+    const mode = drivingMode;
+    setDrivingMode('emergency');
+    handleControl('emergency_brake', 0, mode);
+  }, [drivingMode, handleControl]);
+
+  // 多站信息展示
+  const totalStations = result?.summary?.totalStations;
+  const completedStops = result?.summary?.completedStops;
+  const stationStops = result?.stationStops;
 
   return (
     <div className="vehicle-page">
@@ -135,7 +227,7 @@ function Vehicle() {
           <h2>车载驾驶台系统</h2>
         </div>
         <div className="vehicle-page__actions">
-          {/* 阶段4B：起止站选择器 */}
+          {/* 起止站选择器 */}
           <div className="vehicle-station-selector" aria-label="起止站选择">
             <label htmlFor="from-station-select" className="vehicle-station-label">出发站</label>
             <select
@@ -146,7 +238,6 @@ function Vehicle() {
               onChange={(e) => {
                 const newFrom = Number(e.target.value);
                 setFromStationId(newFrom);
-                // 若 toStationId 不再大于新的 fromStationId，自动调整为 fromStation+1
                 if (toStationId <= newFrom) {
                   const nextId = STATIONS.find((s) => s.stationId > newFrom)?.stationId;
                   if (nextId !== undefined) setToStationId(nextId);
@@ -203,10 +294,11 @@ function Vehicle() {
             ))}
           </div>
 
-          {/* 当前区间显示（仿真开始后来自后端 summary） */}
+          {/* 区间/多站信息 */}
           {(fromStationName && toStationName) ? (
             <span className="vehicle-section-label">
               {fromStationName} → {toStationName}
+              {totalStations && totalStations > 2 ? ` (${completedStops}/${totalStations - 1}站)` : ''}
             </span>
           ) : (
             <span className="vehicle-section-label vehicle-section-label--pending">
@@ -221,6 +313,7 @@ function Vehicle() {
           {isPlaying && currentState && (
             <span className="vehicle-status-text">
               {isPaused ? '已暂停' : '播放中'} · {frameIndex + 1}/{result?.states.length} · t={currentState.time.toFixed(1)}s
+              {currentState.stationName ? ` · ${currentState.stationName}` : ''}
             </span>
           )}
           {status === 'finished' && <span className="vehicle-status-text">仿真完成</span>}
@@ -234,9 +327,8 @@ function Vehicle() {
         </div>
       )}
 
-      {/* 主内容区：左右分屏 */}
+      {/* 主内容区：左右分屏（布局不变） */}
       <div className="vehicle-main-area">
-        {/* DriverCabView 仍使用相对坐标 targetStopPosition，不受绝对里程影响 */}
         <DriverCabView
           status={status}
           currentState={currentState}
@@ -244,11 +336,13 @@ function Vehicle() {
           targetStopPosition={targetStopPosition}
           speedLimit={speedLimitValue}
           stopResult={result?.stopResult ?? null}
-          safetyEventCount={result?.safetyEvents.length ?? 0}
+          safetyEventCount={allSafetyEvents.length}
           isPaused={isPaused}
+          externalMode={drivingMode}
+          onModeRequest={handleModeRequest}
+          onBrakeLevel={handleBrakeLevel}
+          onEmergencyBrake={handleEmergencyBrake}
         />
-        {/* LineRunView 接收 positionOffset，让列车在全线地图上显示真实绝对位置
-            absolutePosition = positionOffset + currentState.position */}
         <LineRunView
           status={status}
           currentState={currentState}
@@ -259,6 +353,64 @@ function Vehicle() {
           positionOffset={lineStartPosition}
         />
       </div>
+
+      {/* SafetyEvent 列表（放在主内容区下方，现有 summary 区域风格，不新增大块结构）*/}
+      {allSafetyEvents.length > 0 && (
+        <div className="vehicle-safety-events" aria-label="安全事件列表">
+          <h3 className="vehicle-safety-events__title">⚠ 安全事件 ({allSafetyEvents.length})</h3>
+          <table className="vehicle-safety-table">
+            <thead>
+              <tr>
+                <th>原因</th>
+                <th>时刻 (s)</th>
+                <th>位置 (m)</th>
+                <th>速度 (m/s)</th>
+                <th>动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allSafetyEvents.map((ev, i) => (
+                <tr key={i}>
+                  <td>{ev.reason}</td>
+                  <td>{ev.time.toFixed(1)}</td>
+                  <td>{ev.position.toFixed(1)}</td>
+                  <td>{ev.velocity.toFixed(2)}</td>
+                  <td>{ev.action}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 多站停车记录（仅多站时显示，放在 safetyEvents 下方）*/}
+      {stationStops && stationStops.length > 0 && status === 'finished' && (
+        <div className="vehicle-station-stops" aria-label="各站停车记录">
+          <h3 className="vehicle-station-stops__title">各站停车记录</h3>
+          <table className="vehicle-safety-table">
+            <thead>
+              <tr>
+                <th>站点</th>
+                <th>到站时刻 (s)</th>
+                <th>驻留 (s)</th>
+                <th>停车误差 (m)</th>
+                <th>窗内</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stationStops.map((stop, i) => (
+                <tr key={i}>
+                  <td>{stop.stationName}</td>
+                  <td>{stop.arrivalTime.toFixed(1)}</td>
+                  <td>{stop.dwellTime.toFixed(0)}</td>
+                  <td>{stop.stopError.toFixed(2)}</td>
+                  <td>{stop.inWindow ? '✓' : '✗'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
     </div>
   );

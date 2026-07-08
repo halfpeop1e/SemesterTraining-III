@@ -13,6 +13,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -110,17 +111,48 @@ class VehicleSimulationControllerTest {
                 .andExpect(jsonPath("$.success").value(false));
     }
 
-    /** 跨越多个站点的区间（如 2→5）应能正常跑通，targetStopPosition 约等于两站km差*1000。 */
+    /** 多站仿真 1→4 应成功，summary 反映多站信息。 */
     @Test
-    void runWithMultipleStationGapSucceeds() throws Exception {
-        // 丰台科技园 km=1.661, 丰台东大街 km=5.014 -> runDistance≈3353m
+    void runMultiStationFrom1To4Succeeds() throws Exception {
         mockMvc.perform(post("/api/vehicle/simulation/run")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"fromStationId\":2,\"toStationId\":5}"))
+                        .content("{\"fromStationId\":1,\"toStationId\":4}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.summary.fromStationName").value("丰台科技园"))
-                .andExpect(jsonPath("$.data.summary.toStationName").value("丰台东大街"))
-                .andExpect(jsonPath("$.data.stopResult.targetStopPosition").exists());
+                .andExpect(jsonPath("$.data.states").isArray())
+                .andExpect(jsonPath("$.data.states", not(empty())))
+                .andExpect(jsonPath("$.data.summary.totalStations").value(4))
+                .andExpect(jsonPath("$.data.summary.fromStationName").value("郭公庄"))
+                .andExpect(jsonPath("$.data.summary.dtPerFrame").value(0.5))
+                .andExpect(jsonPath("$.data.stationStops").isArray());
+    }
+
+    /** /control 端点：EB 触发 EMERGENCY，safetyEvents 不为空。 */
+    @Test
+    void controlEbTriggersSafetyEvent() throws Exception {
+        // 先取一个中间帧 state（从 run 结果中拿第 30 帧）
+        org.springframework.test.web.servlet.MvcResult runResult = mockMvc.perform(
+                post("/api/vehicle/simulation/run"))
+                .andReturn();
+        String runBody = runResult.getResponse().getContentAsString();
+        // 用简单字符串判断代替完整 JSON 解析（测试环境不引入额外 JSON 库）
+        assertTrue(runBody.contains("\"success\":true"), "run 应先成功");
+
+        // 构造 control 请求（用 time=40, position=300, velocity=18 的 midState）
+        String controlBody = "{" +
+                "\"fromStationId\":1," +
+                "\"toStationId\":2," +
+                "\"currentState\":{\"time\":40,\"position\":300,\"velocity\":18,\"acceleration\":0,\"phase\":\"coast\",\"trainId\":\"T1\"}," +
+                "\"currentMode\":\"ato\"," +
+                "\"controlCommand\":{\"command\":\"emergency_brake\",\"targetDecel\":0}" +
+                "}";
+        mockMvc.perform(post("/api/vehicle/simulation/control")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(controlBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.summary.currentMode").value("emergency"))
+                .andExpect(jsonPath("$.data.safetyEvents").isArray())
+                .andExpect(jsonPath("$.data.safetyEvents", not(empty())));
     }
 }

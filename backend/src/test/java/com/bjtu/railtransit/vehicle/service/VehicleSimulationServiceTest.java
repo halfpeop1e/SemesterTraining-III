@@ -363,6 +363,272 @@ class VehicleSimulationServiceTest {
         }
     }
 
+    // ---- 本轮新增：多站连续仿真测试 ----
+
+    /** 多站 1→4：states 不为空，time 单调递增，absolutePosition 单调不减，末态停车。 */
+    @Test
+    void multiStationFrom1To4GeneratesContinuousStates() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> segment = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 4) segment.add(s);
+        }
+        segment.sort((a, b) -> Integer.compare(a.id, b.id));
+
+        SimulationResult result = service.runMultiStation(segment, null, demoScenarioProvider);
+
+        assertNotNull(result.getStates());
+        assertTrue(result.getStates().size() > 100, "多站 states 应有大量帧");
+
+        double prevTime = -1;
+        double prevAbsPos = -1;
+        for (TrainState s : result.getStates()) {
+            assertTrue(s.getTime() >= prevTime - 1e-9, "time 应单调不减，t=" + s.getTime());
+            prevTime = s.getTime();
+            if (s.getAbsolutePosition() != null) {
+                assertTrue(s.getAbsolutePosition() >= prevAbsPos - 1.0,
+                        "absolutePosition 应单调不减，abs=" + s.getAbsolutePosition());
+                prevAbsPos = s.getAbsolutePosition();
+            }
+        }
+
+        TrainState last = result.getStates().get(result.getStates().size() - 1);
+        assertEquals(SimulationPhase.STOPPED, last.getPhase(), "末态应为 STOPPED");
+    }
+
+    /** 多站 1→4：中间站有 DWELL 帧，velocity=0，position 不变，持续约 30s。 */
+    @Test
+    void multiStationHasDwellFramesBetweenSegments() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> segment = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 3) segment.add(s);
+        }
+        segment.sort((a, b) -> Integer.compare(a.id, b.id));
+
+        SimulationResult result = service.runMultiStation(segment, 30.0, demoScenarioProvider);
+
+        long dwellCount = result.getStates().stream()
+                .filter(s -> s.getPhase() == SimulationPhase.DWELL)
+                .count();
+        // 30s / 0.5s = 60 帧 dwell（允许 ±2 帧的离散误差）
+        assertTrue(dwellCount >= 58 && dwellCount <= 62,
+                "30s 驻留应产生约 60 帧 DWELL 状态，实际 " + dwellCount);
+
+        // DWELL 帧 velocity=0, acceleration=0
+        result.getStates().stream()
+                .filter(s -> s.getPhase() == SimulationPhase.DWELL)
+                .forEach(s -> {
+                    assertEquals(0.0, s.getVelocity(), 1e-9, "DWELL 帧速度应为 0");
+                    assertEquals(0.0, s.getAcceleration(), 1e-9, "DWELL 帧加速度应为 0");
+                });
+    }
+
+    /** 多站 1→4：stationStops 记录每站停车。 */
+    @Test
+    void multiStationStationStopsRecordsEachStop() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> segment = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 4) segment.add(s);
+        }
+        segment.sort((a, b) -> Integer.compare(a.id, b.id));
+
+        SimulationResult result = service.runMultiStation(segment, null, demoScenarioProvider);
+
+        assertNotNull(result.getStationStops());
+        // 1→4 经过3个区间，3次停车（含终点站）
+        assertEquals(3, result.getStationStops().size(),
+                "1→4 应有 3 条 stationStops 记录，实际 " + result.getStationStops().size());
+        assertEquals(4, result.getStationStops().get(2).getStationId(),
+                "最后一条 stationStop 应为目标站 id=4");
+        assertEquals(result.getSummary().getCompletedStops(), result.getStationStops().size(),
+                "completedStops 应与 stationStops.size() 相等");
+    }
+
+    /** 多站 1→4：totalStations=4，totalDwellTime≈60s（中间2站各30s）。 */
+    @Test
+    void multiStationSummaryContainsCorrectCounts() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> segment = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 4) segment.add(s);
+        }
+        segment.sort((a, b) -> Integer.compare(a.id, b.id));
+
+        SimulationResult result = service.runMultiStation(segment, 30.0, demoScenarioProvider);
+        assertEquals(4, result.getSummary().getTotalStations(), "totalStations 应为 4");
+        assertEquals(3, result.getSummary().getCompletedStops(), "completedStops 应为 3");
+        // 中间站 2 站（id=2, id=3）各驻留 30s
+        assertEquals(60.0, result.getSummary().getTotalDwellTime(), 1.0,
+                "两个中间站各 30s 驻留，总驻留时间应约 60s");
+    }
+
+    /** 多站 dtPerFrame 仍为 0.5s。 */
+    @Test
+    void multiStationDtPerFrameRemainsHalfSecond() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> segment = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 3) segment.add(s);
+        }
+        segment.sort((a, b) -> Integer.compare(a.id, b.id));
+        SimulationResult result = service.runMultiStation(segment, null, demoScenarioProvider);
+        assertEquals(0.5, result.getSummary().getDtPerFrame(), 1e-9,
+                "多站仿真 dtPerFrame 仍应为 0.5s");
+    }
+
+    // ---- 本轮新增：驾驶员控制 + SafetyGuard 测试 ----
+
+    /** ATO 模式下普通 brake 被拒绝，效果与 ATO 无手动制动一致（模式仍为 ATO）。 */
+    @Test
+    void atoModeIgnoresManualBrakeCommand() {
+        com.bjtu.railtransit.vehicle.model.LineProfile line = loader.buildLineProfile(1, 2);
+        com.bjtu.railtransit.vehicle.model.ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+
+        // 先跑一次完整仿真，取中间帧作为 currentState
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
+        com.bjtu.railtransit.vehicle.dto.ControlCommand cmd =
+                new com.bjtu.railtransit.vehicle.dto.ControlCommand("brake", 0.8);
+        req.setControlCommand(cmd);
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertEquals(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO,
+                result.getSummary().getCurrentMode(),
+                "ATO 模式下 brake 被拒绝，currentMode 应仍为 ATO");
+        assertEquals(SimulationPhase.STOPPED,
+                result.getStates().get(result.getStates().size() - 1).getPhase(),
+                "ATO 续算最终应停车");
+    }
+
+    /** MANUAL 模式下 brake 指令使后续速度下降，最终停车。 */
+    @Test
+    void manualBrakeCommandReducesVelocityAndStops() {
+        com.bjtu.railtransit.vehicle.model.LineProfile line = loader.buildLineProfile(1, 2);
+        com.bjtu.railtransit.vehicle.model.ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.MANUAL);
+        com.bjtu.railtransit.vehicle.dto.ControlCommand cmd =
+                new com.bjtu.railtransit.vehicle.dto.ControlCommand("brake", 1.0);
+        req.setControlCommand(cmd);
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertEquals(com.bjtu.railtransit.vehicle.enums.DrivingMode.MANUAL,
+                result.getSummary().getCurrentMode());
+
+        // 速度应下降（braking 阶段出现）
+        boolean brakingSeen = result.getStates().stream()
+                .anyMatch(s -> s.getPhase() == SimulationPhase.BRAKING);
+        assertTrue(brakingSeen, "MANUAL brake 续算应出现 BRAKING 阶段");
+
+        TrainState last = result.getStates().get(result.getStates().size() - 1);
+        assertEquals(SimulationPhase.STOPPED, last.getPhase(), "MANUAL brake 最终应停车");
+    }
+
+    /** EB 在 ATO 模式下直接触发 EMERGENCY，返回 EMERGENCY 模式。 */
+    @Test
+    void ebInAtoModeTriggersEmergency() {
+        com.bjtu.railtransit.vehicle.model.LineProfile line = loader.buildLineProfile(1, 2);
+        com.bjtu.railtransit.vehicle.model.ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 2);
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("emergency_brake", 0));
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertEquals(com.bjtu.railtransit.vehicle.enums.DrivingMode.EMERGENCY,
+                result.getSummary().getCurrentMode(), "EB 在 ATO 下应触发 EMERGENCY");
+        assertFalse(result.getSafetyEvents().isEmpty(), "EB 应生成 SafetyEvent");
+        assertEquals("DRIVER_EMERGENCY_BRAKE", result.getSafetyEvents().get(0).getReason());
+    }
+
+    /** EB 在 MANUAL 模式下同样触发 EMERGENCY。 */
+    @Test
+    void ebInManualModeTriggersEmergency() {
+        com.bjtu.railtransit.vehicle.model.LineProfile line = loader.buildLineProfile(1, 2);
+        com.bjtu.railtransit.vehicle.model.ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 2);
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.MANUAL);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("emergency_brake", 0));
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertEquals(com.bjtu.railtransit.vehicle.enums.DrivingMode.EMERGENCY,
+                result.getSummary().getCurrentMode());
+        assertFalse(result.getSafetyEvents().isEmpty(), "EB 在 MANUAL 下也应生成 SafetyEvent");
+    }
+
+    /** EMERGENCY 模式下：safetyEvents 不为空，末态 STOPPED，nextMode=MANUAL。 */
+    @Test
+    void emergencyModeStopsAndSuggestsManualReset() {
+        com.bjtu.railtransit.vehicle.model.LineProfile line = loader.buildLineProfile(1, 2);
+        com.bjtu.railtransit.vehicle.model.ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.EMERGENCY);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("emergency_brake", 0));
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        TrainState last = result.getStates().get(result.getStates().size() - 1);
+        assertEquals(SimulationPhase.STOPPED, last.getPhase());
+        assertFalse(result.getSafetyEvents().isEmpty(), "EMERGENCY 模式应生成 SafetyEvent");
+        assertEquals(com.bjtu.railtransit.vehicle.enums.DrivingMode.MANUAL,
+                result.getSummary().getNextMode(),
+                "EMERGENCY 停稳后 nextMode 应建议 MANUAL");
+    }
+
+    /** STOP_POSITION_TOLERANCE=0.5, STOP_VELOCITY_TOLERANCE=0.1 不变（回归）。 */
+    @Test
+    void stopTolerancesUnchanged() throws Exception {
+        java.lang.reflect.Field f1 = VehicleSimulationService.class.getDeclaredField("STOP_POSITION_TOLERANCE");
+        f1.setAccessible(true);
+        assertEquals(0.5, f1.getDouble(null), 1e-12);
+
+        java.lang.reflect.Field f2 = VehicleSimulationService.class.getDeclaredField("STOP_VELOCITY_TOLERANCE");
+        f2.setAccessible(true);
+        assertEquals(0.1, f2.getDouble(null), 1e-12);
+    }
+
+    /** dtPerFrame 仍为 0.5s（回归，确保多站新逻辑没有改变 dt）。 */
+    @Test
+    void dtPerFrameStillHalfSecond() {
+        SimulationResult result = service.runDemoSimulation();
+        assertEquals(0.5, result.getSummary().getDtPerFrame(), 1e-9);
+    }
+
     // ---- 辅助方法 ----
 
     private double coastPhaseVelocityDrop(List<TrainState> states) {

@@ -19,8 +19,16 @@ public enum SimulationPhase {
     /** 制动阶段。 */
     BRAKING("braking"),
 
-    /** 已停车。 */
-    STOPPED("stopped");
+    /** 已停车（单区间终点停车或多站途中站停车）。 */
+    STOPPED("stopped"),
+
+    /**
+     * 站内驻留阶段（多站连续仿真新增）。
+     *
+     * <p>velocity=0, acceleration=0, position 不变，time 按 dtPerFrame 增长。
+     * 驻留结束后自动进入下一区间的 TRACTION 阶段。</p>
+     */
+    DWELL("dwell");
 
     private final String code;
 

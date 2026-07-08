@@ -1,5 +1,7 @@
 package com.bjtu.railtransit.vehicle.dto;
 
+import com.bjtu.railtransit.vehicle.enums.DrivingMode;
+
 /**
  * 仿真总结指标（对应指挥书 {@code summary} 契约的最小字段集合）。
  */
@@ -151,4 +153,69 @@ public class SimulationSummary {
     public void setToStationName(String toStationName) {
         this.toStationName = toStationName;
     }
+
+    // ---- 驾驶模式状态机字段（本轮新增）----
+
+    /**
+     * 续算结束后的驾驶模式（control 接口返回时填充）。
+     * run 接口返回时为 null（全程 ATO 仿真不维护模式字段）。
+     */
+    private DrivingMode currentMode;
+
+    /**
+     * 下一步允许切换的驾驶模式建议（可为 null）。
+     * 例如 EMERGENCY 停稳后建议 MANUAL。
+     */
+    private DrivingMode nextMode;
+
+    public DrivingMode getCurrentMode() {
+        return currentMode;
+    }
+
+    public void setCurrentMode(DrivingMode currentMode) {
+        this.currentMode = currentMode;
+    }
+
+    public DrivingMode getNextMode() {
+        return nextMode;
+    }
+
+    public void setNextMode(DrivingMode nextMode) {
+        this.nextMode = nextMode;
+    }
+
+    // ---- 多站连续仿真汇总字段（新增，单区间时为默认值）----
+
+    /** 起始站 id（多站仿真时填充）。 */
+    private int fromStationId;
+
+    /** 终止站 id（多站仿真时填充）。 */
+    private int toStationId;
+
+    /**
+     * 总经停站数（含起点和终点）。
+     * 单区间：2；跨 N 个区间：N+1。
+     */
+    private int totalStations;
+
+    /** 已完成停车的站数（含终点站）。多站运行中断时可能 < totalStations。 */
+    private int completedStops;
+
+    /** 所有中间站驻留时间之和，单位 s。单区间时为 0。 */
+    private double totalDwellTime;
+
+    public int getFromStationId() { return fromStationId; }
+    public void setFromStationId(int fromStationId) { this.fromStationId = fromStationId; }
+
+    public int getToStationId() { return toStationId; }
+    public void setToStationId(int toStationId) { this.toStationId = toStationId; }
+
+    public int getTotalStations() { return totalStations; }
+    public void setTotalStations(int totalStations) { this.totalStations = totalStations; }
+
+    public int getCompletedStops() { return completedStops; }
+    public void setCompletedStops(int completedStops) { this.completedStops = completedStops; }
+
+    public double getTotalDwellTime() { return totalDwellTime; }
+    public void setTotalDwellTime(double totalDwellTime) { this.totalDwellTime = totalDwellTime; }
 }
