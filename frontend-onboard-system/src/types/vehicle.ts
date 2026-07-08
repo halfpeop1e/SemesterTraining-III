@@ -31,6 +31,18 @@ export interface SimulationSummary {
   totalTime: number;
   /** 终态位置，单位 m。 */
   finalPosition: number;
+  /**
+   * 线路限速，单位 m/s（阶段 1.6 704 语义对齐新增字段）。
+   * 对应后端 SimulationSummary.speedLimit，与 704 DMI「允许速度」语义对齐
+   * （704 侧单位 cm/s，本项目内部与后端一致统一使用 m/s）。
+   */
+  speedLimit: number;
+  /**
+   * 后端仿真采样步长，单位 s（等于后端 ScenarioConfig.dt）。
+   * 前端播放 interval = dtPerFrame * 1000 / speedMultiplier，
+   * 改变倍速只改前端 interval，不改后端 dt。
+   */
+  dtPerFrame: number;
 }
 
 /** 自动停站结果。 */
@@ -45,6 +57,18 @@ export interface StopResult {
   success: boolean;
   /** 失败原因或风险提示，成功时可能为 null。 */
   reason: string | null;
+  /**
+   * 停车窗到位状态（阶段 1.6 704 语义对齐新增字段）。
+   * 对应后端 StopWindowState 枚举的 @JsonValue 序列化结果，取值为小写码
+   * in_window/overshoot/undershoot/not_accurate，对应 704 表13「窗内/冲标/
+   * 欠标/未停准」。这里定义为 string，页面展示时按大小写不敏感方式映射为中文，
+   * 与 phase 字段的处理方式保持一致。
+   */
+  stopWindowState: string;
+  /** 阶段3B新增：制动触发位置，单位 m */
+  brakeTriggerPosition?: number;
+  /** 阶段3B新增：预测停车位置，单位 m */
+  predictedStopPosition?: number;
 }
 
 /** SafetyGuard 安全事件（阶段 1A 恒为空数组）。 */

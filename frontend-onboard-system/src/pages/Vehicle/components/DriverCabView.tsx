@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { StopResult, TrainState } from '../../../types/vehicle';
+import { STATIONS } from '../data/lineMap';
 import './DriverCabView.css';
 
 export interface DriverCabViewProps {
@@ -421,6 +422,62 @@ function drawCanvasHud(
   });
 }
 
+// 站台信息 — 在 canvas 内绘制，不用 DOM 覆盖层
+function drawStationHud(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  currentPosition: number,
+) {
+  const ARRIVAL = 30;
+  let passedName = '起点';
+  let nextName = '终点';
+  let arriving = false;
+
+  for (let i = 0; i < STATIONS.length; i += 1) {
+    const stPos = STATIONS[i].positionM;
+    const name = STATIONS[i].displayNameOverride ?? STATIONS[i].displayName;
+    if (Math.abs(currentPosition - stPos) <= ARRIVAL) {
+      arriving = true;
+      nextName = name;
+      break;
+    }
+    if (currentPosition >= stPos) {
+      passedName = name;
+      if (i + 1 < STATIONS.length) {
+        const n = STATIONS[i + 1];
+        nextName = n.displayNameOverride ?? n.displayName;
+      }
+    } else {
+      if (nextName === '终点') {
+        nextName = name;
+      }
+      break;
+    }
+  }
+
+  const text = arriving
+    ? `◎  即将到站  ${nextName}`
+    : `◀ 已过  ${passedName}     下一站  ${nextName} ▶`;
+
+  ctx.save();
+  ctx.font = '700 13px "Microsoft YaHei", sans-serif';
+  const tw = ctx.measureText(text).width;
+  const pw = tw + 28;
+  const ph = 28;
+  const px = (width - pw) / 2;
+  const py = height - ph - 10;
+
+  ctx.fillStyle = arriving ? 'rgba(60, 50, 5, 0.82)' : 'rgba(5, 10, 12, 0.76)';
+  fillRoundRect(ctx, px, py, pw, ph, 14);
+
+  ctx.fillStyle = arriving ? '#fde68a' : '#d5e8ee';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, width / 2, py + ph / 2);
+  ctx.restore();
+}
+
 function drawCabViewCanvas(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -449,8 +506,11 @@ function drawCabViewCanvas(
   ctx.strokeStyle = 'rgba(206, 218, 216, 0.16)';
   ctx.lineWidth = 2;
   ctx.strokeRect(10, 10, width - 20, height - 20);
+  drawStationHud(ctx, width, height, currentPosition);
   drawCanvasHud(ctx, width, height, props);
 }
+
+type DriveMode = 'ato' | 'manual';
 
 function DriverCabView({
   status,
@@ -463,6 +523,12 @@ function DriverCabView({
   isPaused = false,
 }: DriverCabViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // 驾驶员控制面板 UI 状态（纯前端，不接后端）
+  const [driveMode, setDriveMode] = useState<DriveMode>('ato');
+  const [brakeLevelUI, setBrakeLevelUI] = useState(0);
+  const [emergencyActive, setEmergencyActive] = useState(false);
+  const [manualRequestState, setManualRequestState] = useState<'idle' | 'pending'>('idle');
   const propsRef = useRef<DriverCabViewProps>({
     status,
     currentState,
@@ -615,122 +681,173 @@ function DriverCabView({
       className={`driver-cab-view driver-cab-view--${status} ${isPaused ? 'is-paused' : ''}`}
       aria-label="车载驾驶台运行视景"
     >
-      <div className="driver-cab-view__stage">
-        <div className="driver-cab-view__viewport">
-          <canvas ref={canvasRef} className="driver-cab-view__canvas" aria-label="第一人称前方轨道仿真视景" />
-          <div className={`driver-cab-view__mode-chip driver-cab-view__mode-chip--${operatingMode.tone}`}>
-            <span />
-            <strong>{operatingMode.label}</strong>
-            <small>{currentState ? `T+${currentState.time.toFixed(1)}s` : 'T+0.0s'}</small>
-          </div>
-        </div>
+      <div className="driver-cab-view__layout">
 
-        <aside className="driver-cab-view__side-console" aria-label="车载系统状态">
-          <div className={`cab-mode-panel cab-mode-panel--${operatingMode.tone}`}>
-            <span className="cab-panel-label">运行模式</span>
-            <strong>{operatingMode.label}</strong>
-            <small>{operatingMode.note}</small>
+        {/* ── 左列：Canvas + 底部仪表条 ── */}
+        <div className="driver-cab-view__left-col">
+
+          <div className="driver-cab-view__viewport">
+            <canvas ref={canvasRef} className="driver-cab-view__canvas" aria-label="第一人称前方轨道仿真视景" />
+            <div className={`driver-cab-view__mode-chip driver-cab-view__mode-chip--${operatingMode.tone}`}>
+              <span />
+              <strong>{operatingMode.label}</strong>
+              <small>{currentState ? `T+${currentState.time.toFixed(1)}s` : 'T+0.0s'}</small>
+            </div>
           </div>
 
-          <div className="cab-system-panel">
-            <span className="cab-panel-label">系统状态灯</span>
-            <div className="cab-system-lights">
-              {systemLights.map((light) => (
-                <div className={`cab-system-light cab-system-light--${light.tone}`} key={light.label}>
-                  <span />
-                  <div>
-                    <strong>{light.label}</strong>
-                    <small>{light.value}</small>
-                  </div>
+          {/* 底部仪表条 */}
+          <div className="driver-cab-view__console" aria-label="驾驶台仪表">
+            <div className={`cab-instrument cab-instrument--speed ${speedStateClass}`} style={speedGaugeStyle}>
+              <div className="cab-instrument__label">速度</div>
+              <div className="cab-speed-gauge" aria-label="速度仪表">
+                <div className="cab-speed-gauge__inner">
+                  <span className="cab-speed-gauge__value">{speedKmh.toFixed(0)}</span>
+                  <span className="cab-speed-gauge__unit">km/h</span>
+                  <span className="cab-speed-gauge__mps">{currentVelocity.toFixed(2)} m/s</span>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className={`cab-stop-badge-panel cab-stop-badge-panel--${stopPanelState}`}>
-            <span className="cab-panel-label">停站精度</span>
-            <strong>
-              {status === 'finished' && stopResult
-                ? describeStopWindowState(stopResult.stopWindowState)
-                : '待结果'}
-            </strong>
-            <small>
-              {status === 'finished' && stopResult
-                ? `误差 ${stopResult.stopError.toFixed(2)} m`
-                : '完成后显示停车窗状态'}
-            </small>
-          </div>
-        </aside>
-      </div>
-
-      <div className="driver-cab-view__console" aria-label="驾驶台仪表">
-        <div className={`cab-instrument cab-instrument--speed ${speedStateClass}`} style={speedGaugeStyle}>
-          <div className="cab-instrument__label">速度</div>
-          <div className="cab-speed-gauge" aria-label="速度仪表">
-            <div className="cab-speed-gauge__inner">
-              <span className="cab-speed-gauge__value">{speedKmh.toFixed(0)}</span>
-              <span className="cab-speed-gauge__unit">km/h</span>
-              <span className="cab-speed-gauge__mps">{currentVelocity.toFixed(2)} m/s</span>
-            </div>
-          </div>
-          <div className="cab-speed-reference" aria-label="限速参考">
-            <span className="cab-speed-reference__bar" />
-            <span className="cab-speed-reference__marker" />
-          </div>
-          <div className="cab-instrument__subline">限速 {speedLimitKmh.toFixed(0)} km/h · {speedLimit.toFixed(2)} m/s</div>
-        </div>
-
-        <div className={`cab-instrument cab-instrument--accel ${accelClass}`} style={accelStyle}>
-          <div className="cab-instrument__label">加速度</div>
-          <div className="cab-accel-meter">
-            <span className="cab-accel-meter__axis" />
-            <span className="cab-accel-meter__fill" />
-          </div>
-          <div className="cab-accel-value">
-            <span>{currentAcceleration.toFixed(2)}</span>
-            <small>m/s²</small>
-          </div>
-          <div className="cab-instrument__subline">
-            {accelClass === 'is-positive' ? '牵引加速' : accelClass === 'is-negative' ? '制动减速' : '接近 0'}
-          </div>
-        </div>
-
-        <div className="cab-instrument cab-instrument--distance">
-          <div className="cab-instrument__label">目标距离</div>
-          <div className={distanceToTarget < 0 ? 'cab-distance is-passed' : 'cab-distance'}>
-            <span>{formatDistance(distanceToTarget)}</span>
-            <small>m</small>
-          </div>
-          <div className="cab-instrument__subline">{distanceTrend}</div>
-        </div>
-
-        <div className="cab-instrument cab-instrument--phase">
-          <div className="cab-instrument__label">运行阶段</div>
-          <div className="cab-phase-strip">
-            {PHASE_SEQUENCE.map((phase) => (
-              <div
-                className={`cab-phase-step ${normalizedPhase === phase.key ? 'is-active' : ''}`}
-                key={phase.key}
-              >
-                <span />
-                <strong>{phase.label}</strong>
               </div>
-            ))}
+              <div className="cab-speed-reference" aria-label="限速参考">
+                <span className="cab-speed-reference__bar" />
+                <span className="cab-speed-reference__marker" />
+              </div>
+              <div className="cab-instrument__subline">限速 {speedLimitKmh.toFixed(0)} km/h</div>
+            </div>
+
+            <div className={`cab-instrument cab-instrument--accel ${accelClass}`} style={accelStyle}>
+              <div className="cab-instrument__label">加速度</div>
+              <div className="cab-accel-meter">
+                <span className="cab-accel-meter__axis" />
+                <span className="cab-accel-meter__fill" />
+              </div>
+              <div className="cab-accel-value">
+                <span>{currentAcceleration.toFixed(2)}</span>
+                <small>m/s²</small>
+              </div>
+              <div className="cab-instrument__subline">
+                {accelClass === 'is-positive' ? '牵引' : accelClass === 'is-negative' ? '制动' : '惰行'}
+              </div>
+            </div>
+
+            <div className="cab-instrument cab-instrument--distance">
+              <div className="cab-instrument__label">目标距离</div>
+              <div className={distanceToTarget < 0 ? 'cab-distance is-passed' : 'cab-distance'}>
+                <span>{formatDistance(distanceToTarget)}</span>
+                <small>m</small>
+              </div>
+              <div className="cab-instrument__subline">{distanceTrend}</div>
+            </div>
+
+            <div className="cab-instrument cab-instrument--phase">
+              <div className="cab-instrument__label">运行阶段</div>
+              <div className="cab-phase-strip">
+                {PHASE_SEQUENCE.map((phase) => (
+                  <div
+                    className={`cab-phase-step ${normalizedPhase === phase.key ? 'is-active' : ''}`}
+                    key={phase.key}
+                  >
+                    <span />
+                    <strong>{phase.label}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className={`cab-instrument cab-instrument--lever cab-lever--${leverMode}`} style={leverStyle}>
+              <div className="cab-instrument__label">牵 / 制趋势</div>
+              <div className="cab-lever">
+                <span className="cab-lever__slot" />
+                <span className="cab-lever__fill" />
+                <span className="cab-lever__handle" />
+              </div>
+              <div className="cab-instrument__subline">
+                {leverMode === 'traction' ? '牵引' : leverMode === 'brake' ? '制动' : '惰行'}
+              </div>
+            </div>
           </div>
-          <div className="cab-instrument__subline">当前 {describePhase(currentState?.phase)}</div>
+
         </div>
 
-        <div className={`cab-instrument cab-instrument--lever cab-lever--${leverMode}`} style={leverStyle}>
-          <div className="cab-instrument__label">牵引 / 制动趋势</div>
-          <div className="cab-lever">
-            <span className="cab-lever__slot" />
-            <span className="cab-lever__fill" />
-            <span className="cab-lever__handle" />
+        {/* ── 右列：状态面板 + 控制面板 ── */}
+        <aside className="driver-cab-view__right-col" aria-label="车载系统状态与控制">
+
+          <div className="driver-cab-view__side-console">
+            <div className={`cab-mode-panel cab-mode-panel--${operatingMode.tone}`}>
+              <div className="cab-mode-row">
+                <span className="cab-mode-indicator" />
+                <span className="cab-mode-label">{operatingMode.label}</span>
+                <small className="cab-mode-time">{currentState ? `T+${currentState.time.toFixed(0)}s` : 'T+0s'}</small>
+              </div>
+            </div>
+
+            <div className="cab-system-panel">
+              <span className="cab-panel-label">系统状态灯</span>
+              <div className="cab-system-lights">
+                {systemLights.map((light) => (
+                  <div className={`cab-system-light cab-system-light--${light.tone}`} key={light.label}>
+                    <span />
+                    <div>
+                      <strong>{light.label}</strong>
+                      <small>{light.value}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className={`cab-stop-badge-panel cab-stop-badge-panel--${stopPanelState}`}>
+              <div className="cab-stop-row">
+                <span className="cab-panel-label">停站精度</span>
+                <strong className="cab-stop-value">
+                  {status === 'finished' && stopResult
+                    ? describeStopWindowState(stopResult.stopWindowState)
+                    : '待结果'}
+                </strong>
+              </div>
+              {status === 'finished' && stopResult && (
+                <small className="cab-stop-error">误差 {stopResult.stopError.toFixed(2)} m</small>
+              )}
+            </div>
           </div>
-          <div className="cab-instrument__subline">
-            {leverMode === 'traction' ? '牵引输出' : leverMode === 'brake' ? '制动输出' : '惰行/保持'}
+
+          {/* 驾驶员控制面板 */}
+          <div className="driver-control-panel" aria-label="驾驶员控制面板">
+            <div className="dcp-section dcp-section--mode">
+              <span className="dcp-section__label">驾驶模式</span>
+              <div className="dcp-mode-buttons" role="group">
+                <button type="button" className={`dcp-mode-btn dcp-mode-btn--ato ${driveMode === 'ato' ? 'is-active' : ''}`} onClick={() => setDriveMode('ato')}>
+                  <span className="dcp-mode-btn__dot" />ATO 自动
+                </button>
+                <button type="button" className={`dcp-mode-btn dcp-mode-btn--manual ${driveMode === 'manual' ? 'is-active' : ''}`} onClick={() => { setDriveMode('manual'); setManualRequestState('idle'); }}>
+                  <span className="dcp-mode-btn__dot" />人工驾驶
+                </button>
+              </div>
+            </div>
+
+            <div className="dcp-section dcp-section--brake-handle">
+              <span className="dcp-section__label">制动手柄（级位 {brakeLevelUI}）</span>
+              <div className={`dcp-brake-levels ${driveMode !== 'manual' ? 'is-disabled' : ''}`} role="group">
+                {[0,1,2,3,4,5,6,7].map((level) => (
+                  <button key={level} type="button" className={`dcp-brake-level-btn ${brakeLevelUI === level ? 'is-active' : ''}`} disabled={driveMode !== 'manual'} onClick={() => setBrakeLevelUI(level)}>{level}</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="dcp-bottom-row">
+              <div className="dcp-section dcp-section--emergency">
+                <button type="button" className={`dcp-emergency-btn ${emergencyActive ? 'is-triggered' : ''}`} onClick={() => setEmergencyActive((v) => !v)}>
+                  ⚠ {emergencyActive ? '已施加' : '紧急制动'}
+                </button>
+              </div>
+              <div className="dcp-section dcp-section--manual-req">
+                <button type="button" className={`dcp-manual-req-btn ${manualRequestState === 'pending' ? 'is-pending' : ''}`} disabled={driveMode !== 'ato'} onClick={() => setManualRequestState(manualRequestState === 'idle' ? 'pending' : 'idle')}>
+                  {manualRequestState === 'pending' ? '等待批准…' : '申请人工接管'}
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+
+        </aside>
+
       </div>
     </section>
   );

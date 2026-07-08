@@ -509,3 +509,41 @@
   color: #dd6b20;
   font-weight: 600;
 }
+
+/* 倍速按钮组 */
+.vehicle-speed-group {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.vehicle-speed-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+}
+
+.vehicle-speed-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.vehicle-speed-btn.is-active {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.vehicle-speed-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

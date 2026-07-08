@@ -44,8 +44,15 @@ class VehicleSimulationControllerTest {
                 .andExpect(jsonPath("$.data.summary.maxVelocity").exists())
                 .andExpect(jsonPath("$.data.summary.totalTime").exists())
                 .andExpect(jsonPath("$.data.summary.finalPosition").exists())
+                .andExpect(jsonPath("$.data.summary.speedLimit").value(20.0))
+                .andExpect(jsonPath("$.data.summary.dtPerFrame").value(0.5))
                 .andExpect(jsonPath("$.data.stopResult").exists())
                 .andExpect(jsonPath("$.data.stopResult.targetStopPosition").value(1200.0))
+                // 阶段2引入真实阻力/坡度后，演示配置下停站误差约0.57m（冲过目标点），
+                // stopWindowState 应为 overshoot，不再是阶段1理想模型下的 in_window。
+                .andExpect(jsonPath("$.data.stopResult.stopWindowState").value("in_window"))
+                .andExpect(jsonPath("$.data.stopResult.brakeTriggerPosition").exists())
+                .andExpect(jsonPath("$.data.stopResult.predictedStopPosition").exists())
                 .andExpect(jsonPath("$.data.safetyEvents").isArray());
     }
 }
