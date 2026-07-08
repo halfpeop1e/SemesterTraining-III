@@ -1,24 +1,11 @@
-import { useState } from "react";
+import { useState } from 'react';
+import { Card, Button, Tabs, Row, Col, Statistic, Table, Tag, Empty, Space, Spin, Alert, Result, message } from 'antd';
 import {
-  Card,
-  Button,
-  Tabs,
-  Row,
-  Col,
-  Statistic,
-  Table,
-  Tag,
-  Empty,
-  message,
-} from "antd";
-import {
-  ThunderboltOutlined,
-  CheckCircleOutlined,
-  ExperimentOutlined,
-} from "@ant-design/icons";
-import type { EvaluationReport, SimulationLog } from "../../types";
-import { generateReport } from "../../api/evaluation";
-import { getSimulationLogs } from "../../api/dispatch";
+  ThunderboltOutlined, CheckCircleOutlined, ExperimentOutlined, ReloadOutlined,
+} from '@ant-design/icons';
+import type { EvaluationReport, SimulationLog } from '../../types';
+import { generateReport } from '../../api/evaluation';
+import { getSimulationLogs } from '../../api/dispatch';
 
 /* ---- Helpers ---- */
 const riskLevelLabel: Record<string, string> = {
@@ -590,6 +577,31 @@ export default function EnergyEvaluation() {
     </div>
   );
 
+  if (loading && !report) {
+    return (
+      <div className="h-full flex items-center justify-center" style={{ minHeight: 400 }}>
+        <Spin tip="正在运行评估分析..." size="large" />
+      </div>
+    );
+  }
+
+  if (error && !report) {
+    return (
+      <div className="p-6">
+        <Result
+          status="warning"
+          title="评估服务不可用"
+          subTitle={error}
+          extra={[
+            <Button key="retry" type="primary" icon={<ReloadOutlined />} onClick={handleRun}>
+              重试
+            </Button>,
+          ]}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -613,17 +625,15 @@ export default function EnergyEvaluation() {
         </Button>
       </div>
 
-      {error && (
-        <div
-          className="text-red-400 text-sm p-3.5 rounded-xl flex items-center gap-2"
-          style={{
-            background: "rgba(239,68,68,0.06)",
-            border: "1px solid rgba(239,68,68,0.12)",
-          }}
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
-          {error}
-        </div>
+      {error && report && (
+        <Alert
+          type="warning"
+          message="部分评估数据可能过期"
+          description={error}
+          showIcon
+          closable
+          className="!rounded-xl"
+        />
       )}
 
       <Tabs
