@@ -14,6 +14,10 @@ public class SimulationSnapshot {
     private List<TrainPositionPoint> positionHistory;
     private List<StationArrival> stationArrivals;
     private double totalEnergyKwh;
+    private double totalTractionKwh;
+    private double totalRegenKwh;
+    private double peakPowerKw;
+    private int maxSpeedLimit;
 
     public SimulationSnapshot() {
     }
@@ -97,6 +101,18 @@ public class SimulationSnapshot {
     public void setTotalEnergyKwh(double totalEnergyKwh) {
         this.totalEnergyKwh = totalEnergyKwh;
     }
+
+    public double getTotalTractionKwh() { return totalTractionKwh; }
+    public void setTotalTractionKwh(double v) { this.totalTractionKwh = v; }
+
+    public double getTotalRegenKwh() { return totalRegenKwh; }
+    public void setTotalRegenKwh(double v) { this.totalRegenKwh = v; }
+
+    public double getPeakPowerKw() { return peakPowerKw; }
+    public void setPeakPowerKw(double v) { this.peakPowerKw = v; }
+
+    public int getMaxSpeedLimit() { return maxSpeedLimit; }
+    public void setMaxSpeedLimit(int v) { this.maxSpeedLimit = v; }
 
     public static class HeadwayInfo {
         private String fromTrainId;

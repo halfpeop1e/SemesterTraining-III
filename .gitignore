@@ -33,3 +33,5 @@ data/
 backend/backend-changelog-*.md
 backend/body.json
 backend/**/body.json
+
+.fake
