@@ -12,7 +12,6 @@ target/
 .classpath
 .settings/
 .trae/
-
 # Node
 node_modules/
 dist/
