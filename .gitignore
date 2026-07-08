@@ -28,3 +28,8 @@ Thumbs.db
 # data
 data/
 线路数据*.xls
+
+# Agent scratch logs / temp artifacts (NOT to be committed)
+backend/backend-changelog-*.md
+backend/body.json
+backend/**/body.json
