@@ -27,6 +27,4 @@ Thumbs.db
 
 # data
 data/
-configs/
-backend/src/main/resources/configs/
 线路数据*.xls
