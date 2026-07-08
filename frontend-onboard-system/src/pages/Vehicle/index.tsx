@@ -1,11 +1,15 @@
 // 郭逸晨车载模块（成员三）—— Vehicle 页面
 //
-// 布局：顶部控制栏（固定高度）+ 下方左右分屏（DriverCabView 左 | LineRunView 右）
-// 整页锁死在 100vh，不产生滚动。
+// 阶段4B 新增：起止站选择器（fromStationId / toStationId），
+// 使用 lineMap.ts STATIONS 构造选项，不新增后端站点列表接口。
+// 页面显示当前仿真区间：fromStationName → toStationName。
+// LineRunView 接收 positionOffset prop，让列车在全线地图上显示真实绝对位置。
+// DriverCabView 仍接收相对 targetStopPosition，不受影响。
 
 import { useEffect, useState } from 'react';
 import { runVehicleSimulation } from '../../api/vehicle';
 import type { SimulationResult, TrainState } from '../../types/vehicle';
+import { STATIONS } from './data/lineMap';
 import DriverCabView from './components/DriverCabView';
 import LineRunView from './components/LineRunView';
 import './vehicle.css';
@@ -23,6 +27,10 @@ function Vehicle() {
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [speedMultiplier, setSpeedMultiplier] = useState<SpeedMultiplier>(1);
+
+  // 阶段4B：起止站选择，默认 1→2（郭公庄→丰台科技园）
+  const [fromStationId, setFromStationId] = useState(1);
+  const [toStationId, setToStationId] = useState(2);
 
   useEffect(() => {
     const existingIcon = document.querySelector<HTMLLinkElement>(
@@ -68,7 +76,8 @@ function Vehicle() {
     setIsPaused(false);
     setSpeedMultiplier(1);
     try {
-      const simulationResult = await runVehicleSimulation();
+      // 阶段4B：把起止站 id 传给后端
+      const simulationResult = await runVehicleSimulation({ fromStationId, toStationId });
       if (!simulationResult.states || simulationResult.states.length === 0) {
         throw new Error('后端返回的仿真结果不包含任何 states 数据');
       }
@@ -96,11 +105,25 @@ function Vehicle() {
 
   const currentState: TrainState | null =
     result && result.states.length > 0 ? result.states[frameIndex] : null;
+
+  // DriverCabView 仍使用相对 targetStopPosition（0 → runDistanceM）
   const targetStopPosition = result?.stopResult?.targetStopPosition ?? 1200;
   const speedLimitValue = result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
+
+  // 阶段4B：真实线路绝对起点里程，供 LineRunView 把相对 position 映射到全线地图
+  // absolutePosition = lineStartPosition + currentState.position
+  const lineStartPosition = result?.summary?.lineStartPosition ?? 0;
+
+  // 当前仿真区间展示（来自后端 summary）
+  const fromStationName = result?.summary?.fromStationName ?? null;
+  const toStationName = result?.summary?.toStationName ?? null;
+
   const isLoading = status === 'loading';
   const isPlaying = status === 'playing';
   const canReset = result !== null || status === 'error';
+
+  // 阶段4B：toStationId 选项只允许大于 fromStationId
+  const toStationOptions = STATIONS.filter((s) => s.stationId > fromStationId);
 
   return (
     <div className="vehicle-page">
@@ -112,6 +135,49 @@ function Vehicle() {
           <h2>车载驾驶台系统</h2>
         </div>
         <div className="vehicle-page__actions">
+          {/* 阶段4B：起止站选择器 */}
+          <div className="vehicle-station-selector" aria-label="起止站选择">
+            <label htmlFor="from-station-select" className="vehicle-station-label">出发站</label>
+            <select
+              id="from-station-select"
+              className="vehicle-station-select"
+              value={fromStationId}
+              disabled={isLoading || isPlaying}
+              onChange={(e) => {
+                const newFrom = Number(e.target.value);
+                setFromStationId(newFrom);
+                // 若 toStationId 不再大于新的 fromStationId，自动调整为 fromStation+1
+                if (toStationId <= newFrom) {
+                  const nextId = STATIONS.find((s) => s.stationId > newFrom)?.stationId;
+                  if (nextId !== undefined) setToStationId(nextId);
+                }
+              }}
+            >
+              {STATIONS.filter((s) => s.stationId < STATIONS[STATIONS.length - 1].stationId).map((s) => (
+                <option key={s.stationId} value={s.stationId}>
+                  {s.displayNameOverride ?? s.displayName}
+                </option>
+              ))}
+            </select>
+
+            <span className="vehicle-station-arrow">→</span>
+
+            <label htmlFor="to-station-select" className="vehicle-station-label">目标站</label>
+            <select
+              id="to-station-select"
+              className="vehicle-station-select"
+              value={toStationId}
+              disabled={isLoading || isPlaying}
+              onChange={(e) => setToStationId(Number(e.target.value))}
+            >
+              {toStationOptions.map((s) => (
+                <option key={s.stationId} value={s.stationId}>
+                  {s.displayNameOverride ?? s.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <button className="vehicle-start-btn" onClick={handleStart}
             disabled={isLoading || isPlaying} type="button">
             {isLoading ? '计算中...' : status === 'finished' || status === 'error' ? '重新仿真' : '开始仿真'}
@@ -137,6 +203,21 @@ function Vehicle() {
             ))}
           </div>
 
+          {/* 当前区间显示（仿真开始后来自后端 summary） */}
+          {(fromStationName && toStationName) ? (
+            <span className="vehicle-section-label">
+              {fromStationName} → {toStationName}
+            </span>
+          ) : (
+            <span className="vehicle-section-label vehicle-section-label--pending">
+              {(STATIONS.find((s) => s.stationId === fromStationId)?.displayNameOverride
+                ?? STATIONS.find((s) => s.stationId === fromStationId)?.displayName) || `站${fromStationId}`}
+              {' → '}
+              {(STATIONS.find((s) => s.stationId === toStationId)?.displayNameOverride
+                ?? STATIONS.find((s) => s.stationId === toStationId)?.displayName) || `站${toStationId}`}
+            </span>
+          )}
+
           {isPlaying && currentState && (
             <span className="vehicle-status-text">
               {isPaused ? '已暂停' : '播放中'} · {frameIndex + 1}/{result?.states.length} · t={currentState.time.toFixed(1)}s
@@ -155,6 +236,7 @@ function Vehicle() {
 
       {/* 主内容区：左右分屏 */}
       <div className="vehicle-main-area">
+        {/* DriverCabView 仍使用相对坐标 targetStopPosition，不受绝对里程影响 */}
         <DriverCabView
           status={status}
           currentState={currentState}
@@ -165,6 +247,8 @@ function Vehicle() {
           safetyEventCount={result?.safetyEvents.length ?? 0}
           isPaused={isPaused}
         />
+        {/* LineRunView 接收 positionOffset，让列车在全线地图上显示真实绝对位置
+            absolutePosition = positionOffset + currentState.position */}
         <LineRunView
           status={status}
           currentState={currentState}
@@ -172,6 +256,7 @@ function Vehicle() {
           targetStopPosition={targetStopPosition}
           speedLimit={speedLimitValue}
           stopResult={result?.stopResult ?? null}
+          positionOffset={lineStartPosition}
         />
       </div>
 

@@ -1,25 +1,28 @@
 // 郭逸晨车载模块（成员三）——车辆仿真 API 调用
 //
-// 对应后端 backend/src/main/java/com/bjtu/railtransit/vehicle/controller/VehicleSimulationController.java
-// 的 POST /api/vehicle/simulation/run 接口。第一版请求体为空，后端使用内置演示配置
-// 一次性计算并返回完整仿真结果（states/summary/stopResult/safetyEvents）。
+// 对应后端 VehicleSimulationController POST /api/vehicle/simulation/run。
+// 阶段4B：支持可选的 fromStationId / toStationId 参数，不传时后端默认 1→2。
 
-import type { SimulationResult, SimulationRunResponse } from '../types/vehicle';
+import type { SimulationResult, SimulationRunRequest, SimulationRunResponse } from '../types/vehicle';
 
 const API_BASE = '/api';
 
 /**
  * 调用后端车辆仿真接口，返回解析后的 SimulationResult。
  *
- * 页面展示的所有运行数据（states/summary/stopResult/safetyEvents）均来自本次
- * 后端响应，不使用前端写死数组。
+ * @param request 可选请求体，包含 fromStationId 和 toStationId。
+ *                不传或传 undefined 时后端默认使用 1（郭公庄）→ 2（丰台科技园）。
  */
-export async function runVehicleSimulation(): Promise<SimulationResult> {
+export async function runVehicleSimulation(
+  request?: SimulationRunRequest,
+): Promise<SimulationResult> {
   const res = await fetch(`${API_BASE}/vehicle/simulation/run`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
+    // request 有值时发送 JSON body；无值时发送空 body，后端 required=false 会用默认值。
+    body: request ? JSON.stringify(request) : undefined,
   });
 
   if (!res.ok) {

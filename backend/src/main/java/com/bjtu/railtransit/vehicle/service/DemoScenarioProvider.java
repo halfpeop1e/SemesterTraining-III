@@ -148,6 +148,33 @@ public class DemoScenarioProvider {
     }
 
     /**
+     * 使用外部传入的 {@link LineProfile} 构造场景配置（阶段4B 线路数据真实化新增）。
+     *
+     * <p>车辆参数（Davis 系数、制动减速度、质量、制动响应时间、dt）全部使用本类内置
+     * 默认值，不因起止站不同而改变。调用方只需构造好来自 line-profile.json 的
+     * {@link LineProfile}，本方法完成车型+步长的组装。</p>
+     *
+     * <p><b>注意：</b>传入的 LineProfile 的 speedLimit 与 gradeSegments 由调用方
+     * 负责（当前 {@link LineProfileJsonLoader} 使用假设值 20 m/s + 空坡度段）。</p>
+     *
+     * @param lineProfile 由调用方构造的线路配置（相对坐标）
+     * @return 组装好的 ScenarioConfig
+     */
+    public ScenarioConfig buildScenario(LineProfile lineProfile) {
+        TrainModel trainModel = new TrainModel(
+                MAX_ACCELERATION,
+                NORMAL_BRAKE_DECELERATION,
+                EMERGENCY_BRAKE_DECELERATION,
+                BRAKE_RESPONSE_TIME,
+                MASS,
+                DAVIS_A,
+                DAVIS_B,
+                DAVIS_C
+        );
+        return new ScenarioConfig(lineProfile, trainModel, DT);
+    }
+
+    /**
      * 构建一个制动响应时间可自定义的演示场景（其余参数与 {@link #getDemoScenario()} 完全一致）。
      * 阶段3B新增，仅供测试对照，验证制动响应时间补偿的生效效果。
      *
