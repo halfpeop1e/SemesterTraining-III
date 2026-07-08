@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Layout as AntLayout, Menu, Button, Dropdown, Segmented } from 'antd';
+import { Layout as AntLayout, Menu, Button, Dropdown } from 'antd';
 import {
   DashboardOutlined,
   ThunderboltOutlined,
@@ -156,7 +156,7 @@ function LayoutFrame({ children, currentModule, onModuleChange }: Props) {
           <div className="px-3 py-2.5 border-t border-slate-800/40 space-y-1.5">
             <Button
               block size="small"
-              className="!h-8 !text-xs !font-semibold !rounded-lg"
+              className="h-8! text-xs! font-semibold! rounded-lg!"
               icon={running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
               onClick={() => setRunning(!running)}
               style={running
@@ -166,7 +166,7 @@ function LayoutFrame({ children, currentModule, onModuleChange }: Props) {
               {collapsed ? '' : (running ? '暂停' : '启动')}
             </Button>
             {!collapsed && (
-              <Button block size="small" className="!h-8 !text-xs !font-medium !rounded-lg !text-slate-400"
+              <Button block size="small" className="h-8! text-xs! font-medium! rounded-lg! text-slate-400!"
                 style={{ background: 'rgba(100,116,139,0.06)', border: '1px solid rgba(100,116,139,0.12)' }}
                 icon={<ReloadOutlined />}>
                 重置场景
@@ -176,10 +176,10 @@ function LayoutFrame({ children, currentModule, onModuleChange }: Props) {
 
           {/* Toggle */}
           <button
+            type="button"
             onClick={() => setCollapsed(!collapsed)}
             className="w-full flex items-center justify-center h-10 text-slate-500 hover:text-slate-300 transition-colors bg-transparent border-0 cursor-pointer border-t border-slate-800/40"
-            aria-label={collapsed ? '展开' : '收起'}
-          >
+            aria-label={collapsed ? '展开' : '收起'}>
             {collapsed ? <MenuUnfoldOutlined className="text-base" /> : <MenuFoldOutlined className="text-base" />}
           </button>
         </div>
@@ -204,6 +204,7 @@ function LayoutFrame({ children, currentModule, onModuleChange }: Props) {
 
           <div className="flex items-center gap-2.5">
             <button
+              type="button"
               onClick={() => setRunning(!running)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-transparent border-0 cursor-pointer transition-colors"
               style={{
@@ -224,10 +225,10 @@ function LayoutFrame({ children, currentModule, onModuleChange }: Props) {
             </span>
 
             <div className="flex items-center gap-0.5 ml-1">
-              <Button type="text" size="small" className="!w-8 !h-8 !rounded-lg"
+              <Button type="text" size="small" className="w-8! h-8! rounded-lg!"
                 icon={<BellOutlined className="text-slate-400" />} aria-label="通知" />
               <Dropdown menu={settingsMenu} trigger={['click']}>
-                <Button type="text" size="small" className="!w-8 !h-8 !rounded-lg"
+                <Button type="text" size="small" className="w-8! h-8! rounded-lg!"
                   icon={<SettingOutlined className="text-slate-400" />} aria-label="设置" />
               </Dropdown>
             </div>
