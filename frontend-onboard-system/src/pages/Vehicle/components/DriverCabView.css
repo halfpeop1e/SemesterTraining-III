@@ -1,0 +1,963 @@
+.driver-cab-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px;
+  color: #e8eef1;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0)),
+    #0e1315;
+  border: 1px solid rgba(174, 194, 204, 0.2);
+  border-radius: 8px;
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.34);
+}
+
+/* 左右双列主布局 */
+.driver-cab-view__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 左列：Canvas 弹性填满 + 底部仪表条 */
+.driver-cab-view__left-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+/* 右列：状态面板 + 控制面板，不允许滚动 */
+.driver-cab-view__right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.driver-cab-view__viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #050708;
+  border: 1px solid rgba(166, 188, 198, 0.24);
+  border-radius: 8px;
+}
+
+.driver-cab-view__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.driver-cab-view__mode-chip {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  max-width: min(320px, calc(100% - 28px));
+  padding: 7px 10px;
+  color: #d9e7ed;
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(5, 10, 11, 0.72);
+  border: 1px solid rgba(172, 208, 221, 0.22);
+  border-radius: 6px;
+  backdrop-filter: blur(8px);
+}
+
+.driver-cab-view__mode-chip span {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  background: #67e8f9;
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgba(103, 232, 249, 0.75);
+}
+
+.driver-cab-view__mode-chip small {
+  color: #9fb0b7;
+  font-size: 11px;
+}
+
+.driver-cab-view__mode-chip--paused span,
+.driver-cab-view__mode-chip--ready span {
+  background: #fbbf24;
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.75);
+}
+
+.driver-cab-view__mode-chip--done span {
+  background: #86efac;
+  box-shadow: 0 0 12px rgba(134, 239, 172, 0.7);
+}
+
+.driver-cab-view__mode-chip--fault span {
+  background: #fb7185;
+  box-shadow: 0 0 12px rgba(251, 113, 133, 0.75);
+}
+
+.driver-cab-view__side-console {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cab-instrument {
+  min-width: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0)),
+    #171d1f;
+  border: 1px solid rgba(174, 194, 204, 0.16);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.cab-panel-label,
+.cab-instrument__label {
+  display: block;
+  color: #aebdc4;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+/* ---- mode panel 紧凑化 ---- */
+.cab-mode-panel {
+  min-width: 0;
+  padding: 7px 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0)), #171d1f;
+  border: 1px solid rgba(174,194,204,0.16);
+  border-radius: 8px;
+}
+
+.cab-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cab-mode-indicator {
+  width: 8px;
+  height: 8px;
+  background: #67e8f9;
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(103,232,249,0.7);
+  flex-shrink: 0;
+}
+
+.cab-mode-panel--active .cab-mode-indicator { background: #2dd4bf; box-shadow: 0 0 8px rgba(45,212,191,0.7); }
+.cab-mode-panel--paused .cab-mode-indicator,
+.cab-mode-panel--ready .cab-mode-indicator  { background: #fbbf24; box-shadow: 0 0 8px rgba(251,191,36,0.7); }
+.cab-mode-panel--done .cab-mode-indicator   { background: #86efac; box-shadow: 0 0 8px rgba(134,239,172,0.7); }
+.cab-mode-panel--fault .cab-mode-indicator  { background: #fb7185; box-shadow: 0 0 8px rgba(251,113,133,0.7); }
+
+.cab-mode-label {
+  flex: 1;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cab-mode-time {
+  color: #7a8e97;
+  font-size: 11px;
+}
+
+.cab-mode-panel--active {
+  border-color: rgba(45, 212, 191, 0.38);
+}
+
+.cab-mode-panel--paused,
+.cab-mode-panel--ready {
+  border-color: rgba(251, 191, 36, 0.42);
+}
+
+.cab-mode-panel--done {
+  border-color: rgba(134, 239, 172, 0.4);
+}
+
+.cab-mode-panel--fault {
+  border-color: rgba(251, 113, 133, 0.46);
+}
+
+/* ---- 系统状态灯 2列grid ---- */
+.cab-system-panel {
+  min-width: 0;
+  padding: 7px 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0)), #171d1f;
+  border: 1px solid rgba(174,194,204,0.16);
+  border-radius: 8px;
+}
+
+.cab-system-lights {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.cab-system-light {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  background: #101619;
+  border: 1px solid rgba(174,194,204,0.10);
+  border-radius: 5px;
+}
+
+.cab-system-light > span {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  background: #67e8f9;
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(103,232,249,0.6);
+}
+
+.cab-system-light strong {
+  display: block;
+  color: #e8eef1;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.cab-system-light small {
+  display: block;
+  color: #7a8e97;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.cab-system-light--ok > span {
+  background: #86efac;
+  box-shadow: 0 0 12px rgba(134, 239, 172, 0.68);
+}
+
+.cab-system-light--warn > span {
+  background: #fbbf24;
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.72);
+}
+
+.cab-system-light--danger > span {
+  background: #fb7185;
+  box-shadow: 0 0 12px rgba(251, 113, 133, 0.72);
+}
+
+/* ---- 停站精度紧凑 ---- */
+.cab-stop-badge-panel {
+  min-width: 0;
+  padding: 7px 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0)), #171d1f;
+  border: 1px solid rgba(174,194,204,0.16);
+  border-radius: 8px;
+}
+
+.cab-stop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cab-stop-value {
+  flex: 1;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.cab-stop-error {
+  display: block;
+  margin-top: 2px;
+  color: #9aaab2;
+  font-size: 11px;
+}
+
+.cab-stop-badge-panel--in_window {
+  border-color: rgba(134, 239, 172, 0.46);
+}
+
+.cab-stop-badge-panel--in_window .cab-stop-value {
+  color: #bbf7d0;
+}
+
+.cab-stop-badge-panel--overshoot,
+.cab-stop-badge-panel--undershoot {
+  border-color: rgba(251, 191, 36, 0.46);
+}
+
+.cab-stop-badge-panel--overshoot .cab-stop-value,
+.cab-stop-badge-panel--undershoot .cab-stop-value {
+  color: #fde68a;
+}
+
+.cab-stop-badge-panel--not_accurate {
+  border-color: rgba(251, 113, 133, 0.48);
+}
+
+.cab-stop-badge-panel--not_accurate .cab-stop-value {
+  color: #fecdd3;
+}
+
+.driver-cab-view__console {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr 1.1fr 0.8fr;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.cab-instrument {
+  min-height: 140px;
+  padding: 10px;
+}
+
+.cab-instrument__subline {
+  margin-top: 8px;
+  color: #9aaab2;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.cab-speed-gauge {
+  position: relative;
+  width: 124px;
+  height: 124px;
+  margin: 10px auto 0;
+  border-radius: 50%;
+  background:
+    conic-gradient(
+      from -135deg,
+      #57d996 0 var(--speed-gauge-deg),
+      rgba(92, 107, 109, 0.34) var(--speed-gauge-deg) 270deg,
+      transparent 270deg 360deg
+    );
+}
+
+.cab-instrument--speed.is-near-limit .cab-speed-gauge {
+  background:
+    conic-gradient(
+      from -135deg,
+      #facc15 0 var(--speed-gauge-deg),
+      rgba(92, 107, 109, 0.34) var(--speed-gauge-deg) 270deg,
+      transparent 270deg 360deg
+    );
+}
+
+.cab-instrument--speed.is-over-limit .cab-speed-gauge {
+  background:
+    conic-gradient(
+      from -135deg,
+      #fb7185 0 var(--speed-gauge-deg),
+      rgba(92, 107, 109, 0.34) var(--speed-gauge-deg) 270deg,
+      transparent 270deg 360deg
+    );
+}
+
+.cab-speed-gauge::after {
+  position: absolute;
+  inset: 9px;
+  content: "";
+  background: #101619;
+  border: 1px solid rgba(174, 194, 204, 0.18);
+  border-radius: 50%;
+}
+
+.cab-speed-gauge__inner {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+
+.cab-speed-gauge__value {
+  color: #f8fbfc;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 36px;
+  font-weight: 900;
+  line-height: 0.95;
+}
+
+.cab-speed-gauge__unit,
+.cab-speed-gauge__mps {
+  color: #aebdc4;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.cab-speed-reference {
+  position: relative;
+  height: 12px;
+  margin-top: 10px;
+}
+
+.cab-speed-reference__bar {
+  position: absolute;
+  inset: 4px 0;
+  background:
+    linear-gradient(90deg, #57d996 0 72%, #facc15 72% 83%, #fb7185 83% 100%);
+  border-radius: 999px;
+  opacity: 0.82;
+}
+
+.cab-speed-reference::after {
+  position: absolute;
+  left: 83.333%;
+  top: 0;
+  width: 2px;
+  height: 12px;
+  content: "";
+  background: #f8fafc;
+  border-radius: 999px;
+}
+
+.cab-speed-reference__marker {
+  position: absolute;
+  left: var(--speed-marker-left);
+  top: 1px;
+  width: 8px;
+  height: 10px;
+  transform: translateX(-50%);
+  background: #f8fafc;
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(248, 250, 252, 0.5);
+}
+
+.cab-accel-meter {
+  position: relative;
+  height: 78px;
+  margin: 12px 8px 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(87, 217, 150, 0.18), transparent 50%, rgba(248, 113, 113, 0.18)),
+    #101619;
+  border: 1px solid rgba(174, 194, 204, 0.14);
+  border-radius: 7px;
+}
+
+.cab-accel-meter__axis {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: rgba(232, 238, 241, 0.45);
+  border-radius: 999px;
+}
+
+.cab-accel-meter__fill {
+  position: absolute;
+  left: 28%;
+  right: 28%;
+  height: var(--accel-level);
+  min-height: 4px;
+  background: #8ca1aa;
+  border-radius: 999px;
+}
+
+.cab-instrument--accel.is-positive .cab-accel-meter__fill {
+  bottom: 50%;
+  background: #57d996;
+}
+
+.cab-instrument--accel.is-negative .cab-accel-meter__fill {
+  top: 50%;
+  background: #f87171;
+}
+
+.cab-instrument--accel.is-neutral .cab-accel-meter__fill {
+  top: calc(50% - 2px);
+}
+
+.cab-accel-value {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: #f8fbfc;
+  font-family: Consolas, "SFMono-Regular", monospace;
+}
+
+.cab-accel-value span {
+  font-size: 28px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.cab-accel-value small {
+  color: #aebdc4;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cab-distance {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 30px;
+  color: #eaf6fb;
+  font-family: Consolas, "SFMono-Regular", monospace;
+}
+
+.cab-distance span {
+  min-width: 0;
+  font-size: 40px;
+  font-weight: 900;
+  line-height: 1;
+  overflow-wrap: anywhere;
+}
+
+.cab-distance small {
+  color: #9aaab2;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cab-distance.is-passed span {
+  color: #fdba74;
+}
+
+.cab-phase-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.cab-phase-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #718087;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cab-phase-step span {
+  width: 14px;
+  height: 14px;
+  background: #303a3f;
+  border: 1px solid rgba(174, 194, 204, 0.18);
+  border-radius: 50%;
+}
+
+.cab-phase-step strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.cab-phase-step.is-active {
+  color: #f8fbfc;
+}
+
+.cab-phase-step.is-active span {
+  background: #67e8f9;
+  box-shadow: 0 0 14px rgba(103, 232, 249, 0.7);
+}
+
+.cab-lever {
+  position: relative;
+  height: 82px;
+  margin: 20px auto 0;
+}
+
+.cab-lever__slot {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 18px;
+  height: 82px;
+  transform: translateX(-50%);
+  background: #0c1114;
+  border: 1px solid rgba(174, 194, 204, 0.24);
+  border-radius: 999px;
+}
+
+.cab-lever__fill {
+  position: absolute;
+  left: calc(50% - 6px);
+  bottom: 7px;
+  width: 12px;
+  height: var(--lever-level);
+  max-height: 68px;
+  background: #57d996;
+  border-radius: 999px;
+}
+
+.cab-lever__handle {
+  position: absolute;
+  left: 50%;
+  bottom: calc(7px + var(--lever-level));
+  width: 54px;
+  height: 18px;
+  transform: translate(-50%, 50%);
+  background: linear-gradient(180deg, #eef5f7, #8da0a8);
+  border: 1px solid #d7e2e5;
+  border-radius: 999px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.32);
+}
+
+.cab-lever--brake .cab-lever__fill {
+  background: #f87171;
+}
+
+.cab-lever--neutral .cab-lever__fill {
+  background: #8ca1aa;
+}
+
+/* ---- 站台信息 HUD ---- */
+.driver-cab-view__station-hud {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  min-width: 320px;
+  max-width: calc(100% - 28px);
+  padding: 9px 16px;
+  background: rgba(5, 10, 12, 0.76);
+  border: 1px solid rgba(172, 210, 224, 0.26);
+  border-radius: 30px;
+  backdrop-filter: blur(10px);
+}
+
+.cab-station-hud__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #d5e8ee;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cab-station-hud__row--arriving {
+  gap: 8px;
+  color: #f0e7a4;
+}
+
+.cab-station-hud__segment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cab-station-hud__icon {
+  color: #7ab8cc;
+  font-size: 11px;
+}
+
+.cab-station-hud__label {
+  color: #8aacb7;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.cab-station-hud__name {
+  color: #f6fafb;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.cab-station-hud__name--next {
+  color: #67e8f9;
+}
+
+.cab-station-hud__name--arriving {
+  color: #fde68a;
+  font-size: 16px;
+  animation: hud-blink 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes hud-blink {
+  from { opacity: 0.85; }
+  to   { opacity: 1; }
+}
+
+.cab-station-hud__divider {
+  display: block;
+  width: 1px;
+  height: 18px;
+  background: rgba(172, 210, 224, 0.3);
+  border-radius: 999px;
+}
+
+.cab-station-hud__dist {
+  color: #9fb8c2;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ---- 驾驶员控制面板 紧凑版 ---- */
+.driver-control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0)), #111719;
+  border: 1px solid rgba(174, 194, 204, 0.16);
+  border-radius: 8px;
+}
+
+.dcp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dcp-section__label {
+  color: #8aacb7;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dcp-bottom-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+/* 紧急制动 */
+.dcp-emergency-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  background: #7f1d1d;
+  border: 1px solid rgba(248,113,113,0.5);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dcp-emergency-btn.is-triggered {
+  background: #450a0a;
+  border-color: #fb7185;
+  animation: emergency-pulse 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes emergency-pulse {
+  from { box-shadow: 0 0 12px rgba(251, 113, 133, 0.4); }
+  to   { box-shadow: 0 0 26px rgba(251, 113, 133, 0.8); }
+}
+
+/* 申请人工接管 */
+.dcp-manual-req-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 6px;
+  color: #fef3c7;
+  font-size: 11px;
+  font-weight: 800;
+  background: #78350f;
+  border: 1px solid rgba(253,186,116,0.36);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dcp-manual-req-btn:disabled {
+  color: #6b4c1e;
+  background: #1a1008;
+  border-color: rgba(156,172,180,0.1);
+  cursor: not-allowed;
+}
+
+.dcp-manual-req-btn.is-pending {
+  background: #92400e;
+  border-color: rgba(251,191,36,0.6);
+}
+
+/* 模式按钮 */
+.dcp-mode-buttons {
+  display: flex;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.dcp-mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 6px;
+  color: #9aaab2;
+  font-size: 12px;
+  font-weight: 800;
+  background: #182024;
+  border: 1px solid rgba(156,172,180,0.22);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.dcp-mode-btn--ato.is-active { color: #e8faf7; background: #0c2e2a; border-color: rgba(45,212,191,0.46); }
+.dcp-mode-btn--manual.is-active { color: #fff7e8; background: #2a1a08; border-color: rgba(251,191,36,0.48); }
+
+.dcp-mode-btn__dot {
+  width: 6px;
+  height: 6px;
+  background: #3a4a50;
+  border-radius: 50%;
+}
+
+.dcp-mode-btn--ato.is-active .dcp-mode-btn__dot { background: #2dd4bf; box-shadow: 0 0 6px rgba(45,212,191,0.7); }
+.dcp-mode-btn--manual.is-active .dcp-mode-btn__dot { background: #fbbf24; box-shadow: 0 0 6px rgba(251,191,36,0.7); }
+
+/* 制动手柄 */
+.dcp-section--brake-handle {
+  min-width: 0;
+}
+
+.dcp-brake-levels {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.dcp-brake-level-btn {
+  flex: 1;
+  height: 26px;
+  color: #9aaab2;
+  font-size: 12px;
+  font-weight: 900;
+  background: #182024;
+  border: 1px solid rgba(156,172,180,0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dcp-brake-level-btn.is-active {
+  color: #fff;
+  background: #991b1b;
+  border-color: rgba(248,113,113,0.54);
+}
+
+.dcp-brake-levels.is-disabled .dcp-brake-level-btn {
+  color: #3a4a50;
+  background: #0e1315;
+  border-color: rgba(156,172,180,0.08);
+  cursor: not-allowed;
+}
+
+.dcp-brake-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9aaab2;
+}
+
+.dcp-brake-bar-track {
+  flex: 1;
+  height: 6px;
+  background: #182024;
+  border: 1px solid rgba(156, 172, 180, 0.16);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.dcp-brake-bar-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #fb7185, #f87171);
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+
+.dcp-brake-bar-pct {
+  min-width: 34px;
+  text-align: right;
+  color: #d5e0e4;
+}
+
+.dcp-mode-hint {
+  color: #d97706;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dcp-manual-req-hint {
+  color: #78716c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dcp-emergency-alert {
+  padding: 6px 10px;
+  color: #fecdd3;
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(127, 29, 29, 0.6);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 6px;
+}
+
+@media (max-width: 1180px) {
+  .driver-control-panel {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .driver-cab-view {
+    padding: 10px;
+  }
+
+  .driver-cab-view__viewport {
+    min-height: 330px;
+    aspect-ratio: auto;
+  }
+
+  .driver-cab-view__mode-chip {
+    left: 10px;
+    right: 10px;
+    justify-content: space-between;
+  }
+
+  .driver-cab-view__side-console,
+  .driver-cab-view__console {
+    grid-template-columns: 1fr;
+  }
+
+  .cab-mode-panel strong,
+  .cab-stop-badge-panel strong {
+    font-size: 21px;
+  }
+
+  .cab-instrument {
+    min-height: 148px;
+  }
+
+  .cab-distance span {
+    font-size: 34px;
+  }
+}
