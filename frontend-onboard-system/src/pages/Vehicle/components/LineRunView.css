@@ -1,0 +1,305 @@
+.line-run-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  color: #dbeafe;
+  background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.28);
+}
+
+.line-run-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.line-run-view__eyebrow {
+  margin-bottom: 2px;
+  color: #38bdf8;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.line-run-view h3 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.line-run-view__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.line-run-view__controls button {
+  min-width: 36px;
+  height: 32px;
+  padding: 0 10px;
+  color: #e0f2fe;
+  font-size: 13px;
+  font-weight: 700;
+  background: #1e293b;
+  border: 1px solid rgba(125, 211, 252, 0.36);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.line-run-view__controls button:hover {
+  background: #0f3654;
+  border-color: rgba(56, 189, 248, 0.72);
+}
+
+.line-run-view__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.line-run-view__meta span {
+  padding: 4px 8px;
+  color: #bfdbfe;
+  font-size: 12px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 6px;
+}
+
+.line-run-view__svg {
+  width: 100%;
+  min-height: 300px;
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
+}
+
+.line-run-view__svg.is-dragging {
+  cursor: grabbing;
+}
+
+.line-run-view__panel {
+  fill: #08111f;
+  stroke: rgba(125, 211, 252, 0.18);
+  stroke-width: 1;
+}
+
+.line-run-view__ticks line {
+  stroke: rgba(148, 163, 184, 0.14);
+  stroke-width: 1;
+}
+
+.line-run-view__ticks .line-run-view__tick-mark {
+  stroke: rgba(203, 213, 225, 0.54);
+}
+
+.line-run-view__ticks text {
+  fill: #94a3b8;
+  font-size: 12px;
+  text-anchor: middle;
+}
+
+.line-run-view__axis-shadow {
+  stroke: rgba(56, 189, 248, 0.14);
+  stroke-width: 22;
+  stroke-linecap: round;
+}
+
+.line-run-view__axis {
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+
+.line-run-view__axis--base {
+  stroke: url('#lineRunAxisGradient');
+}
+
+.line-run-view__axis--passed {
+  stroke: #64748b;
+  stroke-width: 10;
+}
+
+.line-run-view__axis--target-path {
+  stroke: #22c55e;
+  stroke-width: 7;
+  stroke-dasharray: 14 10;
+}
+
+.line-run-view__axis--current {
+  stroke: #38bdf8;
+  stroke-width: 14;
+  opacity: 0.94;
+}
+
+.line-run-view__station line {
+  stroke: rgba(226, 232, 240, 0.42);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.line-run-view__station circle {
+  fill: #0f172a;
+  stroke: #e0f2fe;
+  stroke-width: 3;
+}
+
+.line-run-view__station text {
+  fill: #cbd5e1;
+  font-size: 12px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.line-run-view__station.is-passed circle {
+  fill: #334155;
+  stroke: #94a3b8;
+}
+
+.line-run-view__station.is-passed text {
+  fill: #94a3b8;
+}
+
+.line-run-view__station.is-upcoming circle {
+  fill: #facc15;
+  stroke: #fef3c7;
+  stroke-width: 4;
+}
+
+.line-run-view__station.is-upcoming text {
+  fill: #fde68a;
+}
+
+.line-run-view__marker text {
+  font-size: 12px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+
+.line-run-view__marker--start path {
+  fill: #22c55e;
+}
+
+.line-run-view__marker--start text {
+  fill: #86efac;
+}
+
+.line-run-view__marker--target line {
+  stroke: #fb7185;
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+}
+
+.line-run-view__marker--target path {
+  fill: #ef4444;
+}
+
+.line-run-view__marker--target circle {
+  fill: #fff1f2;
+}
+
+.line-run-view__marker--target text {
+  fill: #fecdd3;
+}
+
+.line-run-view__stop-window rect {
+  fill: rgba(148, 163, 184, 0.18);
+  stroke-width: 2;
+}
+
+.line-run-view__stop-window line {
+  stroke-width: 2;
+}
+
+.line-run-view__stop-window text {
+  font-size: 12px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+
+.line-run-view__stop-window--in_window rect {
+  fill: rgba(34, 197, 94, 0.2);
+  stroke: #22c55e;
+}
+
+.line-run-view__stop-window--in_window line,
+.line-run-view__stop-window--in_window text {
+  stroke: #22c55e;
+  fill: #86efac;
+}
+
+.line-run-view__stop-window--overshoot rect {
+  fill: rgba(249, 115, 22, 0.18);
+  stroke: #f97316;
+}
+
+.line-run-view__stop-window--overshoot line,
+.line-run-view__stop-window--overshoot text {
+  stroke: #f97316;
+  fill: #fed7aa;
+}
+
+.line-run-view__stop-window--undershoot rect {
+  fill: rgba(59, 130, 246, 0.18);
+  stroke: #3b82f6;
+}
+
+.line-run-view__stop-window--undershoot line,
+.line-run-view__stop-window--undershoot text {
+  stroke: #3b82f6;
+  fill: #bfdbfe;
+}
+
+.line-run-view__stop-window--not_accurate rect {
+  fill: rgba(148, 163, 184, 0.16);
+  stroke: #94a3b8;
+}
+
+.line-run-view__stop-window--not_accurate line,
+.line-run-view__stop-window--not_accurate text {
+  stroke: #94a3b8;
+  fill: #cbd5e1;
+}
+
+.line-run-view__actual-stop-line {
+  stroke: #f8fafc;
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+}
+
+.line-run-view__actual-stop-text {
+  fill: #f8fafc;
+  stroke: none;
+  font-size: 12px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+
+.line-run-view__train-ring {
+  fill: rgba(56, 189, 248, 0.14);
+  stroke: rgba(125, 211, 252, 0.48);
+  stroke-width: 2;
+}
+
+.line-run-view__train-body {
+  fill: #38bdf8;
+  stroke: #e0f2fe;
+  stroke-width: 2;
+}
+
+.line-run-view__train-nose {
+  fill: #0f172a;
+  opacity: 0.82;
+}
+
+.line-run-view__train text {
+  fill: #f8fafc;
+  font-size: 12px;
+  font-weight: 800;
+  text-anchor: middle;
+}

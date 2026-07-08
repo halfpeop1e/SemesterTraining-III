@@ -1,3 +1,5 @@
+import Vehicle from './pages/Vehicle';
+
 function App() {
   return (
     <div className="app-container">
@@ -6,10 +8,7 @@ function App() {
         <p className="app-subtitle">Onboard System - Vehicle Simulation & Monitoring</p>
       </header>
       <main className="app-main">
-        <div className="page-placeholder">
-          <h2>车载系统与车辆运行仿真</h2>
-          <p>Vehicle Simulation - 车辆模型、运行仿真（待实现）</p>
-        </div>
+        <Vehicle />
       </main>
       <footer className="app-footer">
         <p>北京交通大学 &copy; 2026</p>

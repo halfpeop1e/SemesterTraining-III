@@ -25,9 +25,10 @@ Thumbs.db
 .env
 .env.local
 
-# data
+# Large binary / raw data (must not be committed)
 data/
 线路数据*.xls
+704系统协议汇总.docx
 
 # Agent scratch logs / temp artifacts (NOT to be committed)
 backend/backend-changelog-*.md
