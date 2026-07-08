@@ -1,0 +1,7 @@
+package com.bjtu.railtransit.signal.domain;
+
+public enum SignalEvent {
+    NONE, PRECEDING_OCCUPATION, SPEED_RESTRICTION, SWITCH_ABNORMAL,
+    MA_EXPIRED, DEGRADED, SIGNAL_BOUNDARY, ROUTE_BLOCKED,
+    AXLE_OCCUPIED, POSITION_LOSS
+}
