@@ -95,4 +95,60 @@ public class SimulationSummary {
     public void setDtPerFrame(double dtPerFrame) {
         this.dtPerFrame = dtPerFrame;
     }
+
+    // ---- 阶段4B 线路数据真实化新增字段 ----
+    // train_state.position 仍是本次区间内相对位置（0 → runDistanceM）。
+    // lineStartPosition / lineTargetPosition 是真实线路绝对里程（单位 m），
+    // 供前端把相对位置映射到全线地图：
+    //   absolutePosition = lineStartPosition + currentState.position
+
+    /**
+     * 本次仿真起始站的真实线路绝对里程，单位 m（= fromStation.km * 1000）。
+     * 来自 configs/line-profile.json，不伪造。
+     */
+    private double lineStartPosition;
+
+    /**
+     * 本次仿真终止站的真实线路绝对里程，单位 m（= toStation.km * 1000）。
+     * 来自 configs/line-profile.json，不伪造。
+     */
+    private double lineTargetPosition;
+
+    /** 起始站中文名（来自 configs/line-profile.json stations[].name）。 */
+    private String fromStationName;
+
+    /** 终止站中文名（来自 configs/line-profile.json stations[].name）。 */
+    private String toStationName;
+
+    public double getLineStartPosition() {
+        return lineStartPosition;
+    }
+
+    public void setLineStartPosition(double lineStartPosition) {
+        this.lineStartPosition = lineStartPosition;
+    }
+
+    public double getLineTargetPosition() {
+        return lineTargetPosition;
+    }
+
+    public void setLineTargetPosition(double lineTargetPosition) {
+        this.lineTargetPosition = lineTargetPosition;
+    }
+
+    public String getFromStationName() {
+        return fromStationName;
+    }
+
+    public void setFromStationName(String fromStationName) {
+        this.fromStationName = fromStationName;
+    }
+
+    public String getToStationName() {
+        return toStationName;
+    }
+
+    public void setToStationName(String toStationName) {
+        this.toStationName = toStationName;
+    }
 }

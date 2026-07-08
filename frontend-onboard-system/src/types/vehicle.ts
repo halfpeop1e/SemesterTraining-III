@@ -11,7 +11,7 @@
 export interface TrainState {
   /** 仿真时刻，单位 s。 */
   time: number;
-  /** 列车当前位置，单位 m。 */
+  /** 列车当前位置（本次区间内相对位置，0 → runDistanceM），单位 m。 */
   position: number;
   /** 当前速度，单位 m/s。 */
   velocity: number;
@@ -29,27 +29,40 @@ export interface SimulationSummary {
   maxVelocity: number;
   /** 全程总用时，单位 s。 */
   totalTime: number;
-  /** 终态位置，单位 m。 */
+  /** 终态位置（相对坐标），单位 m。 */
   finalPosition: number;
   /**
    * 线路限速，单位 m/s（阶段 1.6 704 语义对齐新增字段）。
-   * 对应后端 SimulationSummary.speedLimit，与 704 DMI「允许速度」语义对齐
-   * （704 侧单位 cm/s，本项目内部与后端一致统一使用 m/s）。
+   * 当前为假设值 20.0 m/s（JSON 无 speed_limit_mps 字段）。
    */
   speedLimit: number;
   /**
    * 后端仿真采样步长，单位 s（等于后端 ScenarioConfig.dt）。
-   * 前端播放 interval = dtPerFrame * 1000 / speedMultiplier，
-   * 改变倍速只改前端 interval，不改后端 dt。
+   * 前端播放 interval = dtPerFrame * 1000 / speedMultiplier。
    */
   dtPerFrame: number;
+  /**
+   * 阶段4B：起始站真实线路绝对里程，单位 m（= fromStation.km * 1000）。
+   * 来自 configs/line-profile.json，用于把相对 position 映射到全线地图：
+   *   absolutePosition = lineStartPosition + currentState.position
+   */
+  lineStartPosition: number;
+  /**
+   * 阶段4B：终止站真实线路绝对里程，单位 m（= toStation.km * 1000）。
+   * 来自 configs/line-profile.json。
+   */
+  lineTargetPosition: number;
+  /** 阶段4B：起始站中文名，来自 configs/line-profile.json stations[].name。 */
+  fromStationName: string;
+  /** 阶段4B：终止站中文名，来自 configs/line-profile.json stations[].name。 */
+  toStationName: string;
 }
 
 /** 自动停站结果。 */
 export interface StopResult {
-  /** 目标停车点位置，单位 m。 */
+  /** 目标停车点位置（相对坐标），单位 m。 */
   targetStopPosition: number;
-  /** 实际停车点位置，单位 m。 */
+  /** 实际停车点位置（相对坐标），单位 m。 */
   actualStopPosition: number;
   /** 停站误差，单位 m。 */
   stopError: number;
@@ -59,10 +72,7 @@ export interface StopResult {
   reason: string | null;
   /**
    * 停车窗到位状态（阶段 1.6 704 语义对齐新增字段）。
-   * 对应后端 StopWindowState 枚举的 @JsonValue 序列化结果，取值为小写码
-   * in_window/overshoot/undershoot/not_accurate，对应 704 表13「窗内/冲标/
-   * 欠标/未停准」。这里定义为 string，页面展示时按大小写不敏感方式映射为中文，
-   * 与 phase 字段的处理方式保持一致。
+   * 取值为小写码 in_window/overshoot/undershoot/not_accurate。
    */
   stopWindowState: string;
   /** 阶段3B新增：制动触发位置，单位 m */
@@ -98,4 +108,18 @@ export interface SimulationRunResponse {
   success: boolean;
   message: string;
   data: SimulationResult;
+}
+
+/** 阶段4B：站点类型（对应 configs/line-profile.json stations 条目）。 */
+export interface StationOption {
+  id: number;
+  name: string;
+  code: string;
+  km: number;
+}
+
+/** 阶段4B：POST /api/vehicle/simulation/run 可选请求体。 */
+export interface SimulationRunRequest {
+  fromStationId?: number;
+  toStationId?: number;
 }

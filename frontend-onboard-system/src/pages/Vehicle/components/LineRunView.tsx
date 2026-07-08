@@ -10,6 +10,13 @@ export interface LineRunViewProps {
   targetStopPosition: number;
   speedLimit: number;
   stopResult: StopResult | null;
+  /**
+   * 阶段4B：真实线路绝对起点里程偏移，单位 m（= lineStartPosition from summary）。
+   * 组件内部：absolutePosition = positionOffset + currentState.position
+   * 用于把相对仿真坐标映射回全线地图的绝对里程位置，不影响 DriverCabView 的相对显示。
+   * 默认为 0（兼容旧调用方）。
+   */
+  positionOffset?: number;
 }
 
 interface ViewWindow {
@@ -123,13 +130,23 @@ function LineRunView({
   targetStopPosition,
   speedLimit,
   stopResult,
+  positionOffset = 0,
 }: LineRunViewProps) {
+  // 阶段4B：把相对仿真坐标映射到全线地图绝对里程
+  // absolutePosition = positionOffset + currentState.position
+  const relativePosition = currentState?.position ?? startPosition;
+  const absolutePosition = positionOffset + relativePosition;
   const currentPosition = clamp(
-    currentState?.position ?? startPosition,
+    absolutePosition,
     LINE_MAP.lineStartM,
     LINE_MAP.lineEndM,
   );
+  // startPosition 和 targetStopPosition 也需要加上偏移量，用于在全线地图上定位
+  const absoluteStartPosition = positionOffset + startPosition;
+  const absoluteTargetStopPosition = positionOffset + targetStopPosition;
   const actualStopPosition = stopResult ? stopResult.actualStopPosition : null;
+  // 阶段4B：actualStopPosition 是相对坐标，加偏移得到全线绝对里程
+  const absoluteActualStopPosition = actualStopPosition === null ? null : positionOffset + actualStopPosition;
   const [viewWindow, setViewWindow] = useState<ViewWindow>(() => buildFollowWindow(currentPosition));
   const [isFollowing, setIsFollowing] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
@@ -141,12 +158,14 @@ function LineRunView({
     }
 
     if (status === 'finished') {
-      setViewWindow(buildFinishedWindow(targetStopPosition, actualStopPosition));
+      // 阶段4B：使用绝对坐标定位停车窗视图
+      setViewWindow(buildFinishedWindow(absoluteTargetStopPosition, absoluteActualStopPosition));
       return;
     }
 
     setViewWindow(buildFollowWindow(currentPosition));
-  }, [actualStopPosition, currentPosition, isFollowing, status, targetStopPosition]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [absoluteActualStopPosition, absoluteTargetStopPosition, currentPosition, isFollowing, status]);
 
   const xScale = (position: number) => {
     const ratio = (position - viewWindow.start) / (viewWindow.end - viewWindow.start);
@@ -237,21 +256,22 @@ function LineRunView({
   const returnToTrain = () => {
     setIsFollowing(true);
     if (status === 'finished') {
-      setViewWindow(buildFinishedWindow(targetStopPosition, actualStopPosition));
+      setViewWindow(buildFinishedWindow(absoluteTargetStopPosition, actualStopPosition));
       return;
     }
     setViewWindow(buildFollowWindow(currentPosition));
   };
 
-  const targetX = xScale(targetStopPosition);
-  const startX = xScale(startPosition);
+  // 阶段4B：所有坐标都用绝对里程，用于在全线地图上正确定位
+  const targetX = xScale(absoluteTargetStopPosition);
+  const startX = xScale(absoluteStartPosition);
   const trainX = xScale(currentPosition);
-  const stopWindowLeftX = xScale(targetStopPosition - STOP_WINDOW_TOLERANCE_M);
-  const stopWindowRightX = xScale(targetStopPosition + STOP_WINDOW_TOLERANCE_M);
-  const actualStopX = actualStopPosition === null ? null : xScale(actualStopPosition);
+  const stopWindowLeftX = xScale(absoluteTargetStopPosition - STOP_WINDOW_TOLERANCE_M);
+  const stopWindowRightX = xScale(absoluteTargetStopPosition + STOP_WINDOW_TOLERANCE_M);
+  const actualStopX = absoluteActualStopPosition === null ? null : xScale(absoluteActualStopPosition);
   const speedLimitKmh = speedLimit * 3.6;
-  const targetPathEnd = Math.max(currentPosition, targetStopPosition);
-  const targetPathStart = Math.min(currentPosition, targetStopPosition);
+  const targetPathEnd = Math.max(currentPosition, absoluteTargetStopPosition);
+  const targetPathStart = Math.min(currentPosition, absoluteTargetStopPosition);
   const stopState = normalizeStopWindowState(stopResult?.stopWindowState);
 
   return (
@@ -329,7 +349,7 @@ function LineRunView({
 
         <line className="line-run-view__axis-shadow" x1={MAP_LEFT} y1={AXIS_Y} x2={MAP_RIGHT} y2={AXIS_Y} />
         <line className="line-run-view__axis line-run-view__axis--base" x1={MAP_LEFT} y1={AXIS_Y} x2={MAP_RIGHT} y2={AXIS_Y} />
-        <line className="line-run-view__axis line-run-view__axis--passed" x1={xScale(startPosition)} y1={AXIS_Y} x2={trainX} y2={AXIS_Y} />
+        <line className="line-run-view__axis line-run-view__axis--passed" x1={xScale(absoluteStartPosition)} y1={AXIS_Y} x2={trainX} y2={AXIS_Y} />
         <line className="line-run-view__axis line-run-view__axis--target-path" x1={xScale(targetPathStart)} y1={AXIS_Y} x2={xScale(targetPathEnd)} y2={AXIS_Y} />
         {sectionStations.next && (
           <line
@@ -384,14 +404,14 @@ function LineRunView({
 
         <g className="line-run-view__marker line-run-view__marker--start" transform={`translate(${startX} ${AXIS_Y})`}>
           <path d="M0,-48 L10,-28 L3,-28 L3,-6 L-3,-6 L-3,-28 L-10,-28 Z" />
-          <text x="0" y="-58">起点 {formatMeters(startPosition)}</text>
+          <text x="0" y="-58">起点 {formatMeters(absoluteStartPosition)}</text>
         </g>
 
         <g className="line-run-view__marker line-run-view__marker--target" transform={`translate(${targetX} ${AXIS_Y})`}>
           <line x1="0" y1="-72" x2="0" y2="86" />
           <path d="M0,-72 C14,-72 22,-62 22,-50 C22,-33 0,-18 0,-18 C0,-18 -22,-33 -22,-50 C-22,-62 -14,-72 0,-72 Z" />
           <circle cx="0" cy="-52" r="7" />
-          <text x="0" y="-88">目标停车点 {formatMeters(targetStopPosition)}</text>
+          <text x="0" y="-88">目标停车点 {formatMeters(absoluteTargetStopPosition)}</text>
         </g>
 
         <g className="line-run-view__train" transform={`translate(${trainX} ${AXIS_Y})`} filter="url(#lineRunGlow)">
