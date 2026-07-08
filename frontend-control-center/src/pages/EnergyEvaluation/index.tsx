@@ -9,14 +9,16 @@ import {
   Table,
   Tag,
   Empty,
+  message,
 } from "antd";
 import {
   ThunderboltOutlined,
   CheckCircleOutlined,
   ExperimentOutlined,
 } from "@ant-design/icons";
-import type { EvaluationReport } from "../../types";
+import type { EvaluationReport, SimulationLog } from "../../types";
 import { generateReport } from "../../api/evaluation";
+import { getSimulationLogs } from "../../api/dispatch";
 
 /* ---- Helpers ---- */
 const riskLevelLabel: Record<string, string> = {
@@ -94,17 +96,28 @@ export default function EnergyEvaluation() {
     setLoading(true);
     setError(null);
     try {
+      // 从仿真服务获取真实日志
+      let simulationLogs: SimulationLog[] = [];
+      try {
+        simulationLogs = await getSimulationLogs();
+      } catch {
+        // 日志获取失败，使用空数组
+      }
+      if (simulationLogs.length === 0) {
+        message.warning("未获取到仿真日志，请先在调度页面启动仿真");
+      }
+
       const result = await generateReport(
         {
           scenarioName: "北京9号线仿真场景",
-          simulationLogs: [],
+          simulationLogs,
           tractionEfficiency: 0.85,
           regenEfficiency: 0.65,
           powerSupplyThreshold: 2000,
         },
         {
           scenarioName: "北京9号线仿真场景",
-          simulationLogs: [],
+          simulationLogs,
           stationPositions: {
             1: 313,
             2: 1660,

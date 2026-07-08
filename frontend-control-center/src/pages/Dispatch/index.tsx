@@ -1,73 +1,79 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-import ReactEChartsCore from "echarts-for-react/lib/core";
-import * as echarts from "echarts/core";
-import { LineChart } from "echarts/charts";
 import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-} from "echarts/components";
-import { CanvasRenderer } from "echarts/renderers";
-
-echarts.use([
-  LineChart,
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  CanvasRenderer,
-]);
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  lazy,
+  Suspense,
+} from "react";
+import { Map } from "react-map-gl/maplibre";
+import { DeckGL } from "@deck.gl/react";
+import { ScatterplotLayer, GeoJsonLayer } from "@deck.gl/layers";
+import type { MapViewState } from "@deck.gl/core";
+import uPlot from "uplot";
+import "maplibre-gl/dist/maplibre-gl.css";
+import "uplot/dist/uPlot.min.css";
 import {
   startSimulation,
   stepSimulation,
   getSnapshot,
   getLineMap,
+  getTrackGeometry,
+  getEnergy,
+  getSignals,
+  getSwitches,
+  getSpeedLimits,
+  getGradients,
+  getTunnels,
+  getAxleCounters,
+  getBumpers,
+  getCollisionZones,
+  getFloodGates,
 } from "../../api/dispatch";
 import type {
+  EnergySnapshot,
   SimulationSnapshot,
   StationGeo,
   TrainState,
-  TrainPositionPoint,
-  StationArrival,
-  HeadwayInfo,
-  TrainCommand,
+  TrackWaypoint,
+  Signal,
+  SwitchGeo,
+  SpeedLimitZone,
+  GradientInfo,
 } from "../../types/dispatch";
 
-/* ================================================================
-   Fix Leaflet icons
-   ================================================================ */
+const Visualization3D = lazy(() => import("../../components/Visualization3D"));
+const LineSchematic = lazy(() => import("../../components/LineSchematic"));
 
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-});
+/* ============================================================
+   Constants
+   ============================================================ */
 
-/* ================================================================
-   Tile layers & Speed options
-   ================================================================ */
-
-const TILE_LAYERS = {
-  dark: {
-    url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-    label: "Dark",
-    attribution: "&copy; CartoDB",
-  },
-  standard: {
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    label: "Standard",
-    attribution: "&copy; OSM",
-  },
-  satellite: {
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    label: "Satellite",
-    attribution: "&copy; Esri",
-  },
-} as const;
-type TileMode = keyof typeof TILE_LAYERS;
+const TRAIN_COLORS = [
+  "#38bdf8",
+  "#22c55e",
+  "#f59e0b",
+  "#ef4444",
+  "#a78bfa",
+  "#fb923c",
+  "#f472b6",
+  "#2dd4bf",
+];
+const STATUS_COLOR: Record<string, string> = {
+  STOPPED: "#64748b",
+  RUNNING: "#22c55e",
+  ARRIVING: "#f59e0b",
+  DEPARTING: "#38bdf8",
+  FINISHED: "#ef4444",
+};
+const STATUS_LABEL: Record<string, string> = {
+  STOPPED: "待发",
+  RUNNING: "运行",
+  ARRIVING: "进站",
+  DEPARTING: "发车",
+  FINISHED: "终到",
+};
 
 const SPEED_OPTIONS = [
   { label: "1x", steps: 1 },
@@ -76,34 +82,8 @@ const SPEED_OPTIONS = [
   { label: "10x", steps: 10 },
 ];
 
-/* ================================================================
-   Data Helpers
-   ================================================================ */
-
-const STATUS_LABEL: Record<TrainState["status"], string> = {
-  STOPPED: "待发",
-  RUNNING: "运行",
-  ARRIVING: "进站",
-  DEPARTING: "发车",
-  FINISHED: "终到",
-};
-const STATUS_COLOR: Record<TrainState["status"], string> = {
-  STOPPED: "#617088",
-  RUNNING: "#06d6a0",
-  ARRIVING: "#f7b731",
-  DEPARTING: "#45aaf2",
-  FINISHED: "#fc5c65",
-};
-const TRAIN_COLORS = [
-  "#00a8e8",
-  "#06d6a0",
-  "#f7b731",
-  "#fc5c65",
-  "#9b59b6",
-  "#45aaf2",
-  "#f368e0",
-  "#ff9f43",
-];
+const MAP_STYLE =
+  "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
 const fmtTime = (s: number) =>
   [Math.floor(s / 3600), Math.floor((s % 3600) / 60), Math.floor(s % 60)]
@@ -111,15 +91,29 @@ const fmtTime = (s: number) =>
     .join(":");
 const fmtNum = (n: number) => Math.round(n).toLocaleString();
 
-function interpolatePos(posMeters: number, sorted: StationGeo[]) {
+interface PositionResult {
+  lng: number;
+  lat: number;
+  bearing: number;
+}
+
+function interpolatePos(
+  posMeters: number,
+  sorted: StationGeo[],
+): PositionResult {
   const km = posMeters / 1000;
-  if (km <= sorted[0].km)
-    return { lat: sorted[0].latitude, lng: sorted[0].longitude };
-  if (km >= sorted[sorted.length - 1].km)
+  if (km <= sorted[0].km) {
+    const b = bearing(sorted[0], sorted[1]);
+    return { lat: sorted[0].latitude, lng: sorted[0].longitude, bearing: b };
+  }
+  if (km >= sorted[sorted.length - 1].km) {
+    const b = bearing(sorted[sorted.length - 2], sorted[sorted.length - 1]);
     return {
       lat: sorted[sorted.length - 1].latitude,
       lng: sorted[sorted.length - 1].longitude,
+      bearing: b,
     };
+  }
   let ni = 1;
   while (ni < sorted.length && sorted[ni].km < km) ni++;
   const p = sorted[ni - 1],
@@ -128,345 +122,603 @@ function interpolatePos(posMeters: number, sorted: StationGeo[]) {
   return {
     lat: p.latitude + (n.latitude - p.latitude) * r,
     lng: p.longitude + (n.longitude - p.longitude) * r,
+    bearing: bearing(p, n),
   };
 }
 
-/* ================================================================
-   Train Diagram (运行图) — ECharts
-   ================================================================ */
+function interpolatePosWP(
+  posMeters: number,
+  wps: TrackWaypoint[],
+): PositionResult {
+  const km = posMeters / 1000;
+  if (wps.length === 0) return { lat: 39.88, lng: 116.31, bearing: 0 };
+  if (km <= wps[0].km) {
+    const b = wps.length > 1 ? bearingWP(wps[0], wps[1]) : 0;
+    return { lat: wps[0].lat, lng: wps[0].lng, bearing: b };
+  }
+  if (km >= wps[wps.length - 1].km) {
+    const b =
+      wps.length > 1 ? bearingWP(wps[wps.length - 2], wps[wps.length - 1]) : 0;
+    return {
+      lat: wps[wps.length - 1].lat,
+      lng: wps[wps.length - 1].lng,
+      bearing: b,
+    };
+  }
+  let ni = 1;
+  while (ni < wps.length && wps[ni].km < km) ni++;
+  const p = wps[ni - 1],
+    n = wps[ni];
+  const r = (km - p.km) / (n.km - p.km);
+  return {
+    lat: p.lat + (n.lat - p.lat) * r,
+    lng: p.lng + (n.lng - p.lng) * r,
+    bearing: bearingWP(p, n),
+  };
+}
+
+function bearing(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+): number {
+  const dLng = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const lat1 = (a.latitude * Math.PI) / 180;
+  const lat2 = (b.latitude * Math.PI) / 180;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function bearingWP(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+/* ============================================================
+   Train Diagram (uPlot)
+   ============================================================ */
 
 function TrainDiagram({
   history,
   stations,
   simTime,
 }: {
-  history: TrainPositionPoint[];
+  history: any[];
   stations: StationGeo[];
   simTime: number;
 }) {
-  const sortedStations = useMemo(
+  const containerRef = useRef<HTMLDivElement>(null);
+  const plotRef = useRef<uPlot | null>(null);
+
+  const sorted = useMemo(
     () => [...stations].sort((a, b) => a.id - b.id),
     [stations],
   );
 
-  const option = useMemo(() => {
-    if (sortedStations.length < 2) return {};
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || sorted.length < 2) return;
+    const maxKm = sorted[sorted.length - 1].km;
 
-    const maxKm = sortedStations[sortedStations.length - 1].km;
-    const maxTime = Math.max(simTime, 120);
+    const allTrains = [
+      ...new Set(history.map((p: any) => p.trainId)),
+    ] as string[];
+    if (allTrains.length === 0) return;
 
-    // Group by trainId
-    const byTrain: Record<string, TrainPositionPoint[]> = {};
-    history.forEach((p) => {
-      if (!byTrain[p.trainId]) byTrain[p.trainId] = [];
-      byTrain[p.trainId].push(p);
+    const series: uPlot.Series[] = [{} as any];
+
+    allTrains.forEach((tid, idx) => {
+      series.push({
+        stroke: TRAIN_COLORS[idx % TRAIN_COLORS.length],
+        width: 1.5,
+        label: tid,
+        points: { show: false },
+      });
     });
 
-    const series: any[] = Object.entries(byTrain).map(([tid, pts], idx) => {
-      pts.sort((a, b) => a.timeSeconds - b.timeSeconds);
-      const data = pts.map((p) => [p.timeSeconds, p.positionKm]);
-      const color = TRAIN_COLORS[idx % TRAIN_COLORS.length];
-      const last = pts[pts.length - 1];
-
-      return {
-        type: "line",
-        name: tid,
-        data,
-        symbol: "none",
-        lineStyle: { color, width: 2 },
-        emphasis: { lineStyle: { width: 3 }, focus: "series" },
-        markPoint:
-          pts.length > 0
-            ? {
-                silent: true,
-                symbol: "none",
-                data: [
-                  {
-                    name: tid,
-                    coord: [last.timeSeconds, last.positionKm],
-                    value: tid,
-                    symbolOffset: [5, 0],
-                    label: {
-                      show: true,
-                      color,
-                      fontSize: 10,
-                      fontWeight: "bold",
-                      fontFamily: "JetBrains Mono,monospace",
-                      position: "right",
-                      distance: 2,
-                    },
-                  },
-                ],
-              }
-            : undefined,
-      };
-    });
-
-    // Current-time dashed vertical line
     series.push({
-      type: "line",
-      name: "NOW",
-      data: [
-        [simTime, 0],
-        [simTime, maxKm],
-      ],
-      lineStyle: { color: "rgba(252,92,101,0.45)", type: "dashed", width: 1 },
-      symbol: "none",
-      silent: true,
+      stroke: "rgba(239,68,68,0.3)",
+      width: 1,
+      dash: [8, 4],
+      label: "",
+      points: { show: false },
     });
 
-    return {
-      backgroundColor: "transparent",
-      grid: { left: 52, right: 24, top: 12, bottom: 28 },
-      xAxis: {
-        type: "value",
-        min: 0,
-        max: maxTime,
-        axisLine: { show: true, lineStyle: { color: "#1c2a3e" } },
-        axisTick: { show: false },
-        axisLabel: {
-          color: "#617088",
-          fontSize: 9,
-          fontFamily: "-apple-system,sans-serif",
-          formatter: (v: number) => fmtTime(v),
-        },
-        splitLine: { show: false },
-      },
-      yAxis: {
-        type: "value",
-        min: 0,
-        max: maxKm,
-        inverse: true,
-        axisLine: { show: true, lineStyle: { color: "#1c2a3e" } },
-        axisTick: { show: false },
-        axisLabel: {
-          color: "#617088",
-          fontSize: 9,
-          fontFamily: "-apple-system,sans-serif",
-          formatter: (v: number) => {
-            const s = sortedStations.find((st) => Math.abs(st.km - v) < 0.01);
-            return s ? s.name : "";
+    if (plotRef.current) plotRef.current.destroy();
+
+    const data: (number | null)[][] = [[] as (number | null)[]];
+    allTrains.forEach((tid) => {
+      data.push(
+        history
+          .filter((p: any) => p.trainId === tid)
+          .sort((a: any, b: any) => a.timeSeconds - b.timeSeconds)
+          .map((p: any) => p.positionKm as number),
+      );
+    });
+    data.push([maxKm as unknown as number]);
+
+    const xData = history
+      .filter((p: any) => p.trainId === allTrains[0])
+      .sort((a: any, b: any) => a.timeSeconds - b.timeSeconds)
+      .map((p: any) => p.timeSeconds as number);
+    data[0] = xData;
+
+    plotRef.current = new uPlot(
+      {
+        width: el.clientWidth,
+        height: el.clientHeight,
+        cursor: { show: true, drag: { x: true, y: false } },
+        axes: [
+          {
+            stroke: "#334155",
+            grid: { stroke: "rgba(148,163,184,0.06)", width: 0.5 },
+            values: (_u: any, vals: number[]) =>
+              vals.map((v: number) => fmtTime(v)),
           },
-        },
-        splitLine: {
-          show: true,
-          lineStyle: { color: "#152433", type: "solid", width: 0.5 },
-        },
+          {
+            stroke: "#334155",
+            grid: { stroke: "rgba(148,163,184,0.06)", width: 0.5 },
+            values: (_u: any, vals: number[]) =>
+              vals.map((v: number) => {
+                const s = sorted.find((st) => Math.abs(st.km - v) < 0.01);
+                return s ? s.name : "";
+              }),
+          },
+        ],
+        series,
+        legend: { show: false },
       },
-      tooltip: {
-        trigger: "item",
-        backgroundColor: "rgba(13,21,32,0.95)",
-        borderColor: "#1c2a3e",
-        padding: [8, 12],
-        textStyle: { color: "#e2e8f0", fontSize: 11 },
-        formatter: (params: any) => {
-          if (params.seriesName === "NOW")
-            return `<b>当前时刻</b><br/>${fmtTime(simTime)}`;
-          if (params.seriesName && params.value) {
-            return `<b style="color:${params.color}">${params.seriesName}</b><br/>模拟时间: ${fmtTime(params.value[0])}<br/>里程位置: ${Number(params.value[1]).toFixed(2)} km`;
-          }
-          return "";
-        },
-      },
-      series,
-      animationDuration: 600,
-      animationEasing: "cubicInOut" as const,
+      data as uPlot.AlignedData,
+      el,
+    );
+
+    return () => {
+      plotRef.current?.destroy();
     };
-  }, [history, sortedStations, simTime]);
+  }, [history, sorted, simTime]);
+
+  useEffect(() => {
+    const onResize = () => {
+      const el = containerRef.current;
+      if (el && plotRef.current)
+        plotRef.current.setSize({
+          width: el.clientWidth,
+          height: el.clientHeight,
+        });
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   if (history.length === 0) {
-    return <div className="d-empty-panel">启动仿真后显示运行图</div>;
+    return (
+      <div className="flex-1 flex items-center justify-center text-slate-600 text-xs">
+        启动仿真后显示运行图
+      </div>
+    );
   }
 
-  return (
-    <div className="d-diagram">
-      <ReactEChartsCore
-        echarts={echarts}
-        option={option}
-        style={{ width: "100%", height: "100%" }}
-        notMerge={false}
-        lazyUpdate={true}
-        opts={{ renderer: "canvas" }}
-      />
-    </div>
-  );
+  return <div ref={containerRef} className="flex-1 w-full" />;
 }
 
-/* ================================================================
-   MapView
-   ================================================================ */
+/* ============================================================
+   Map View (MapLibre + DeckGL)
+   ============================================================ */
 
 function MapView({
   stations,
   trains,
-  tileMode,
+  waypoints,
 }: {
   stations: StationGeo[];
   trains: TrainState[];
-  tileMode: TileMode;
+  waypoints: TrackWaypoint[];
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const tileLayerRef = useRef<L.TileLayer | null>(null);
-  const stationMrkRef = useRef<L.CircleMarker[]>([]);
-  const trainMrkRef = useRef<L.CircleMarker[]>([]);
-  const carMrkRef = useRef<L.CircleMarker[]>([]);
-  const lineRef = useRef<L.Polyline | null>(null);
-  const glowRef = useRef<L.Polyline | null>(null);
+  const sorted = useMemo(
+    () => [...stations].sort((a, b) => a.id - b.id),
+    [stations],
+  );
+  const [viewState, setViewState] = useState<MapViewState>({
+    longitude: 116.31,
+    latitude: 39.88,
+    zoom: 12,
+    pitch: 0,
+    bearing: 0,
+  });
 
-  useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, {
-      center: [39.88, 116.31],
-      zoom: 12,
-      zoomControl: true,
-      attributionControl: true,
-    });
-    map.attributionControl.setPrefix("");
-    const tile = TILE_LAYERS[tileMode];
-    tileLayerRef.current = L.tileLayer(tile.url, {
-      maxZoom: 19,
-      attribution: tile.attribution,
-    }).addTo(map);
-    mapRef.current = map;
-    const fix = () => map.invalidateSize();
-    setTimeout(fix, 100);
-    setTimeout(fix, 400);
-    window.addEventListener("resize", fix);
-    return () => {
-      window.removeEventListener("resize", fix);
-      tileLayerRef.current?.remove();
-      map.remove();
-      mapRef.current = null;
+  const routeGeoJson = useMemo(() => {
+    const pts =
+      waypoints.length >= 2
+        ? waypoints
+        : sorted.map((s) => ({ lng: s.longitude, lat: s.latitude }));
+    if (pts.length < 2) return null;
+    return {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          geometry: {
+            type: "LineString" as const,
+            coordinates: pts.map((p: any) => [p.lng, p.lat]),
+          },
+          properties: {},
+        },
+      ],
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [waypoints, sorted]);
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (tileLayerRef.current) map.removeLayer(tileLayerRef.current);
-    const t = TILE_LAYERS[tileMode];
-    tileLayerRef.current = L.tileLayer(t.url, {
-      maxZoom: 19,
-      attribution: t.attribution,
-    }).addTo(map);
-  }, [tileMode]);
+  const stationPoints = useMemo(
+    () =>
+      sorted.map((s) => ({
+        position: [s.longitude, s.latitude],
+        name: s.name,
+        km: s.km,
+        isTerminal: s.id === 1 || s.id === sorted.length,
+      })),
+    [sorted],
+  );
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || stations.length === 0) return;
-    stationMrkRef.current.forEach((m) => m.remove());
-    stationMrkRef.current = [];
-    lineRef.current?.remove();
-    glowRef.current?.remove();
-    const sorted = [...stations].sort((a, b) => a.id - b.id);
-    const coords: [number, number][] = sorted.map((s) => [
-      s.latitude,
-      s.longitude,
-    ]);
-    glowRef.current = L.polyline(coords, {
-      color: "#00a8e8",
-      weight: 8,
-      opacity: 0.15,
-      lineCap: "round",
-      lineJoin: "round",
-    }).addTo(map);
-    lineRef.current = L.polyline(coords, {
-      color: "#00a8e8",
-      weight: 3,
-      opacity: 0.9,
-      lineCap: "round",
-      lineJoin: "round",
-    }).addTo(map);
-    sorted.forEach((s) => {
-      const m = L.circleMarker([s.latitude, s.longitude], {
-        radius: s.id === 1 || s.id === sorted.length ? 9 : 7,
-        fillColor: "#060b11",
-        fillOpacity: 1,
-        color: "#00a8e8",
-        weight: 2.5,
-      }).addTo(map);
-      m.bindTooltip(
-        `<div style="text-align:center;font-weight:700;font-size:12px;color:#e2e8f0;">${s.name}</div><div style="font-size:10px;color:#617088;margin-top:2px;">${s.km.toFixed(1)} km</div>`,
-        { direction: "top", offset: [0, -10], className: "d-tooltip" },
-      );
-      m.on("mouseover", () => m.setStyle({ fillColor: "#00a8e8" }));
-      m.on("mouseout", () => m.setStyle({ fillColor: "#060b11" }));
-      stationMrkRef.current.push(m);
-    });
-  }, [stations]);
+  const trainHeadPoints = useMemo(
+    () =>
+      trains
+        .filter((t) => t.status !== "FINISHED")
+        .map((t) => {
+          const useWP = waypoints.length >= 2;
+          const hp = useWP
+            ? interpolatePosWP(t.positionMeters, waypoints)
+            : interpolatePos(t.positionMeters, sorted);
+          const color = STATUS_COLOR[t.status] || "#64748b";
+          const colorRGB = hexToRGB(color);
+          return {
+            position: [hp.lng, hp.lat] as [number, number],
+            name: t.trainName,
+            speed: t.speed,
+            status: t.status,
+            color: colorRGB,
+            bearing: hp.bearing,
+            carCount: t.carCount ?? 6,
+            carLength: t.carLength ?? 19,
+            positionMeters: t.positionMeters,
+            cars: t.cars,
+          };
+        }),
+    [trains, sorted, waypoints],
+  );
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || stations.length === 0) return;
-    trainMrkRef.current.forEach((m) => m.remove());
-    trainMrkRef.current = [];
-    carMrkRef.current.forEach((m) => m.remove());
-    carMrkRef.current = [];
-    const sorted = [...stations].sort((a, b) => a.id - b.id);
+  const trainBodyLines = useMemo((): GeoJSON.FeatureCollection | null => {
+    const useWP = waypoints.length >= 2;
+    const features: GeoJSON.Feature[] = [];
     trains
       .filter((t) => t.status !== "FINISHED")
       .forEach((t) => {
-        const hp = interpolatePos(t.positionMeters, sorted);
-        if (!hp) return;
-        const bg = STATUS_COLOR[t.status];
-        const isMoving = t.speed > 0;
-
-        // Head car: large circleMarker with tooltip
-        const hm = L.circleMarker([hp.lat, hp.lng], {
-          radius: 9,
-          fillColor: bg,
-          fillOpacity: 0.9,
-          color: "#fff",
-          weight: 2,
-        }).addTo(map);
-        hm.bindTooltip(
-          `<div style="font-weight:700;font-size:12px;color:#e2e8f0;">${t.trainName} 头车</div>
-         <div style="font-size:10px;color:#94a3b8;">${isMoving ? Math.round(t.speed) + " km/h" : STATUS_LABEL[t.status]}</div>
-         <div style="font-size:9px;color:#617088;">${fmtNum(t.positionMeters)} m · ${t.carCount ?? 6}节</div>`,
-          { direction: "top", offset: [0, -12], className: "d-tooltip" },
-        );
-        trainMrkRef.current.push(hm);
-
-        // All cars (including head car's position for all 6 cars)
-        if (t.cars && t.cars.length > 1) {
-          t.cars.slice(1).forEach((car: any) => {
-            const cp = interpolatePos(car.positionMeters, sorted);
-            if (!cp) return;
-            carMrkRef.current.push(
-              L.circleMarker([cp.lat, cp.lng], {
-                radius: 5.5,
-                fillColor: bg,
-                fillOpacity: 0.65,
-                color: "rgba(255,255,255,0.4)",
-                weight: 1,
-              }).addTo(map),
-            );
-          });
-        }
+        const hp = useWP
+          ? interpolatePosWP(t.positionMeters, waypoints)
+          : interpolatePos(t.positionMeters, sorted);
+        const trainLenMeters = (t.carCount ?? 6) * (t.carLength ?? 19);
+        const tailMeters = t.positionMeters - trainLenMeters;
+        const tp = useWP
+          ? interpolatePosWP(Math.max(0, tailMeters), waypoints)
+          : interpolatePos(Math.max(0, tailMeters), sorted);
+        const colorRGB = hexToRGB(STATUS_COLOR[t.status] || "#64748b");
+        features.push({
+          type: "Feature",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [tp.lng, tp.lat],
+              [hp.lng, hp.lat],
+            ],
+          },
+          properties: { color: colorRGB, trainName: t.trainName },
+        });
       });
-  }, [trains, stations]);
+    if (features.length === 0) return null;
+    return { type: "FeatureCollection", features };
+  }, [trains, sorted, waypoints]);
 
-  return <div ref={containerRef} className="d-map-inner" />;
+  const carPoints = useMemo(() => {
+    const useWP = waypoints.length >= 2;
+    const pts: any[] = [];
+    trains
+      .filter((t) => t.status !== "FINISHED" && t.cars && t.cars.length > 1)
+      .forEach((t) => {
+        const colorRGB = hexToRGB(STATUS_COLOR[t.status] || "#64748b");
+        (t.cars || []).slice(1).forEach((c: any) => {
+          const cp = useWP
+            ? interpolatePosWP(c.positionMeters, waypoints)
+            : interpolatePos(c.positionMeters, sorted);
+          pts.push({
+            position: [cp.lng, cp.lat] as [number, number],
+            color: colorRGB,
+          });
+        });
+      });
+    return pts;
+  }, [trains, sorted, waypoints]);
+
+  const layers = [
+    routeGeoJson &&
+      new GeoJsonLayer({
+        id: "route-glow",
+        data: routeGeoJson,
+        lineWidthMinPixels: 6,
+        getLineColor: [56, 189, 248, 30],
+        lineCapRounded: true,
+        lineJointRounded: true,
+      }),
+    routeGeoJson &&
+      new GeoJsonLayer({
+        id: "route-line",
+        data: routeGeoJson,
+        lineWidthMinPixels: 2,
+        getLineColor: [56, 189, 248, 200],
+        lineCapRounded: true,
+        lineJointRounded: true,
+      }),
+    new ScatterplotLayer({
+      id: "stations",
+      data: stationPoints,
+      pickable: true,
+      stroked: true,
+      filled: true,
+      getPosition: (d: any) => d.position,
+      getRadius: (d: any) => (d.isTerminal ? 9 : 6),
+      getFillColor: [2, 6, 23, 240],
+      getLineColor: [56, 189, 248, 240],
+      getLineWidth: 2,
+      radiusMinPixels: 6,
+    }),
+    trainBodyLines &&
+      trainBodyLines.features.length > 0 &&
+      new GeoJsonLayer({
+        id: "train-bodies",
+        data: trainBodyLines,
+        pickable: true,
+        lineWidthMinPixels: 4,
+        getLineColor: (d: any) => d.properties.color.concat(180) as any,
+        lineCapRounded: true,
+      }),
+    carPoints.length > 0 &&
+      new ScatterplotLayer({
+        id: "cars",
+        data: carPoints,
+        pickable: false,
+        getPosition: (d: any) => d.position,
+        getRadius: 4,
+        getFillColor: (d: any) => d.color.concat(150),
+        radiusMinPixels: 3.5,
+      }),
+    trainHeadPoints.length > 0 &&
+      new ScatterplotLayer({
+        id: "train-heads",
+        data: trainHeadPoints,
+        pickable: true,
+        stroked: true,
+        getPosition: (d: any) => d.position,
+        getRadius: 10,
+        getFillColor: (d: any) => d.color.concat(230),
+        getLineColor: [255, 255, 255, 220],
+        getLineWidth: 2,
+        radiusMinPixels: 8,
+        autoHighlight: true,
+      }),
+  ].filter(Boolean) as any;
+
+  return (
+    <DeckGL
+      viewState={viewState}
+      onViewStateChange={(e: any) => setViewState(e.viewState)}
+      controller={{ dragRotate: false, touchRotate: false }}
+      layers={layers}
+      getTooltip={({ object }: any) => {
+        if (!object) return null;
+        if (object.properties?.trainName) {
+          return {
+            html: `<div class="font-semibold text-xs text-[#e2e8f0]">${object.properties.trainName} 车体</div>`,
+            style: {
+              background: "rgba(15,23,42,0.95)",
+              border: "1px solid rgba(148,163,184,0.15)",
+              borderRadius: "6px",
+              padding: "6px 10px",
+              color: "#e2e8f0",
+              fontSize: "11px",
+            },
+          };
+        }
+        if (object.name !== undefined) {
+          const parts = [];
+          if (object.name)
+            parts.push(
+              `<div class="font-semibold text-xs text-[#e2e8f0]">${object.name}</div>`,
+            );
+          if (object.speed !== undefined)
+            parts.push(
+              `<div class="text-[10px] text-[#94a3b8]">${Math.round(object.speed)} km/h · ${STATUS_LABEL[object.status] || object.status}</div>`,
+            );
+          if (object.km !== undefined)
+            parts.push(
+              `<div class="text-[10px] text-[#64748b]">${object.km.toFixed(1)} km</div>`,
+            );
+          if (object.carCount !== undefined)
+            parts.push(
+              `<div class="text-[9px] text-[#617088]">${object.carCount}节编组 · ${object.carLength ?? 19}m/节</div>`,
+            );
+          if (parts.length === 0) return null;
+          return {
+            html: parts.join(""),
+            style: {
+              background: "rgba(15,23,42,0.95)",
+              border: "1px solid rgba(148,163,184,0.15)",
+              borderRadius: "6px",
+              padding: "6px 10px",
+              color: "#e2e8f0",
+              fontSize: "11px",
+            },
+          };
+        }
+        return null;
+      }}
+    >
+      <Map
+        reuseMaps
+        mapLib={import("maplibre-gl")}
+        mapStyle={MAP_STYLE}
+        style={{ width: "100%", height: "100%" }}
+      />
+    </DeckGL>
+  );
 }
 
-/* ================================================================
-   Main Dispatch
-   ================================================================ */
+function hexToRGB(hex: string): number[] {
+  const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!m) return [100, 100, 100];
+  return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+}
+
+/* ============================================================
+   WebSocket Hook
+   ============================================================ */
+
+function useWebSocket(
+  enabled: boolean,
+  onMessage: (data: SimulationSnapshot) => void,
+) {
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (!enabled) {
+      wsRef.current?.close();
+      wsRef.current = null;
+      return;
+    }
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(
+      `${protocol}//${window.location.hostname}:8080/ws/simulation`,
+    );
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        onMessage(data);
+      } catch {}
+    };
+    ws.onerror = () => {};
+    ws.onclose = () => {
+      wsRef.current = null;
+    };
+    wsRef.current = ws;
+    return () => {
+      ws.close();
+    };
+  }, [enabled, onMessage]);
+}
+
+/* ============================================================
+   Tiny reusable sub-components (Tailwind-based)
+   ============================================================ */
+
+function Dot({ color }: { color: string }) {
+  return (
+    <span
+      className="inline-block w-[5px] h-[5px] rounded-full"
+      style={{ backgroundColor: color }}
+    />
+  );
+}
+
+function MonoCell({ children }: { children: React.ReactNode }) {
+  return (
+    <td className="px-2 py-1.5 text-[#cbd5e1] font-mono text-[10px]">
+      {children}
+    </td>
+  );
+}
+
+function ThCell({ children }: { children: React.ReactNode }) {
+  return (
+    <th className="bg-[#0f172a]/80 text-[#64748b] font-semibold px-2 py-1.5 text-left border-b border-slate-400/[0.06] text-[9px] uppercase">
+      {children}
+    </th>
+  );
+}
+
+function TdCentered({
+  colSpan,
+  children,
+}: {
+  colSpan: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <td
+      colSpan={colSpan}
+      className="text-center text-[#374151] py-6 px-2 text-[11px]"
+    >
+      {children}
+    </td>
+  );
+}
+
+function TdName({ children }: { children: React.ReactNode }) {
+  return (
+    <td className="px-2 py-1.5 text-[#f1f5f9] font-bold font-mono">
+      {children}
+    </td>
+  );
+}
+
+/* ============================================================
+   Main Dispatch Page
+   ============================================================ */
 
 export default function Dispatch() {
   const [snapshot, setSnapshot] = useState<SimulationSnapshot | null>(null);
   const [stations, setStations] = useState<StationGeo[]>([]);
+  const [waypoints, setWaypoints] = useState<TrackWaypoint[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [tileMode, setTileMode] = useState<TileMode>("dark");
   const [speedIndex, setSpeedIndex] = useState(0);
-  const [rightTab, setRightTab] = useState<"trains" | "arrivals" | "commands">(
-    "trains",
-  );
+  const [viewMode, setViewMode] = useState<"2d" | "3d" | "schematic">("2d");
+  const [rightTab, setRightTab] = useState<
+    "trains" | "arrivals" | "commands" | "energy"
+  >("trains");
   const autoRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const energyRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [energySnapshot, setEnergySnapshot] = useState<EnergySnapshot | null>(
+    null,
+  );
+
+  // Schematic data
+  const [sigData, setSigData] = useState<Signal[]>([]);
+  const [swData, setSwData] = useState<SwitchGeo[]>([]);
+  const [spLimitData, setSpLimitData] = useState<SpeedLimitZone[]>([]);
+  const [gradData, setGradData] = useState<GradientInfo[]>([]);
+  const [segmentsData, setSegmentsData] = useState<
+    import("../../types/dispatch").TrackSegment[]
+  >([]);
+  const [tunnelData, setTunnelData] = useState<any[]>([]);
+  const [axleCtrData, setAxleCtrData] = useState<any[]>([]);
+  const [bumperData, setBumperData] = useState<any[]>([]);
+  const [colZoneData, setColZoneData] = useState<any[]>([]);
+  const [fgData, setFgData] = useState<any[]>([]);
+
+  useWebSocket(
+    isRunning,
+    useCallback((data) => {
+      setSnapshot(data);
+    }, []),
+  );
 
   useEffect(() => {
     getLineMap()
@@ -475,6 +727,40 @@ export default function Dispatch() {
         else setError("failed load line");
       })
       .catch((e) => setError("Line load: " + (e?.message || "network")));
+    getTrackGeometry()
+      .then((d) => {
+        if (d?.trackWaypoints?.length > 0) setWaypoints(d.trackWaypoints);
+        if (d?.segments?.length > 0) setSegmentsData(d.segments);
+      })
+      .catch(() => {});
+    // Load schematic data (silent fail)
+    getSignals()
+      .then(setSigData)
+      .catch(() => {});
+    getSwitches()
+      .then(setSwData)
+      .catch(() => {});
+    getSpeedLimits()
+      .then(setSpLimitData)
+      .catch(() => {});
+    getGradients()
+      .then(setGradData)
+      .catch(() => {});
+    getTunnels()
+      .then(setTunnelData)
+      .catch(() => {});
+    getAxleCounters()
+      .then(setAxleCtrData)
+      .catch(() => {});
+    getBumpers()
+      .then(setBumperData)
+      .catch(() => {});
+    getCollisionZones()
+      .then(setColZoneData)
+      .catch(() => {});
+    getFloodGates()
+      .then(setFgData)
+      .catch(() => {});
   }, []);
 
   useEffect(
@@ -513,7 +799,6 @@ export default function Dispatch() {
     autoRef.current = setInterval(async () => {
       try {
         await stepSimulation(SPEED_OPTIONS[speedIndex].steps);
-        setSnapshot(await getSnapshot());
       } catch {}
     }, 500);
     return () => {
@@ -521,10 +806,39 @@ export default function Dispatch() {
     };
   }, [isRunning, speedIndex]);
 
+  // 能耗数据轮询（每3秒更新一次）
+  useEffect(() => {
+    if (!isRunning) {
+      if (energyRef.current) {
+        clearInterval(energyRef.current);
+        energyRef.current = null;
+      }
+      return;
+    }
+    const fetchEnergy = async () => {
+      try {
+        const data = await getEnergy();
+        setEnergySnapshot(data);
+      } catch {}
+    };
+    fetchEnergy();
+    energyRef.current = setInterval(fetchEnergy, 3000);
+    return () => {
+      if (energyRef.current) {
+        clearInterval(energyRef.current);
+        energyRef.current = null;
+      }
+    };
+  }, [isRunning]);
+
   const stop = useCallback(() => {
     if (autoRef.current) {
       clearInterval(autoRef.current);
       autoRef.current = null;
+    }
+    if (energyRef.current) {
+      clearInterval(energyRef.current);
+      energyRef.current = null;
     }
     setIsRunning(false);
   }, []);
@@ -542,90 +856,139 @@ export default function Dispatch() {
   }, [refresh]);
 
   const trains = snapshot?.trains ?? [];
-  const headways = snapshot?.headways ?? [];
-  const commands = snapshot?.commands ?? [];
   const arrivals = snapshot?.stationArrivals ?? [];
+  const commands = snapshot?.commands ?? [];
   const history = snapshot?.positionHistory ?? [];
+  const headways = snapshot?.headways ?? [];
   const energy = snapshot?.totalEnergyKwh ?? 0;
+  const tractionKwh = snapshot?.totalTractionKwh ?? 0;
+  const regenKwh = snapshot?.totalRegenKwh ?? 0;
+  const peakKw = snapshot?.peakPowerKw ?? 0;
+  const speedLimit = snapshot?.maxSpeedLimit ?? 80;
+
+  const speedBtnBase =
+    "px-2 py-[3px] text-[10px] font-semibold font-mono border-0 border-r border-slate-400/[0.1] cursor-pointer transition-colors";
+  const btnDisabled = "opacity-35 cursor-not-allowed";
 
   return (
-    <>
-      <style>{STYLES}</style>
-      <div className="d-root">
-        {/* ════ Top Bar ════ */}
-        <header className="d-topbar">
-          <div className="d-tb-left">
-            <button type="button" className="d-tb-back" aria-label="返回">
+    <div className="h-screen flex flex-col bg-[#020617]">
+      {/* ═══ Top Bar ═══ */}
+      <header className="flex items-center justify-between px-4 h-12 shrink-0 gap-2.5 bg-[#030712] border-b border-slate-400/[0.06] z-20">
+        {/* Left brand */}
+        <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-md bg-blue-500 flex items-center justify-center text-white">
               <svg
-                width="16"
-                height="16"
+                width="14"
+                height="14"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2.5"
-                strokeLinecap="round"
               >
-                <polyline points="15 18 9 12 15 6" />
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 1v4M12 19v4M1 12h4M19 12h4" />
               </svg>
-            </button>
-            <div className="d-tb-brand">
-              <div className="d-tb-logo">
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                >
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M12 1v4M12 19v4M1 12h4M19 12h4" />
-                </svg>
-              </div>
-              <div>
-                <span className="d-tb-title">总控调度中心</span>
-                <span className="d-tb-sub">DISPATCH &middot; LINE 9</span>
-              </div>
             </div>
-          </div>
-          <div className="d-tb-center">
-            <div className="d-tb-clock">
-              <span className="d-tb-clock-lbl">SIM TIME</span>
-              <span className="d-tb-clock-val">
-                {snapshot ? fmtTime(snapshot.simulationTime) : "00:00:00"}
+            <div>
+              <span className="text-[13px] font-bold text-slate-100">
+                调度控制
+              </span>
+              <span className="block text-[9px] text-slate-500 tracking-[1px] font-semibold">
+                DISPATCH · LINE 9
               </span>
             </div>
           </div>
-          <div className="d-tb-right">
-            {error && <span className="d-tb-err">{error}</span>}
-            <div className="d-speed-group">
-              {SPEED_OPTIONS.map((o, i) => (
-                <button
-                  key={o.label}
-                  className={`d-speed-btn${i === speedIndex ? " active" : ""}`}
-                  onClick={() => setSpeedIndex(i)}
-                  disabled={loading && !isRunning}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            <div className="d-map-mode">
-              {(Object.keys(TILE_LAYERS) as TileMode[]).map((m) => (
-                <button
-                  key={m}
-                  className={`d-mode-btn${tileMode === m ? " active" : ""}`}
-                  onClick={() => setTileMode(m)}
-                >
-                  {TILE_LAYERS[m].label}
-                </button>
-              ))}
-            </div>
+        </div>
+
+        {/* Center clock */}
+        <div className="text-center flex-1">
+          <span className="block text-[8px] text-slate-500 tracking-[3px] font-bold">
+            SIM TIME
+          </span>
+          <span className="font-mono text-xl font-bold text-slate-100 tracking-[2px]">
+            {snapshot ? fmtTime(snapshot.simulationTime) : "00:00:00"}
+          </span>
+        </div>
+
+        {/* Right controls */}
+        <div className="flex items-center gap-1.5">
+          {error && (
+            <span className="text-[10px] text-red-500 max-w-[150px] overflow-hidden text-ellipsis whitespace-nowrap">
+              {error}
+            </span>
+          )}
+
+          {/* 2D / 3D / Schematic toggle */}
+          <div className="flex rounded overflow-hidden border border-slate-400/[0.1]">
+            {(["2d", "3d", "schematic"] as const).map((mode, idx) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                className={`px-2.5 py-[3px] text-[10px] font-semibold font-mono uppercase border-0 cursor-pointer transition-colors ${
+                  idx < 2 ? "border-r border-slate-400/[0.1]" : ""
+                }`}
+                style={{
+                  background: viewMode === mode ? "#8b5cf6" : "transparent",
+                  color: viewMode === mode ? "#fff" : "#64748b",
+                }}
+              >
+                {mode === "3d" ? "3D" : mode === "schematic" ? "线路图" : "2D"}
+              </button>
+            ))}
+          </div>
+
+          {/* Speed selector */}
+          <div className="flex rounded overflow-hidden border border-slate-400/[0.1]">
+            {SPEED_OPTIONS.map((o, i) => (
+              <button
+                key={o.label}
+                type="button"
+                onClick={() => setSpeedIndex(i)}
+                disabled={loading && !isRunning}
+                className={`${speedBtnBase} ${
+                  i === speedIndex
+                    ? "bg-blue-500 text-white"
+                    : "bg-transparent text-slate-500"
+                } ${loading && !isRunning ? btnDisabled : ""}`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Action buttons */}
+          <button
+            type="button"
+            onClick={start}
+            disabled={loading || isRunning}
+            className={`flex items-center gap-1 px-3 py-1.5 border-0 rounded text-[11px] font-semibold cursor-pointer transition-opacity ${
+              loading || isRunning ? btnDisabled : ""
+            }`}
+            style={{ background: "#22c55e", color: "#000" }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="8,5 19,12 8,19" />
+            </svg>
+            启动
+          </button>
+          <button
+            type="button"
+            onClick={step}
+            disabled={loading || isRunning}
+            className={`px-3 py-1.5 border-0 rounded text-[11px] font-semibold cursor-pointer transition-opacity ${
+              loading || isRunning ? btnDisabled : ""
+            }`}
+            style={{ background: "rgba(148,163,184,0.08)", color: "#94a3b8" }}
+          >
+            推进
+          </button>
+          {isRunning && (
             <button
-              className="d-btn d-btn-start"
-              onClick={start}
-              disabled={loading || isRunning}
+              type="button"
+              onClick={stop}
+              className="flex items-center gap-1 px-3 py-1.5 border-0 rounded text-[11px] font-semibold cursor-pointer bg-red-500 text-white"
             >
               <svg
                 width="12"
@@ -633,262 +996,270 @@ export default function Dispatch() {
                 viewBox="0 0 24 24"
                 fill="currentColor"
               >
-                <polygon points="8,5 19,12 8,19" />
+                <rect x="6" y="6" width="12" height="12" rx="1.5" />
               </svg>
-              启动
+              停止
             </button>
-            <button
-              className="d-btn d-btn-step"
-              onClick={step}
-              disabled={loading || isRunning}
-            >
-              推进
-            </button>
-            {isRunning && (
-              <button className="d-btn d-btn-stop" onClick={stop}>
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                >
-                  <rect x="6" y="6" width="12" height="12" rx="1.5" />
-                </svg>
-                停止
-              </button>
-            )}
-          </div>
-        </header>
+          )}
+        </div>
+      </header>
 
-        {/* ════ Body ════ */}
-        <div className="d-body">
-          {/* Left Column */}
-          <div className="d-left">
-            {/* Map */}
-            <div className="d-map-panel">
-              <div className="d-panel-head">
-                <span className="d-panel-title">
-                  <span
-                    className="d-panel-dot"
-                    style={{ background: "#00a8e8" }}
+      {/* ═══ Body ═══ */}
+      <div className="flex flex-1 p-2 overflow-hidden min-h-0 gap-2">
+        {/* === Left Column === */}
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+          {/* Map / 3D panel */}
+          <div className="flex-1 min-h-[200px] bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/[0.08] flex flex-col">
+            {/* Panel header */}
+            <div className="flex items-center justify-between px-3 py-1.5 bg-[#0f172a]/80 border-b border-slate-400/[0.06] shrink-0">
+              <span className="text-[11px] font-semibold text-slate-100 flex items-center gap-1.5">
+                <span
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{
+                    background:
+                      viewMode === "3d"
+                        ? "#a78bfa"
+                        : viewMode === "schematic"
+                          ? "#22c55e"
+                          : "#38bdf8",
+                  }}
+                />
+                {viewMode === "3d"
+                  ? "3D 运行视图"
+                  : viewMode === "schematic"
+                    ? "线路示意图"
+                    : "实时运行图"}
+              </span>
+              <span className="text-[10px] text-slate-500">
+                {stations.length}站 · {snapshot?.activeTrains ?? 0}/
+                {snapshot?.totalTrains ?? 0}车
+                {viewMode === "schematic" &&
+                  sigData.length > 0 &&
+                  ` · ${sigData.length}信号机 · ${swData.length}道岔`}
+              </span>
+            </div>
+
+            {/* Map / 3D / Schematic body */}
+            <div className="flex-1 relative h-[calc(100%-33px)]">
+              {viewMode === "3d" ? (
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+                      加载 3D 场景...
+                    </div>
+                  }
+                >
+                  <Visualization3D snapshot={snapshot} stations={stations} />
+                </Suspense>
+              ) : viewMode === "schematic" ? (
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+                      加载线路示意图...
+                    </div>
+                  }
+                >
+                  <LineSchematic
+                    stations={stations}
+                    waypoints={waypoints}
+                    segments={segmentsData}
+                    signals={sigData}
+                    switches={swData}
+                    speedLimits={spLimitData}
+                    gradients={gradData}
+                    trains={trains}
+                    tunnels={tunnelData}
+                    axleCounters={axleCtrData}
+                    bumpers={bumperData}
+                    collisionZones={colZoneData}
+                    floodGates={fgData}
                   />
-                  实时运行图
-                </span>
-                <span className="d-panel-badge">
-                  {stations.length}站 &middot; {snapshot?.activeTrains ?? 0}/
-                  {snapshot?.totalTrains ?? 0}车
-                </span>
-              </div>
-              <div className="d-map-body">
+                </Suspense>
+              ) : (
                 <MapView
                   stations={stations}
                   trains={trains}
-                  tileMode={tileMode}
+                  waypoints={waypoints}
                 />
-              </div>
-              <div className="d-map-stats">
-                {[
-                  { v: snapshot?.activeTrains ?? "--", l: "在线" },
-                  {
-                    v:
-                      headways.length > 0
-                        ? Math.min(
-                            ...headways.map((h) => h.timeSeconds),
-                          ).toFixed(0) + "s"
-                        : "--",
-                    l: "最小时距",
-                  },
-                  {
-                    v:
-                      trains.filter((t) => t.status !== "FINISHED").length > 0
-                        ? Math.min(
-                            ...trains
-                              .filter((t) => t.status !== "FINISHED")
-                              .map((t) => t.speed),
-                          ).toFixed(0) +
-                          "~" +
-                          Math.max(
-                            ...trains
-                              .filter((t) => t.status !== "FINISHED")
-                              .map((t) => t.speed),
-                          ).toFixed(0)
-                        : "--",
-                    l: "速度 km/h",
-                  },
-                  { v: energy.toFixed(1) + " kWh", l: "牵引用电" },
-                ].map((s, i) => (
-                  <div className="d-mstat" key={i}>
-                    <span className="d-mstat-val">{s.v}</span>
-                    <span className="d-mstat-lbl">{s.l}</span>
-                  </div>
-                ))}
-              </div>
+              )}
             </div>
-            {/* Train Diagram */}
-            <div className="d-diagram-panel">
-              <div className="d-panel-head">
-                <span className="d-panel-title">
-                  <span
-                    className="d-panel-dot"
-                    style={{ background: "#f7b731" }}
-                  />
-                  运行图 (Train Diagram)
-                </span>
-                <span className="d-panel-badge">{history.length} 采样点</span>
-              </div>
-              <TrainDiagram
-                history={history}
-                stations={stations}
-                simTime={snapshot?.simulationTime ?? 0}
-              />
+
+            {/* Stats bar */}
+            <div className="flex border-t border-slate-400/[0.06] bg-[#0f172a]/60 shrink-0">
+              {[
+                { v: snapshot?.activeTrains ?? "--", l: "在线" },
+                {
+                  v:
+                    headways.length > 0
+                      ? Math.min(
+                          ...headways.map((h: any) => h.timeSeconds),
+                        ).toFixed(0) + "s"
+                      : "--",
+                  l: "最小时距",
+                },
+                { v: speedLimit + " km/h", l: "区段限速" },
+                { v: energy.toFixed(2) + " kWh", l: "净能耗" },
+                { v: tractionKwh.toFixed(2) + " kWh", l: "牵引" },
+                { v: regenKwh.toFixed(2) + " kWh", l: "回收" },
+              ].map((s, i) => (
+                <div
+                  key={i}
+                  className={`flex-1 text-center py-1.5 px-1 ${
+                    i < 5 ? "border-r border-slate-400/[0.06]" : ""
+                  }`}
+                >
+                  <span className="block font-mono text-[11px] font-bold text-slate-100">
+                    {s.v}
+                  </span>
+                  <span className="text-[9px] text-slate-500">{s.l}</span>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Right Column */}
-          <div className="d-right">
-            {/* Tab bar */}
-            <div className="d-tab-bar">
-              {[
-                { id: "trains", label: "列车状态", dot: "#06d6a0" },
-                { id: "arrivals", label: "到站时刻", dot: "#45aaf2" },
-                { id: "commands", label: "调度指令", dot: "#fc5c65" },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  className={`d-tab${rightTab === tab.id ? " active" : ""}`}
-                  onClick={() => setRightTab(tab.id as typeof rightTab)}
-                >
-                  <span className="d-tab-dot" style={{ background: tab.dot }} />
-                  {tab.label}
-                </button>
-              ))}
+          {/* Train Diagram */}
+          <div className="h-[180px] shrink-0 bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/[0.08] flex flex-col">
+            <div className="flex items-center justify-between px-3 py-1.5 bg-[#0f172a]/80 border-b border-slate-400/[0.06] shrink-0">
+              <span className="text-[11px] font-semibold text-slate-100 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                运行图
+              </span>
+              <span className="text-[10px] text-slate-500">
+                {history.length} 采样点
+              </span>
             </div>
+            <TrainDiagram
+              history={history}
+              stations={stations}
+              simTime={snapshot?.simulationTime ?? 0}
+            />
+          </div>
+        </div>
 
-            {/* Trains Tab */}
+        {/* === Right Panel === */}
+        <div className="w-[380px] shrink-0 flex flex-col min-h-0 overflow-hidden">
+          {/* Tab bar */}
+          <div className="flex gap-0.5 mb-2 shrink-0">
+            {[
+              { id: "trains", label: "列车状态", dot: "#22c55e" },
+              { id: "arrivals", label: "到站时刻", dot: "#3b82f6" },
+              { id: "commands", label: "调度指令", dot: "#ef4444" },
+              { id: "energy", label: "能耗监测", dot: "#f59e0b" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setRightTab(tab.id as typeof rightTab)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-[5px] cursor-pointer transition-colors ${
+                  rightTab === tab.id
+                    ? "bg-[#0f172a] text-slate-100 border border-slate-400/[0.12]"
+                    : "bg-transparent text-slate-500 border-0"
+                }`}
+              >
+                <span
+                  className="inline-block w-[5px] h-[5px] rounded-full"
+                  style={{ backgroundColor: tab.dot }}
+                />
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {/* ── Trains Tab ── */}
             {rightTab === "trains" && (
-              <div className="d-right-scroll">
-                <div className="d-panel">
-                  <div className="d-tbl-scroll">
-                    <table className="d-tbl">
-                      <thead>
-                        <tr>
-                          <th>车次</th>
-                          <th>编组</th>
-                          <th>位置</th>
-                          <th>速度</th>
-                          <th>状态</th>
-                          <th>下站</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {trains.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="d-empty">
-                              点击「启动」
-                            </td>
-                          </tr>
-                        ) : (
-                          trains.map((t) => (
-                            <tr key={t.trainId}>
-                              <td>
-                                <span className="d-train-id">
-                                  {t.trainName}
-                                </span>
-                              </td>
-                              <td className="d-mono">{t.carCount ?? 6}节</td>
-                              <td className="d-mono">
-                                {fmtNum(t.positionMeters)}
-                              </td>
-                              <td className="d-mono">
-                                {t.speed > 0
-                                  ? t.speed.toFixed(0) + " km/h"
-                                  : "—"}
-                              </td>
-                              <td>
-                                <span
-                                  className="d-status-dot"
-                                  style={{ background: STATUS_COLOR[t.status] }}
-                                />
-                                {STATUS_LABEL[t.status]}
-                              </td>
-                              <td className="d-mono">
-                                {t.nextStationKm.toFixed(1)}
-                              </td>
-                            </tr>
-                          ))
+              <div>
+                <div className="bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/[0.08]">
+                  <table className="w-full border-collapse text-[11px]">
+                    <thead>
+                      <tr>
+                        {["车次", "编组", "位置", "速度", "状态", "下站"].map(
+                          (h) => (
+                            <ThCell key={h}>{h}</ThCell>
+                          ),
                         )}
-                      </tbody>
-                    </table>
-                  </div>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trains.length === 0 ? (
+                        <tr>
+                          <TdCentered colSpan={6}>点击「启动」</TdCentered>
+                        </tr>
+                      ) : (
+                        trains.map((t: any) => (
+                          <tr
+                            key={t.trainId}
+                            className="border-b border-slate-400/[0.04]"
+                          >
+                            <TdName>{t.trainName}</TdName>
+                            <MonoCell>{t.carCount ?? 6}节</MonoCell>
+                            <MonoCell>{fmtNum(t.positionMeters)}</MonoCell>
+                            <MonoCell>
+                              {t.speed > 0 ? t.speed.toFixed(0) + " km/h" : "—"}
+                            </MonoCell>
+                            <td className="px-2 py-1.5">
+                              <Dot color={STATUS_COLOR[t.status]} />
+                              <span className="ml-1">
+                                {STATUS_LABEL[t.status] || t.status}
+                              </span>
+                            </td>
+                            <MonoCell>{t.nextStationKm?.toFixed(1)}</MonoCell>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-                {/* Headways */}
-                <div className="d-panel" style={{ marginTop: 8 }}>
-                  <div className="d-panel-head">
-                    <span className="d-panel-title">
-                      <span
-                        className="d-panel-dot"
-                        style={{ background: "#f7b731" }}
-                      />
+
+                {/* Headways table */}
+                <div className="mt-2 bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/[0.08]">
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-[#0f172a]/80 border-b border-slate-400/[0.06]">
+                    <span className="text-[11px] font-semibold text-slate-100 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
                       车头时距
                     </span>
-                    <span className="d-panel-badge">{headways.length}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {headways.length}
+                    </span>
                   </div>
-                  <div className="d-tbl-scroll d-tbl-scroll-sm">
-                    <table className="d-tbl">
-                      <thead>
+                  <table className="w-full border-collapse text-[11px]">
+                    <thead>
+                      <tr>
+                        {["前车", "后车", "距离", "时距", "状态"].map((h) => (
+                          <ThCell key={h}>{h}</ThCell>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {headways.length === 0 ? (
                         <tr>
-                          <th>前车</th>
-                          <th>后车</th>
-                          <th>距离</th>
-                          <th>时距</th>
-                          <th>状态</th>
+                          <TdCentered colSpan={5}>暂无</TdCentered>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {headways.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="d-empty">
-                              暂无
-                            </td>
-                          </tr>
-                        ) : (
-                          headways.map((h, i) => (
-                            <tr key={i}>
-                              <td>
-                                <span className="d-train-id">
-                                  {h.fromTrainId}
-                                </span>
-                              </td>
-                              <td>
-                                <span className="d-train-id">
-                                  {h.toTrainId}
-                                </span>
-                              </td>
-                              <td className="d-mono">
-                                {fmtNum(h.distanceMeters)}
-                              </td>
-                              <td className="d-mono">
-                                {h.timeSeconds.toFixed(0)}
-                              </td>
-                              <td>
+                      ) : (
+                        headways.map((h: any, i: number) => {
+                          const c =
+                            h.status === "SAFE"
+                              ? "#22c55e"
+                              : h.status === "WARNING"
+                                ? "#f59e0b"
+                                : "#ef4444";
+                          return (
+                            <tr
+                              key={i}
+                              className="border-b border-slate-400/[0.04]"
+                            >
+                              <TdName>{h.fromTrainId}</TdName>
+                              <TdName>{h.toTrainId}</TdName>
+                              <MonoCell>{fmtNum(h.distanceMeters)}</MonoCell>
+                              <MonoCell>{h.timeSeconds.toFixed(0)}s</MonoCell>
+                              <td className="px-2 py-1.5">
                                 <span
-                                  className="d-h-badge"
-                                  style={
-                                    {
-                                      "--c":
-                                        h.status === "SAFE"
-                                          ? "#06d6a0"
-                                          : h.status === "WARNING"
-                                            ? "#f7b731"
-                                            : "#fc5c65",
-                                      "--bg":
-                                        (h.status === "SAFE"
-                                          ? "#06d6a0"
-                                          : h.status === "WARNING"
-                                            ? "#f7b731"
-                                            : "#fc5c65") + "18",
-                                    } as React.CSSProperties
-                                  }
+                                  className="inline-block px-1.5 py-px rounded-[3px] text-[9px] font-semibold"
+                                  style={{
+                                    color: c,
+                                    background: c + "18",
+                                  }}
                                 >
                                   {h.status === "SAFE"
                                     ? "正常"
@@ -898,254 +1269,268 @@ export default function Dispatch() {
                                 </span>
                               </td>
                             </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
 
-            {/* Arrivals Tab */}
+            {/* ── Arrivals Tab ── */}
             {rightTab === "arrivals" && (
-              <div className="d-right-scroll">
-                <div className="d-panel">
-                  <div className="d-tbl-scroll">
-                    <table className="d-tbl">
-                      <thead>
-                        <tr>
-                          <th>车次</th>
-                          <th>车站</th>
-                          <th>到站</th>
-                          <th>发车</th>
-                          <th>停站</th>
+              <div className="bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/[0.08]">
+                <table className="w-full border-collapse text-[11px]">
+                  <thead>
+                    <tr>
+                      {["车次", "车站", "到站", "发车", "停站"].map((h) => (
+                        <ThCell key={h}>{h}</ThCell>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {arrivals.length === 0 ? (
+                      <tr>
+                        <TdCentered colSpan={5}>暂无到站记录</TdCentered>
+                      </tr>
+                    ) : (
+                      [...arrivals].reverse().map((a: any, i: number) => (
+                        <tr
+                          key={i}
+                          className="border-b border-slate-400/[0.04]"
+                        >
+                          <TdName>{a.trainId}</TdName>
+                          <td className="px-2 py-1.5 font-semibold text-slate-100">
+                            {a.stationName}
+                          </td>
+                          <MonoCell>{fmtTime(a.arrivalTimeSeconds)}</MonoCell>
+                          <MonoCell>
+                            {a.departureTimeSeconds > 0
+                              ? fmtTime(a.departureTimeSeconds)
+                              : "—"}
+                          </MonoCell>
+                          <MonoCell>
+                            {a.dwellSeconds > 0
+                              ? a.dwellSeconds.toFixed(0) + "s"
+                              : "—"}
+                          </MonoCell>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {arrivals.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="d-empty">
-                              暂无到站记录
-                            </td>
-                          </tr>
-                        ) : (
-                          arrivals
-                            .slice()
-                            .reverse()
-                            .map((a, i) => (
-                              <tr key={i}>
-                                <td>
-                                  <span className="d-train-id">
-                                    {a.trainId}
-                                  </span>
-                                </td>
-                                <td
-                                  style={{ fontWeight: 600, color: "#e2e8f0" }}
-                                >
-                                  {a.stationName}
-                                </td>
-                                <td className="d-mono">
-                                  {fmtTime(a.arrivalTimeSeconds)}
-                                </td>
-                                <td className="d-mono">
-                                  {a.departureTimeSeconds > 0
-                                    ? fmtTime(a.departureTimeSeconds)
-                                    : "—"}
-                                </td>
-                                <td className="d-mono">
-                                  {a.dwellSeconds > 0
-                                    ? a.dwellSeconds.toFixed(0) + "s"
-                                    : "—"}
-                                </td>
-                              </tr>
-                            ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* ── Commands Tab ── */}
+            {rightTab === "commands" && (
+              <div className="bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/[0.08] flex-1 min-h-0 flex flex-col">
+                <div className="overflow-y-auto flex-1">
+                  {commands.length === 0 ? (
+                    <div className="text-center text-[#374151] py-6 text-[11px]">
+                      暂无调度指令
+                    </div>
+                  ) : (
+                    commands.map((c: any, i: number) => {
+                      const cmdMap: Record<string, [string, string]> = {
+                        DEPART: ["发车", "#22c55e"],
+                        HOLD: ["等待", "#f59e0b"],
+                        SLOW: ["减速", "#ef4444"],
+                        ARRIVE: ["到站", "#3b82f6"],
+                        FINISH: ["终到", "#a78bfa"],
+                      };
+                      const [label, color] = cmdMap[c.commandType] || [
+                        c.commandType,
+                        "#64748b",
+                      ];
+                      return (
+                        <div
+                          key={i}
+                          className="flex items-center gap-1.5 px-3 py-1.5 border-b border-slate-400/[0.04] text-[11px]"
+                        >
+                          <span
+                            className="inline-block px-1.5 py-px rounded-[3px] text-[9px] font-bold"
+                            style={{ color, background: color + "14" }}
+                          >
+                            {label}
+                          </span>
+                          <span className="font-bold text-slate-100 font-mono text-[10px]">
+                            {c.trainId}
+                          </span>
+                          <span className="text-[#94a3b8] flex-1 text-[10px]">
+                            {c.reason}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
 
-            {/* Commands Tab */}
-            {rightTab === "commands" && (
-              <div className="d-right-scroll d-right-scroll-flex">
-                <div className="d-panel d-panel-flex">
-                  <div className="d-cmd-wrap">
-                    {commands.length === 0 ? (
-                      <div className="d-empty">暂无调度指令</div>
-                    ) : (
-                      commands.map((c, i) => (
-                        <div className="d-cmd" key={i}>
-                          <span
-                            className="d-cmd-tag"
-                            style={
-                              {
-                                "--c":
-                                  c.commandType === "DEPART"
-                                    ? "#06d6a0"
-                                    : c.commandType === "HOLD"
-                                      ? "#f7b731"
-                                      : c.commandType === "SLOW"
-                                        ? "#fc5c65"
-                                        : c.commandType === "ARRIVE"
-                                          ? "#45aaf2"
-                                          : "#9b59b6",
-                                "--bg":
-                                  (c.commandType === "DEPART"
-                                    ? "#06d6a0"
-                                    : c.commandType === "HOLD"
-                                      ? "#f7b731"
-                                      : c.commandType === "SLOW"
-                                        ? "#fc5c65"
-                                        : c.commandType === "ARRIVE"
-                                          ? "#45aaf2"
-                                          : "#9b59b6") + "14",
-                              } as React.CSSProperties
-                            }
-                          >
-                            {c.commandType === "DEPART"
-                              ? "发车"
-                              : c.commandType === "HOLD"
-                                ? "等待"
-                                : c.commandType === "SLOW"
-                                  ? "减速"
-                                  : c.commandType === "ARRIVE"
-                                    ? "到站"
-                                    : "终到"}
-                          </span>
-                          <span className="d-cmd-train">{c.trainId}</span>
-                          <span className="d-cmd-reason">{c.reason}</span>
+            {/* ── Energy Tab ── */}
+            {rightTab === "energy" && (
+              <div className="flex flex-col gap-2">
+                <div className="bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/8">
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-[#0f172a]/80 border-b border-slate-400/6">
+                    <span className="text-[11px] font-semibold text-slate-100 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                      能耗总览
+                    </span>
+                  </div>
+                  <div className="p-3 space-y-2">
+                    {energySnapshot ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            [
+                              "牵引能耗",
+                              energySnapshot.totalTractionKwh.toFixed(1),
+                              "kWh",
+                              "#38bdf8",
+                            ],
+                            [
+                              "回收能量",
+                              energySnapshot.totalRegenKwh.toFixed(1),
+                              "kWh",
+                              "#22c55e",
+                            ],
+                            [
+                              "净能耗",
+                              energySnapshot.netEnergyKwh.toFixed(1),
+                              "kWh",
+                              "#f59e0b",
+                            ],
+                            [
+                              "峰值功率",
+                              energySnapshot.maxPeakKw.toFixed(0),
+                              "kW",
+                              "#ef4444",
+                            ],
+                          ].map(([l, v, u, c]) => (
+                            <div
+                              key={l as string}
+                              className="p-2 rounded-lg text-center"
+                              style={{
+                                background: "rgba(15,23,42,0.6)",
+                                border: "1px solid rgba(148,163,184,0.06)",
+                              }}
+                            >
+                              <div className="text-[9px] text-slate-500">
+                                {l}
+                              </div>
+                              <div
+                                className="text-lg font-bold font-mono"
+                                style={{ color: c as string }}
+                              >
+                                {v as string}
+                              </div>
+                              <div className="text-[9px] text-slate-600">
+                                {u}
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))
+
+                        {/* 供电风险 */}
+                        <div
+                          className="p-2.5 rounded-lg flex items-center gap-3"
+                          style={{
+                            background: "rgba(15,23,42,0.6)",
+                            border: "1px solid rgba(148,163,184,0.06)",
+                          }}
+                        >
+                          <div
+                            className="w-12 h-12 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+                            style={{
+                              color:
+                                energySnapshot.riskLevel === "safe"
+                                  ? "#22c55e"
+                                  : energySnapshot.riskLevel === "warning"
+                                    ? "#f59e0b"
+                                    : "#ef4444",
+                              background:
+                                energySnapshot.riskLevel === "safe"
+                                  ? "rgba(34,197,94,0.1)"
+                                  : energySnapshot.riskLevel === "warning"
+                                    ? "rgba(245,158,11,0.1)"
+                                    : "rgba(239,68,68,0.1)",
+                              fontFamily: "'Orbitron', monospace",
+                            }}
+                          >
+                            {energySnapshot.riskLevel === "safe"
+                              ? "安全"
+                              : energySnapshot.riskLevel === "warning"
+                                ? "警告"
+                                : "危险"}
+                          </div>
+                          <div className="text-[10px] space-y-0.5">
+                            <div className="text-slate-400">
+                              供电阈值:{" "}
+                              <span className="text-slate-200">
+                                {energySnapshot.powerSupplyThreshold.toFixed(0)}{" "}
+                                kW
+                              </span>
+                            </div>
+                            <div className="text-slate-400">
+                              峰值/阈值:{" "}
+                              <span className="text-slate-200">
+                                {(energySnapshot.thresholdRatio * 100).toFixed(
+                                  0,
+                                )}
+                                %
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center text-[#374151] py-4 text-[11px]">
+                        启动仿真后显示能耗数据
+                      </div>
                     )}
                   </div>
                 </div>
+
+                {/* 各列车能耗明细 */}
+                {energySnapshot?.energyRecords?.length ? (
+                  <div className="bg-[#0f172a] rounded-lg overflow-hidden border border-slate-400/8">
+                    <table className="w-full border-collapse text-[11px]">
+                      <thead>
+                        <tr>
+                          {["车次", "牵引", "回收", "净耗"].map((h) => (
+                            <ThCell key={h}>{h}</ThCell>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {energySnapshot.energyRecords.map((r) => (
+                          <tr
+                            key={r.trainId}
+                            className="border-b border-slate-400/4"
+                          >
+                            <TdName>
+                              {"TC" + String(r.trainId).padStart(2, "0")}
+                            </TdName>
+                            <MonoCell>
+                              {r.totalTractionEnergyKwh.toFixed(2)}
+                            </MonoCell>
+                            <MonoCell>
+                              {r.totalRegenEnergyKwh.toFixed(2)}
+                            </MonoCell>
+                            <MonoCell>{r.netEnergyKwh.toFixed(2)}</MonoCell>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }
-
-/* ================================================================
-   Styles
-   ================================================================ */
-
-const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
-.d-root{height:100vh;display:flex;flex-direction:column;background:#060b11;overflow:hidden}
-.d-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:48px;flex-shrink:0;gap:10px;background:rgba(13,21,32,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #152433;z-index:20}
-.d-tb-left{display:flex;align-items:center;gap:8px;min-width:0}
-.d-tb-back{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;color:#617088;transition:all .15s;flex-shrink:0}
-.d-tb-back:hover{background:#182537;color:#94a3b8}
-.d-tb-brand{display:flex;align-items:center;gap:7px}
-.d-tb-logo{width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#00a8e8,#0077b6);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 0 14px rgba(0,168,232,0.25)}
-.d-tb-title{font-size:13px;font-weight:700;color:#e2e8f0;letter-spacing:-0.2px;white-space:nowrap}
-.d-tb-sub{display:block;font-size:8px;color:#617088;letter-spacing:1.5px;font-weight:600;text-transform:uppercase}
-.d-tb-center{flex:1;display:flex;justify-content:center;min-width:0}
-.d-tb-clock{text-align:center}
-.d-tb-clock-lbl{display:block;font-size:8px;color:#617088;letter-spacing:3px;font-weight:700}
-.d-tb-clock-val{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#e2e8f0;letter-spacing:3px;line-height:1.15}
-.d-tb-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.d-tb-err{font-size:10px;color:#fc5c65;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.d-speed-group{display:flex;border-radius:4px;overflow:hidden;border:1px solid #1c2a3e}
-.d-speed-btn{padding:3px 8px;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;background:transparent;color:#617088;border:none;cursor:pointer;transition:all .12s;border-right:1px solid #1c2a3e}
-.d-speed-btn:last-child{border-right:none}
-.d-speed-btn:hover:not(:disabled){background:#182537;color:#94a3b8}
-.d-speed-btn.active{background:#00a8e8;color:#060b11}
-.d-speed-btn:disabled{opacity:0.35;cursor:not-allowed}
-.d-map-mode{display:flex;border-radius:4px;overflow:hidden;border:1px solid #1c2a3e}
-.d-mode-btn{padding:3px 7px;font-size:9px;font-weight:600;background:transparent;color:#617088;border:none;cursor:pointer;transition:all .12s;border-right:1px solid #1c2a3e;text-transform:uppercase;letter-spacing:.5px}
-.d-mode-btn:last-child{border-right:none}
-.d-mode-btn:hover{background:#182537;color:#94a3b8}
-.d-mode-btn.active{background:#1c2a3e;color:#00a8e8}
-.d-btn{display:flex;align-items:center;gap:4px;padding:4px 12px;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;white-space:nowrap}
-.d-btn:disabled{opacity:0.35;cursor:not-allowed}
-.d-btn-start{background:#06d6a0;color:#060b11}
-.d-btn-start:hover:not(:disabled){background:#05c492}
-.d-btn-step{background:#1c2a3e;color:#94a3b8}
-.d-btn-step:hover:not(:disabled){background:#253448;color:#cbd5e1}
-.d-btn-stop{background:#fc5c65;color:#fff}
-.d-btn-stop:hover{background:#e55058}
-
-/* ── Body ── */
-.d-body{display:flex;flex:1;padding:8px 12px;overflow:hidden;min-height:0;gap:10px}
-@media(max-width:1200px){.d-body{flex-direction:column}}
-
-/* ── Left ── */
-.d-left{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
-@media(max-width:1200px){.d-left{min-height:60vh}}
-.d-map-panel{flex:1;min-height:200px;display:flex;flex-direction:column;background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e}
-.d-map-body{flex:1;min-height:150px;position:relative}
-.d-map-inner{width:100%;height:100%;position:absolute;top:0;left:0}
-.d-map-stats{display:flex;border-top:1px solid #1c2a3e;background:#0a1019;flex-shrink:0}
-.d-mstat{flex:1;text-align:center;padding:7px 4px;border-right:1px solid #1c2a3e}
-.d-mstat:last-child{border-right:none}
-.d-mstat-val{display:block;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#e2e8f0}
-.d-mstat-lbl{font-size:9px;color:#617088;margin-top:1px}
-
-/* ── Train Diagram ── */
-.d-diagram-panel{height:180px;flex-shrink:0;display:flex;flex-direction:column;background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e}
-.d-diagram{flex:1;width:100%}
-.d-empty-panel{flex:1;display:flex;align-items:center;justify-content:center;color:#374151;font-size:12px}
-
-/* ── Panel Head ── */
-.d-panel-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#0a1019;border-bottom:1px solid #1c2a3e;flex-shrink:0}
-.d-panel-title{font-size:11px;font-weight:600;color:#e2e8f0;display:flex;align-items:center;gap:6px;letter-spacing:-0.1px}
-.d-panel-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.d-panel-badge{font-size:10px;color:#617088;font-weight:500}
-
-/* ── Right ── */
-.d-right{width:400px;flex-shrink:0;display:flex;flex-direction:column;gap:0;min-height:0;overflow:hidden}
-@media(max-width:1200px){.d-right{width:100%;flex:1}}
-
-/* ── Tab Bar ── */
-.d-tab-bar{display:flex;gap:2px;margin-bottom:8px;flex-shrink:0}
-.d-tab{display:flex;align-items:center;gap:5px;padding:6px 12px;font-size:11px;font-weight:600;border:none;border-radius:5px;cursor:pointer;transition:all .15s;background:transparent;color:#617088}
-.d-tab:hover{background:#182537;color:#94a3b8}
-.d-tab.active{background:#0d1520;color:#e2e8f0;border:1px solid #1c2a3e}
-.d-tab-dot{width:5px;height:5px;border-radius:50%}
-
-/* ── Right scroll area ── */
-.d-right-scroll{flex:1;overflow-y:auto;min-height:0}
-.d-right-scroll-flex{display:flex;flex-direction:column}
-.d-right-scroll-flex .d-panel-flex{flex:1;min-height:0}
-
-/* ── Tables ── */
-.d-panel{background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e;display:flex;flex-direction:column}
-.d-panel-flex{flex:1;min-height:0}
-.d-tbl-scroll{overflow:auto;max-height:240px;min-height:0}
-.d-tbl-scroll-sm{max-height:120px}
-.d-tbl{width:100%;border-collapse:collapse;font-size:11px}
-.d-tbl thead{position:sticky;top:0;z-index:2}
-.d-tbl th{background:#0a1019;color:#617088;font-weight:600;padding:6px 8px;text-align:left;border-bottom:1px solid #1c2a3e;font-size:9px;text-transform:uppercase;letter-spacing:.5px}
-.d-tbl td{padding:6px 8px;border-bottom:1px solid #152433;color:#cbd5e1}
-.d-tbl tbody tr:hover{background:rgba(255,255,255,0.02)}
-.d-tbl tbody tr:last-child td{border-bottom:none}
-.d-mono{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500}
-.d-train-id{font-weight:700;color:#e2e8f0;font-family:'JetBrains Mono',monospace}
-.d-status-dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:4px;vertical-align:middle}
-.d-empty{text-align:center;color:#374151;padding:24px 8px!important;font-size:11px}
-.d-h-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;color:var(--c);background:var(--bg)}
-
-/* ── Commands ── */
-.d-cmd-wrap{overflow-y:auto;flex:1;min-height:0}
-.d-cmd{display:flex;align-items:center;gap:7px;padding:6px 12px;border-bottom:1px solid #152433;font-size:11px}
-.d-cmd:last-child{border-bottom:none}
-.d-cmd-tag{padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;color:var(--c);background:var(--bg);white-space:nowrap}
-.d-cmd-train{font-weight:700;color:#e2e8f0;font-family:'JetBrains Mono',monospace;font-size:10px;min-width:24px}
-.d-cmd-reason{color:#94a3b8;flex:1;font-size:10px}
-
-/* ── Leaflet overrides ── */
-.leaflet-container{background:#060b11!important}
-.leaflet-control-zoom a{background:#0d1520!important;color:#94a3b8!important;border-color:#1c2a3e!important}
-.leaflet-control-zoom a:hover{background:#182537!important;color:#e2e8f0!important}
-.leaflet-control-attribution{background:rgba(13,21,32,0.8)!important;color:#617088!important;font-size:8px!important;padding:2px 5px!important}
-.leaflet-control-attribution a{color:#00a8e8!important}
-
-.d-tooltip{font-size:11px!important;padding:5px 8px!important;border-radius:5px!important;border:none!important;background:rgba(13,21,32,0.95)!important;color:#e2e8f0!important;box-shadow:0 2px 12px rgba(0,0,0,0.4)!important}
-.d-tooltip::before{border-top-color:rgba(13,21,32,0.95)!important}`;

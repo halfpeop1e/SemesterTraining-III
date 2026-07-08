@@ -1,0 +1,134 @@
+{
+  "长短链表": {
+    "file": "long-short-chain.json",
+    "count": 5
+  },
+  "点表": {
+    "file": "points.json",
+    "count": 297
+  },
+  "Seg表": {
+    "file": "segments.json",
+    "count": 319
+  },
+  "计轴区段表": {
+    "file": "axle-counter-sections.json",
+    "count": 259
+  },
+  "物理区段表": {
+    "file": "physical-sections.json",
+    "count": 199
+  },
+  "逻辑区段表": {
+    "file": "logical-sections.json",
+    "count": 386
+  },
+  "计轴器表": {
+    "file": "axle-counters.json",
+    "count": 246
+  },
+  "道岔表": {
+    "file": "switches.json",
+    "count": 60
+  },
+  "信号机表": {
+    "file": "signals.json",
+    "count": 157
+  },
+  "屏蔽门表": {
+    "file": "platform-doors.json",
+    "count": 26
+  },
+  "紧急按钮表": {
+    "file": "emergency-buttons.json",
+    "count": 26
+  },
+  "车站表": {
+    "file": "stations.json",
+    "count": 13
+  },
+  "站台表": {
+    "file": "platforms.json",
+    "count": 56
+  },
+  "应答器表": {
+    "file": "balises.json",
+    "count": 374
+  },
+  "坡度表": {
+    "file": "gradients.json",
+    "count": 182
+  },
+  "静态限速表": {
+    "file": "static-speed-limits.json",
+    "count": 241
+  },
+  "进路表": {
+    "file": "routes.json",
+    "count": 249
+  },
+  "保护区段表": {
+    "file": "protection-sections.json",
+    "count": 49
+  },
+  "点式接近区段表": {
+    "file": "point-approach-sections.json",
+    "count": 109
+  },
+  "CBTC接近区段表": {
+    "file": "cbtc-approach-sections.json",
+    "count": 112
+  },
+  "点式触发区段表": {
+    "file": "point-trigger-sections.json",
+    "count": 109
+  },
+  "CBTC触发区段表": {
+    "file": "cbtc-trigger-sections.json",
+    "count": 112
+  },
+  "区域属性表": {
+    "file": "zone-properties.json",
+    "count": 12
+  },
+  "线路统一限速信息表": {
+    "file": "line-uniform-speed-limit.json",
+    "count": 5
+  },
+  "线路统一坡度信息表": {
+    "file": "line-uniform-gradient.json",
+    "count": 4
+  },
+  "防淹门表": {
+    "file": "flood-gates.json",
+    "count": 4
+  },
+  "隧道表": {
+    "file": "tunnels.json",
+    "count": 215
+  },
+  "车档表": {
+    "file": "bumpers.json",
+    "count": 8
+  },
+  "设备编号映射表": {
+    "file": "device-id-mapping.json",
+    "count": 95
+  },
+  "虚拟点表": {
+    "file": "virtual-points.json",
+    "count": 3
+  },
+  "SPKS开关表": {
+    "file": "spks-switches.json",
+    "count": 56
+  },
+  "车库门表": {
+    "file": "depot-doors.json",
+    "count": 8
+  },
+  "碰撞区域表": {
+    "file": "collision-zones.json",
+    "count": 14
+  }
+}
