@@ -14,6 +14,7 @@ import {
   stepSimulation,
   getSnapshot,
   getLineMap,
+  applyStrategy,
 } from '../../api/dispatch';
 import type {
   SimulationSnapshot,
@@ -54,10 +55,10 @@ const SPEED_OPTIONS = [{ label: '1x', steps: 1 }, { label: '2x', steps: 2 }, { l
    ================================================================ */
 
 const STATUS_LABEL: Record<TrainState['status'], string> = {
-  STOPPED: '待发', RUNNING: '运行', ARRIVING: '进站', DEPARTING: '发车', FINISHED: '终到',
+  DEPOT_WAITING: '待发', DEPARTING: '起动', ACCELERATING: '加速', CRUISING: '巡航', BRAKING: '制动', DWELLING: '站停', TURNING_BACK: '折返', FINISHED: '终到',
 };
 const STATUS_COLOR: Record<TrainState['status'], string> = {
-  STOPPED: '#617088', RUNNING: '#06d6a0', ARRIVING: '#f7b731', DEPARTING: '#45aaf2', FINISHED: '#fc5c65',
+  DEPOT_WAITING: '#617088', DEPARTING: '#45aaf2', ACCELERATING: '#00a8e8', CRUISING: '#06d6a0', BRAKING: '#f7b731', DWELLING: '#9b59b6', TURNING_BACK: '#ff9f43', FINISHED: '#fc5c65',
 };
 const TRAIN_COLORS = ['#00a8e8','#06d6a0','#f7b731','#fc5c65','#9b59b6','#45aaf2','#f368e0','#ff9f43'];
 
@@ -85,10 +86,12 @@ function TrainDiagram({
   history,
   stations,
   simTime,
+  plannedPoints,
 }: {
   history: TrainPositionPoint[];
   stations: StationGeo[];
   simTime: number;
+  plannedPoints: TrainPositionPoint[];
 }) {
   const sortedStations = useMemo(() => [...stations].sort((a, b) => a.id - b.id), [stations]);
 
@@ -105,11 +108,55 @@ function TrainDiagram({
       byTrain[p.trainId].push(p);
     });
 
-    const series: any[] = Object.entries(byTrain).map(([tid, pts], idx) => {
+    const series: any[] = [];
+
+    // ── 计划运行线 (浅色虚线, 按时刻表绘制) ──
+    if (plannedPoints.length > 0) {
+      const byTrainPlanned: Record<string, TrainPositionPoint[]> = {};
+      plannedPoints.forEach((p) => {
+        if (!byTrainPlanned[p.trainId]) byTrainPlanned[p.trainId] = [];
+        byTrainPlanned[p.trainId].push(p);
+      });
+      Object.entries(byTrainPlanned).forEach(([tid, pts]) => {
+        pts.sort((a, b) => a.timeSeconds - b.timeSeconds);
+        const color = TRAIN_COLORS[(parseInt(tid.slice(1)) - 1) % TRAIN_COLORS.length];
+        series.push({
+          type: 'line',
+          name: tid + ' 计划',
+          data: pts.map((p) => [p.timeSeconds, p.positionKm]),
+          symbol: 'none',
+          lineStyle: { color, type: 'dashed', width: 1, opacity: 0.35 },
+          emphasis: { focus: 'series', lineStyle: { opacity: 0.7, width: 1.5 } },
+          silent: true,
+        });
+      });
+    }
+
+    // ── 实绩运行线 (实线) ──
+    Object.entries(byTrain).map(([tid, pts], idx) => {
       pts.sort((a, b) => a.timeSeconds - b.timeSeconds);
       const data = pts.map((p) => [p.timeSeconds, p.positionKm]);
       const color = TRAIN_COLORS[idx % TRAIN_COLORS.length];
       const last = pts[pts.length - 1];
+
+      // 第一个系列上添加站点 markLine（水平线 + 站名）
+      const markLine = idx === 0 ? {
+        silent: true,
+        symbol: 'none',
+        animation: false,
+        lineStyle: { color: 'rgba(97,112,136,0.25)', type: 'solid', width: 1 },
+        label: {
+          show: true,
+          position: 'insideStartTop' as const,
+          color: '#94a3b8',
+          fontSize: 10,
+          fontWeight: 'bold' as const,
+          fontFamily: '-apple-system,sans-serif',
+          distance: [6, 4],
+          formatter: (p: any) => p.name,
+        },
+        data: sortedStations.map(s => ({ yAxis: s.km, name: s.name })),
+      } : undefined;
 
       return {
         type: 'line',
@@ -118,6 +165,7 @@ function TrainDiagram({
         symbol: 'none',
         lineStyle: { color, width: 2 },
         emphasis: { lineStyle: { width: 3 }, focus: 'series' },
+        markLine,
         markPoint: pts.length > 0 ? {
           silent: true,
           symbol: 'none',
@@ -152,7 +200,7 @@ function TrainDiagram({
 
     return {
       backgroundColor: 'transparent',
-      grid: { left: 52, right: 24, top: 12, bottom: 28 },
+      grid: { left: 28, right: 24, top: 12, bottom: 28 },
       xAxis: {
         type: 'value',
         min: 0,
@@ -177,11 +225,8 @@ function TrainDiagram({
         axisLabel: {
           color: '#617088',
           fontSize: 9,
-          fontFamily: '-apple-system,sans-serif',
-          formatter: (v: number) => {
-            const s = sortedStations.find((st) => Math.abs(st.km - v) < 0.01);
-            return s ? s.name : '';
-          },
+          fontFamily: 'JetBrains Mono,monospace',
+          formatter: (v: number) => `${v.toFixed(1)} km`,
         },
         splitLine: {
           show: true,
@@ -239,6 +284,7 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
   const carMrkRef = useRef<L.CircleMarker[]>([]);
   const lineRef = useRef<L.Polyline | null>(null);
   const glowRef = useRef<L.Polyline | null>(null);
+  const fitDone = useRef(false);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -247,10 +293,12 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
     const tile = TILE_LAYERS[tileMode];
     tileLayerRef.current = L.tileLayer(tile.url, { maxZoom: 19, attribution: tile.attribution }).addTo(map);
     mapRef.current = map;
-    const fix = () => map.invalidateSize();
+    const fix = () => { map.invalidateSize(); };
     setTimeout(fix, 100); setTimeout(fix, 400);
     window.addEventListener('resize', fix);
-    return () => { window.removeEventListener('resize', fix); tileLayerRef.current?.remove(); map.remove(); mapRef.current = null; };
+    const ro = new ResizeObserver(() => fix());
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => { window.removeEventListener('resize', fix); ro.disconnect(); tileLayerRef.current?.remove(); map.remove(); mapRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -278,6 +326,15 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
       m.on('mouseover',()=>m.setStyle({fillColor:'#00a8e8'})); m.on('mouseout',()=>m.setStyle({fillColor:'#060b11'}));
       stationMrkRef.current.push(m);
     });
+    // Auto-fit map bounds to cover all stations (delay ensures container has size)
+    if (!fitDone.current) {
+      const doFit = () => {
+        const bounds = L.latLngBounds(sorted.map(s => [s.latitude, s.longitude]));
+        map.fitBounds(bounds, { padding: [30, 30] });
+        fitDone.current = true;
+      };
+      setTimeout(doFit, 300);
+    }
   }, [stations]);
 
   useEffect(() => {
@@ -299,9 +356,9 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
         weight: 2,
       }).addTo(map);
       hm.bindTooltip(
-        `<div style="font-weight:700;font-size:12px;color:#e2e8f0;">${t.trainName} 头车</div>
-         <div style="font-size:10px;color:#94a3b8;">${isMoving ? Math.round(t.speed)+' km/h' : STATUS_LABEL[t.status]}</div>
-         <div style="font-size:9px;color:#617088;">${fmtNum(t.positionMeters)} m · ${t.carCount??6}节</div>`,
+        `<div style="font-weight:700;font-size:12px;color:#e2e8f0;">${t.trainNumber||t.trainName} <span style="font-size:9px;color:${t.direction==='DOWN'?'#f7b731':'#06d6a0'}">${t.direction==='DOWN'?'↓':'↑'}</span></div>
+         <div style="font-size:10px;color:#94a3b8;">${isMoving ? Math.round(t.speed)+' km/h' : STATUS_LABEL[t.status]} · ${t.routePattern==='SHORT_S'?'南段':t.routePattern==='SHORT_N'?'北段':'全程'}</div>
+         <div style="font-size:9px;color:#617088;">${fmtNum(t.positionMeters)} m · ${t.carCount??6}节${t.turnbackCount>0?' · 折返'+t.turnbackCount+'次':''}</div>`,
         { direction: 'top', offset: [0, -12], className: 'd-tooltip' }
       );
       trainMrkRef.current.push(hm);
@@ -337,7 +394,7 @@ export default function Dispatch() {
   const [error, setError] = useState('');
   const [tileMode, setTileMode] = useState<TileMode>('dark');
   const [speedIndex, setSpeedIndex] = useState(0);
-  const [rightTab, setRightTab] = useState<'trains'|'arrivals'|'commands'>('trains');
+  const [rightTab, setRightTab] = useState<'trains'|'arrivals'|'commands'|'flow'|'deviation'>('trains');
   const autoRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -381,11 +438,20 @@ export default function Dispatch() {
     finally { setLoading(false); }
   }, [refresh]);
 
+  const doStrategy = useCallback(async (trainId: string, type: string, val: number = 0) => {
+    try { await applyStrategy(trainId, type, val); await refresh(); } catch (e: any) { setError(e.message); }
+  }, [refresh]);
+
   const trains = snapshot?.trains ?? [];
   const headways = snapshot?.headways ?? [];
   const commands = snapshot?.commands ?? [];
   const arrivals = snapshot?.stationArrivals ?? [];
+  const delayEvents = snapshot?.delayEvents ?? [];
+  const flow = snapshot?.passengerFlow ?? null;
+  const dispInfo = snapshot?.dispatchInfo ?? null;
   const history = snapshot?.positionHistory ?? [];
+  const plannedHistory = snapshot?.plannedDiagramPoints ?? [];
+  const planDeviations = snapshot?.planDeviations ?? [];
   const energy = snapshot?.totalEnergyKwh ?? 0;
 
   return (
@@ -420,6 +486,17 @@ export default function Dispatch() {
 
         {/* ════ Body ════ */}
         <div className="d-body">
+          {/* Flow + Dispatch info banner */}
+          {flow && (
+            <div className="d-info-bar">
+              <span className="d-info-chip" style={{'--c':'#06d6a0'} as React.CSSProperties}>{flow.period}</span>
+              <span className="d-info-chip" style={{'--c':'#fc5c65'} as React.CSSProperties}>最大断面 {flow.peakSectionFlow.toFixed(0)} p/h</span>
+              <span className="d-info-chip" style={{'--c':'#f7b731'} as React.CSSProperties}>推间 {flow.demandHeadway.toFixed(0)}s</span>
+              <span className="d-info-chip" style={{'--c':dispInfo?.fleetSufficient?'#06d6a0':'#fc5c65'} as React.CSSProperties}>上线 {dispInfo?.onlineTrains}/{dispInfo?.maxAvailableTrains}列</span>
+              <span className="d-info-chip" style={{'--c':dispInfo?.dispatchMode==='NORMAL'?'#06d6a0':'#fc5c65'} as React.CSSProperties}>{dispInfo?.dispatchMode==='NORMAL'?'正常运营':dispInfo?.dispatchMode==='COMPRESS'?'压缩间隔':dispInfo?.dispatchMode==='STRETCH'?'扩大间隔':'紧急'}</span>
+              {delayEvents.length>0 && <span className="d-info-chip" style={{'--c':'#fc5c65'} as React.CSSProperties}>⚠ 晚点 {delayEvents.length}</span>}
+            </div>
+          )}
           {/* Left Column */}
           <div className="d-left">
             {/* Map */}
@@ -439,7 +516,7 @@ export default function Dispatch() {
                 <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#f7b731'}}/>运行图 (Train Diagram)</span>
                 <span className="d-panel-badge">{history.length} 采样点</span>
               </div>
-              <TrainDiagram history={history} stations={stations} simTime={snapshot?.simulationTime ?? 0}/>
+              <TrainDiagram history={history} stations={stations} simTime={snapshot?.simulationTime ?? 0} plannedPoints={plannedHistory}/>
             </div>
           </div>
 
@@ -451,6 +528,8 @@ export default function Dispatch() {
                 { id: 'trains', label: '列车状态', dot: '#06d6a0' },
                 { id: 'arrivals', label: '到站时刻', dot: '#45aaf2' },
                 { id: 'commands', label: '调度指令', dot: '#fc5c65' },
+                { id: 'flow', label: '断面客流', dot: '#f7b731' },
+                { id: 'deviation', label: '偏差', dot: '#9b59b6' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -469,10 +548,9 @@ export default function Dispatch() {
                 <div className="d-panel">
                   <div className="d-tbl-scroll">
                     <table className="d-tbl">
-                      <thead><tr><th>车次</th><th>编组</th><th>位置</th><th>速度</th><th>状态</th><th>下站</th></tr></thead>
+                      <thead><tr><th>车次</th><th>方向</th><th>位置</th><th>速度</th><th>状态</th><th>交路</th><th>折返</th><th>策略</th></tr></thead>
                       <tbody>
-                        {trains.length===0?<tr><td colSpan={6} className="d-empty">点击「启动」</td></tr>:trains.map(t=><tr key={t.trainId}><td><span className="d-train-id">{t.trainName}</span></td><td className="d-mono">{t.carCount??6}节</td><td className="d-mono">{fmtNum(t.positionMeters)}</td><td className="d-mono">{t.speed>0?t.speed.toFixed(0)+' km/h':'—'}</td><td><span className="d-status-dot" style={{background:STATUS_COLOR[t.status]}}/>{STATUS_LABEL[t.status]}</td><td className="d-mono">{t.nextStationKm.toFixed(1)}</td></tr>)}
-                      </tbody>
+                        {trains.length===0?<tr><td colSpan={8} className="d-empty">点击「启动」</td></tr>:trains.map(t=><tr key={t.trainId}><td><span className="d-train-id">{t.trainNumber||t.trainName}</span></td><td><span style={{color:t.direction==='DOWN'?'#f7b731':'#06d6a0',fontWeight:600,fontSize:10}}>{t.direction==='DOWN'?'↓下行':'↑上行'}</span></td><td className="d-mono">{fmtNum(t.positionMeters)}</td><td className="d-mono">{t.speed>0?t.speed.toFixed(0)+' km/h':'—'}</td><td><span className="d-status-dot" style={{background:STATUS_COLOR[t.status]}}/>{STATUS_LABEL[t.status]}{t.status==='DWELLING'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='TURNING_BACK'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='DEPOT_WAITING'&&t.plannedDepartureFromDepot>0?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{(t.plannedDepartureFromDepot-snapshot!.simulationTime).toFixed(0)}s</span>:null}</td><td style={{fontSize:10,color:'#94a3b8'}}>{t.routePattern==='SHORT_S'?'南段小交路':t.routePattern==='SHORT_N'?'北段小交路':'全程'}{t.skipNextStation?<span style={{color:'#fc5c65',marginLeft:4}}>甩站中</span>:null}{t.operationLevel!=='NORMAL'&&t.operationLevel?<span style={{color:'#ff9f43',marginLeft:4}}>{t.operationLevel==='EXPRESS'?'快车':t.operationLevel==='ENERGY_SAVE'?'节能':'慢行'}</span>:null}</td><td className="d-mono" style={{color:t.turnbackCount>0?'#f7b731':'#374151'}}>{t.turnbackCount>0?t.turnbackCount:'—'}</td><td style={{display:'flex',gap:2}}>{t.status!=='FINISHED'&&t.status!=='DEPOT_WAITING'&&<><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'SKIP_STATION')} title="甩站">⊘</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',1)} title="快车">⚡</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',0)} title="节能">♻</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'RESUME_NORMAL')} title="恢复">↺</button></>}</td></tr>)}</tbody>
                     </table>
                   </div>
                 </div>
@@ -481,9 +559,9 @@ export default function Dispatch() {
                   <div className="d-panel-head"><span className="d-panel-title"><span className="d-panel-dot" style={{background:'#f7b731'}}/>车头时距</span><span className="d-panel-badge">{headways.length}</span></div>
                   <div className="d-tbl-scroll d-tbl-scroll-sm">
                     <table className="d-tbl">
-                      <thead><tr><th>前车</th><th>后车</th><th>距离</th><th>时距</th><th>状态</th></tr></thead>
+                      <thead><tr><th>后车</th><th>前车</th><th>间距</th><th>安全距</th><th>时距</th><th>状态</th></tr></thead>
                       <tbody>
-                        {headways.length===0?<tr><td colSpan={5} className="d-empty">暂无</td></tr>:headways.map((h,i)=><tr key={i}><td><span className="d-train-id">{h.fromTrainId}</span></td><td><span className="d-train-id">{h.toTrainId}</span></td><td className="d-mono">{fmtNum(h.distanceMeters)}</td><td className="d-mono">{h.timeSeconds.toFixed(0)}</td><td><span className="d-h-badge" style={{'--c':h.status==='SAFE'?'#06d6a0':h.status==='WARNING'?'#f7b731':'#fc5c65','--bg':(h.status==='SAFE'?'#06d6a0':h.status==='WARNING'?'#f7b731':'#fc5c65')+'18'} as React.CSSProperties}>{h.status==='SAFE'?'正常':h.status==='WARNING'?'注意':'危险'}</span></td></tr>)}
+                        {headways.length===0?<tr><td colSpan={6} className="d-empty">暂无</td></tr>:headways.map((h,i)=><tr key={i}><td><span className="d-train-id">{h.fromTrainId}</span></td><td><span className="d-train-id">{h.toTrainId}</span></td><td className="d-mono">{fmtNum(h.distanceMeters)}</td><td className="d-mono">{h.safetyDistanceMeters>0?fmtNum(h.safetyDistanceMeters):'—'}</td><td className="d-mono">{h.timeSeconds.toFixed(0)}</td><td><span className="d-h-badge" style={{'--c':h.status==='SAFE'?'#06d6a0':h.status==='CAUTION'?'#f7b731':h.status==='WARNING'?'#ff9f43':'#fc5c65','--bg':(h.status==='SAFE'?'#06d6a0':h.status==='CAUTION'?'#f7b731':h.status==='WARNING'?'#ff9f43':'#fc5c65')+'18'} as React.CSSProperties}>{h.status==='SAFE'?'安全':h.status==='CAUTION'?'关注':h.status==='WARNING'?'警告':'危险'}</span></td></tr>)}
                       </tbody>
                     </table>
                   </div>
@@ -512,9 +590,140 @@ export default function Dispatch() {
               <div className="d-right-scroll d-right-scroll-flex">
                 <div className="d-panel d-panel-flex">
                   <div className="d-cmd-wrap">
-                    {commands.length===0?<div className="d-empty">暂无调度指令</div>:commands.map((c,i)=><div className="d-cmd" key={i}><span className="d-cmd-tag" style={{'--c':c.commandType==='DEPART'?'#06d6a0':c.commandType==='HOLD'?'#f7b731':c.commandType==='SLOW'?'#fc5c65':c.commandType==='ARRIVE'?'#45aaf2':'#9b59b6','--bg':(c.commandType==='DEPART'?'#06d6a0':c.commandType==='HOLD'?'#f7b731':c.commandType==='SLOW'?'#fc5c65':c.commandType==='ARRIVE'?'#45aaf2':'#9b59b6')+'14'} as React.CSSProperties}>{c.commandType==='DEPART'?'发车':c.commandType==='HOLD'?'等待':c.commandType==='SLOW'?'减速':c.commandType==='ARRIVE'?'到站':'终到'}</span><span className="d-cmd-train">{c.trainId}</span><span className="d-cmd-reason">{c.reason}</span></div>)}
+                    {commands.length===0 && delayEvents.length===0 ? <div className="d-empty">暂无调度指令</div> : (
+                      <>
+                      {commands.map((c,i)=><div className="d-cmd" key={'c'+i}><span className="d-cmd-tag" style={{'--c':c.commandType==='DEPART'?'#06d6a0':c.commandType==='HOLD'?'#f7b731':c.commandType==='SLOW'?'#ff9f43':c.commandType==='ARRIVE'?'#45aaf2':c.commandType==='SPEED_UP'?'#06d6a0':c.commandType==='EMERGENCY_BRAKE'?'#fc5c65':c.commandType==='TURN_BACK'?'#ff9f43':c.commandType==='SKIP_STATION'?'#00a8e8':c.commandType==='CHANGE_LEVEL'?'#9b59b6':c.commandType==='SHORT_TURN'?'#fc5c65':c.commandType==='RESUME_NORMAL'?'#06d6a0':'#9b59b6','--bg':(c.commandType==='DEPART'?'#06d6a0':c.commandType==='HOLD'?'#f7b731':c.commandType==='SLOW'?'#ff9f43':c.commandType==='ARRIVE'?'#45aaf2':c.commandType==='SPEED_UP'?'#06d6a0':c.commandType==='EMERGENCY_BRAKE'?'#fc5c65':c.commandType==='TURN_BACK'?'#ff9f43':c.commandType==='SKIP_STATION'?'#00a8e8':c.commandType==='CHANGE_LEVEL'?'#9b59b6':c.commandType==='SHORT_TURN'?'#fc5c65':c.commandType==='RESUME_NORMAL'?'#06d6a0':'#9b59b6')+'14'} as React.CSSProperties}>{c.commandType==='DEPART'?'发车':c.commandType==='HOLD'?'扣车':c.commandType==='SLOW'?'减速':c.commandType==='ARRIVE'?'到站':c.commandType==='SPEED_UP'?'赶点':c.commandType==='EMERGENCY_BRAKE'?'⚡急制':c.commandType==='TURN_BACK'?'⟲折返':c.commandType==='SKIP_STATION'?'⊘甩站':c.commandType==='CHANGE_LEVEL'?'⚡变等':c.commandType==='SHORT_TURN'?'↩短线折':c.commandType==='RESUME_NORMAL'?'↺恢复':'终到'}</span><span className="d-cmd-train">{c.trainId}</span><span className="d-cmd-reason">{c.reason}</span></div>)}
+                      {delayEvents.slice().reverse().slice(0, 10).map((e,i)=><div className="d-cmd d-cmd-delay" key={'e'+i}><span className="d-cmd-tag" style={{'--c':e.eventType==='PRIMARY_DELAY'?'#f7b731':e.eventType==='PROPAGATED'?'#fc5c65':'#06d6a0','--bg':(e.eventType==='PRIMARY_DELAY'?'#f7b731':e.eventType==='PROPAGATED'?'#fc5c65':'#06d6a0')+'14'} as React.CSSProperties}>{e.eventType==='PRIMARY_DELAY'?'初始晚点':e.eventType==='PROPAGATED'?'传播晚点':'已恢复'}</span><span className="d-cmd-train">{e.trainId}</span><span className="d-cmd-reason">+{e.delaySeconds.toFixed(0)}s {e.cause}{e.affectedTrainId?' → '+e.affectedTrainId:''} @{fmtTime(e.timeSeconds)}</span></div>)}
+                      </>
+                    )}
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Flow Tab — 断面客流 */}
+            {rightTab === 'flow' && flow && (
+              <div className="d-right-scroll">
+                <div className="d-panel" style={{ marginBottom: 8 }}>
+                  <div className="d-panel-head">
+                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#f7b731'}}/>最大断面客流</span>
+                    <span className="d-panel-badge">峰值 {flow.peakSectionFlow.toFixed(0)} p/h</span>
+                  </div>
+                  <div style={{padding: '10px 12px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11,color:'#cbd5e1'}}>
+                      最大压力断面位于站点 <b style={{color:'#fc5c65'}}>#{flow.peakSectionStationId}</b>
+                      <span style={{color:'#617088',fontSize:10}}>满载率目标 {(flow.targetLoadFactor*100).toFixed(0)}%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="d-panel">
+                  <div className="d-panel-head">
+                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#00a8e8'}}/>断面客流累加模型</span>
+                  </div>
+                  <div className="d-tbl-scroll" style={{maxHeight:400}}>
+                    <table className="d-tbl">
+                      <thead><tr><th>区间</th><th>上车</th><th>下车</th><th>断面客流</th><th>满载率</th></tr></thead>
+                      <tbody>
+                        {(flow.sectionFlows??[]).map((sf,i)=>{
+                          const fromName = stations.find(s=>s.id===sf.fromStationId)?.name ?? `站${sf.fromStationId}`;
+                          const toName = stations.find(s=>s.id===sf.toStationId)?.name ?? `站${sf.toStationId}`;
+                          const lf = sf.loadFactor;
+                          const barColor = lf>1.0?'#fc5c65':lf>0.8?'#f7b731':lf>0.5?'#45aaf2':'#06d6a0';
+                          const isPeak = sf.fromStationId === flow.peakSectionStationId;
+                          return <tr key={i} style={isPeak?{background:'rgba(252,92,101,0.06)'}:undefined}>
+                            <td style={{fontWeight:600,color:'#e2e8f0'}}>
+                              {fromName} → {toName}
+                              {isPeak && <span style={{fontSize:9,color:'#fc5c65',marginLeft:4}}>PEAK</span>}
+                            </td>
+                            <td className="d-mono" style={{color:'#06d6a0'}}>+{sf.boarding.toFixed(0)}</td>
+                            <td className="d-mono" style={{color:'#fc5c65'}}>-{sf.alighting.toFixed(0)}</td>
+                            <td className="d-mono" style={{fontWeight:700}}>
+                              <span style={{background:`linear-gradient(90deg,${barColor}22 0%,${barColor}66 ${Math.min(lf*100,100)}%,transparent ${Math.min(lf*100,100)}%)`,padding:'2px 6px',borderRadius:3}}>
+                                {sf.load.toFixed(0)}
+                              </span>
+                            </td>
+                            <td className="d-mono" style={{color:barColor,fontWeight:600}}>{(lf*100).toFixed(0)}%</td>
+                          </tr>;
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+            {/* Deviation Tab — 计划/实绩偏差分析 */}
+            {rightTab === 'deviation' && (
+              <div className="d-right-scroll">
+                <div className="d-panel" style={{ marginBottom: 8 }}>
+                  <div className="d-panel-head">
+                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#9b59b6'}}/>计划-实绩偏差</span>
+                    <span className="d-panel-badge">
+                      {planDeviations.filter(d=>Math.abs(d.arrivalDeviation)>30).length} 晚点
+                    </span>
+                  </div>
+                  <div style={{padding: '10px 12px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:12,fontSize:11,color:'#cbd5e1'}}>
+                      <span>Δ = 实绩 - 计划</span>
+                      <span style={{color:'#617088',fontSize:10}}>正值=晚点 / 负值=早点 / |偏差|&gt;60s=显著晚点</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="d-panel">
+                  <div className="d-panel-head">
+                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#00a8e8'}}/>到站/发车偏差明细</span>
+                  </div>
+                  <div className="d-tbl-scroll" style={{maxHeight:420}}>
+                    <table className="d-tbl">
+                      <thead><tr><th>车次</th><th>站台</th><th>计划到</th><th>实际到</th><th>Δ到</th><th>计划发</th><th>实际发</th><th>Δ发</th></tr></thead>
+                      <tbody>
+                        {planDeviations.length===0?<tr><td colSpan={8} className="d-empty">暂无偏差数据</td></tr>:
+                        planDeviations
+                          .sort((a,b)=>Math.abs(b.arrivalDeviation)-Math.abs(a.arrivalDeviation))
+                          .slice(0,30)
+                          .map((d,i)=>{
+                            const arrColor = Math.abs(d.arrivalDeviation)>60?'#fc5c65':d.arrivalDeviation>0?'#f7b731':'#06d6a0';
+                            const depColor = Math.abs(d.departureDeviation)>60?'#fc5c65':d.departureDeviation>0?'#f7b731':'#06d6a0';
+                            return <tr key={i}>
+                              <td><span className="d-train-id">{d.trainId}</span></td>
+                              <td style={{fontWeight:600}}>{d.stationName}</td>
+                              <td className="d-mono" style={{color:'#64748b'}}>{fmtTime(d.plannedArrivalSeconds)}</td>
+                              <td className="d-mono">{fmtTime(d.arrivalTimeSeconds)}</td>
+                              <td className="d-mono" style={{color:arrColor,fontWeight:600}}>{d.arrivalDeviation>0?'+':''}{d.arrivalDeviation.toFixed(0)}s</td>
+                              <td className="d-mono" style={{color:'#64748b'}}>{fmtTime(d.plannedDepartureSeconds)}</td>
+                              <td className="d-mono">{fmtTime(d.departureTimeSeconds)}</td>
+                              <td className="d-mono" style={{color:depColor,fontWeight:600}}>{d.departureDeviation>0?'+':''}{d.departureDeviation.toFixed(0)}s</td>
+                            </tr>;
+                          })
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* 汇总统计 */}
+                {planDeviations.length>0 && (()=>{
+                  const lateArr = planDeviations.filter(d=>d.arrivalDeviation>60);
+                  const earlyArr = planDeviations.filter(d=>d.arrivalDeviation<-15);
+                  const onTime = planDeviations.filter(d=>Math.abs(d.arrivalDeviation)<=60);
+                  const maxDelay = planDeviations.reduce((m,d)=>Math.max(m,d.arrivalDeviation),0);
+                  const avgDelay = planDeviations.reduce((s,d)=>s+Math.max(0,d.arrivalDeviation),0)/planDeviations.length;
+                  return <div className="d-panel" style={{marginTop:8}}>
+                    <div className="d-panel-head">
+                      <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#06d6a0'}}/>汇总统计</span>
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,padding:'8px 12px'}}>
+                      <div style={{textAlign:'center'}}><div className="d-mono" style={{fontSize:18,color:'#06d6a0'}}>{onTime.length}</div><div style={{fontSize:10,color:'#617088'}}>正点 (|Δ|≤60s)</div></div>
+                      <div style={{textAlign:'center'}}><div className="d-mono" style={{fontSize:18,color:'#f7b731'}}>{avgDelay.toFixed(0)}s</div><div style={{fontSize:10,color:'#617088'}}>平均晚点</div></div>
+                      <div style={{textAlign:'center'}}><div className="d-mono" style={{fontSize:18,color:'#fc5c65'}}>{maxDelay.toFixed(0)}s</div><div style={{fontSize:10,color:'#617088'}}>最大晚点</div></div>
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,padding:'0 12px 8px'}}>
+                      <span style={{fontSize:10,color:'#617088'}}>显著晚点 (&gt;60s): {lateArr.length}</span>
+                      <span style={{fontSize:10,color:'#617088'}}>早点 (&lt;-15s): {earlyArr.length}</span>
+                    </div>
+                  </div>;
+                })()}
               </div>
             )}
           </div>
@@ -530,7 +739,7 @@ export default function Dispatch() {
 
 const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-.d-root{height:100vh;display:flex;flex-direction:column;background:#060b11;overflow:hidden}
+.d-root{height:100%;min-height:100%;display:flex;flex-direction:column;background:#060b11;overflow:hidden}
 .d-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:48px;flex-shrink:0;gap:10px;background:rgba(13,21,32,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #152433;z-index:20}
 .d-tb-left{display:flex;align-items:center;gap:8px;min-width:0}
 .d-tb-back{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;color:#617088;transition:all .15s;flex-shrink:0}
@@ -566,12 +775,14 @@ const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+
 .d-btn-stop:hover{background:#e55058}
 
 /* ── Body ── */
-.d-body{display:flex;flex:1;padding:8px 12px;overflow:hidden;min-height:0;gap:10px}
-@media(max-width:1200px){.d-body{flex-direction:column}}
+.d-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:auto minmax(0,1fr);flex:1;padding:6px 12px 8px;overflow:hidden;min-height:0;gap:6px 10px;align-items:stretch}
+.d-info-bar{grid-column:1/-1;grid-row:1;display:flex;align-items:center;gap:6px;padding:4px 0;width:100%;flex-shrink:0;flex-wrap:wrap}
+.d-info-chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);border:1px solid color-mix(in srgb,var(--c) 25%,transparent);white-space:nowrap}
+@media(max-width:1200px){.d-body{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto;overflow:auto}}
 
 /* ── Left ── */
-.d-left{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
-@media(max-width:1200px){.d-left{min-height:60vh}}
+.d-left{grid-column:1;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px}
+@media(max-width:1200px){.d-left{grid-column:1;min-height:60vh}}
 .d-map-panel{flex:1;min-height:200px;display:flex;flex-direction:column;background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e}
 .d-map-body{flex:1;min-height:150px;position:relative}
 .d-map-inner{width:100%;height:100%;position:absolute;top:0;left:0}
@@ -593,8 +804,8 @@ const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+
 .d-panel-badge{font-size:10px;color:#617088;font-weight:500}
 
 /* ── Right ── */
-.d-right{width:400px;flex-shrink:0;display:flex;flex-direction:column;gap:0;min-height:0;overflow:hidden}
-@media(max-width:1200px){.d-right{width:100%;flex:1}}
+.d-right{grid-column:2;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+@media(max-width:1200px){.d-right{grid-column:1;width:100%;flex:initial}}
 
 /* ── Tab Bar ── */
 .d-tab-bar{display:flex;gap:2px;margin-bottom:8px;flex-shrink:0}
@@ -632,6 +843,10 @@ const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+
 .d-cmd-tag{padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;color:var(--c);background:var(--bg);white-space:nowrap}
 .d-cmd-train{font-weight:700;color:#e2e8f0;font-family:'JetBrains Mono',monospace;font-size:10px;min-width:24px}
 .d-cmd-reason{color:#94a3b8;flex:1;font-size:10px}
+
+/* ── Strategy action buttons ── */
+.d-act-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:18px;border:1px solid #1c2a3e;border-radius:3px;background:transparent;color:#617088;cursor:pointer;font-size:10px;padding:0;transition:all .12s;line-height:1}
+.d-act-btn:hover{background:#182537;color:#00a8e8;border-color:#00a8e8}
 
 /* ── Leaflet overrides ── */
 .leaflet-container{background:#060b11!important}

@@ -43,3 +43,10 @@ export async function getDispatchPlan(): Promise<string> {
 export async function getLineMap(): Promise<StationGeo[]> {
   return request<StationGeo[]>('/dispatch/line-map');
 }
+
+export async function applyStrategy(trainId: string, strategyType: string, targetValue: number = 0): Promise<string> {
+  return request<string>('/dispatch/strategy', {
+    method: 'POST',
+    body: JSON.stringify({ trainId, strategyType, targetValue }),
+  });
+}

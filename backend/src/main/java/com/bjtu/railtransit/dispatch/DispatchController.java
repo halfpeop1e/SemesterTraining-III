@@ -2,6 +2,7 @@ package com.bjtu.railtransit.dispatch;
 
 import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.domain.dto.SimulationRequest;
+import com.bjtu.railtransit.domain.dto.StrategyRequest;
 import com.bjtu.railtransit.domain.model.DispatchPlan;
 import com.bjtu.railtransit.domain.model.SimulationSnapshot;
 import com.bjtu.railtransit.domain.model.StationGeo;
@@ -60,5 +61,14 @@ public class DispatchController {
     public ApiResponse<List<StationGeo>> getLineMap() {
         List<StationGeo> geoList = lineDataService.getStationGeoList();
         return ApiResponse.ok("line map", geoList);
+    }
+
+    @PostMapping("/dispatch/strategy")
+    public ApiResponse<String> applyStrategy(@RequestBody StrategyRequest request) {
+        if (!simulationService.isRunning()) {
+            return ApiResponse.ok("simulation not running", null);
+        }
+        simulationService.applyStrategy(request.getTrainId(), request.getStrategyType(), request.getTargetValue());
+        return ApiResponse.ok("strategy applied", "Strategy " + request.getStrategyType() + " applied to " + request.getTrainId());
     }
 }
