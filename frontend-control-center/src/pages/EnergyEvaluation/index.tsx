@@ -69,7 +69,7 @@ function Metric({
   color: string;
 }) {
   return (
-    <Card bordered={false} className="rounded-xl!">
+    <Card variant="borderless" className="rounded-xl!">
       <Statistic
         title={
           <span className="text-xs text-slate-400 font-medium">{label}</span>
@@ -203,7 +203,7 @@ export default function EnergyEvaluation() {
             ))}
           </Row>
 
-          <Card title="供电风险评估" bordered={false} className="rounded-xl!">
+          <Card title="供电风险评估" variant="borderless" className="rounded-xl!">
             <div className="flex items-center gap-5">
               <div
                 className="w-[72px] h-[72px] rounded-full flex items-center justify-center text-sm font-bold"
@@ -248,7 +248,7 @@ export default function EnergyEvaluation() {
           </Card>
         </>
       ) : (
-        <Card bordered={false} className="rounded-xl!">
+        <Card variant="borderless" className="rounded-xl!">
           <Empty description="点击「运行评估」开始分析" />
         </Card>
       )}
@@ -259,7 +259,7 @@ export default function EnergyEvaluation() {
     <div className="space-y-4">
       {report ? (
         <>
-          <Card title="停站误差分析" bordered={false} className="rounded-xl!">
+          <Card title="停站误差分析" variant="borderless" className="rounded-xl!">
             <Table
               dataSource={(report.stopErrors || []).map((e, i) => ({
                 ...e,
@@ -319,7 +319,7 @@ export default function EnergyEvaluation() {
           </Card>
 
           {report.punctuality && (
-            <Card title="准点率评估" bordered={false} className="rounded-xl!">
+            <Card title="准点率评估" variant="borderless" className="rounded-xl!">
               <Row gutter={[16, 16]}>
                 {[
                   [
@@ -369,7 +369,7 @@ export default function EnergyEvaluation() {
           )}
 
           {report.comfort && (
-            <Card title="舒适性评估" bordered={false} className="rounded-xl!">
+            <Card title="舒适性评估" variant="borderless" className="rounded-xl!">
               <Row gutter={[16, 16]}>
                 {[
                   [
@@ -416,7 +416,7 @@ export default function EnergyEvaluation() {
             </Card>
           )}
 
-          <Card title="安全事件日志" bordered={false} className="rounded-xl!">
+          <Card title="安全事件日志" variant="borderless" className="rounded-xl!">
             {(report.safetyEvents || []).length > 0 ? (
               <Table
                 dataSource={(report.safetyEvents || []).map((e, i) => ({
@@ -473,7 +473,7 @@ export default function EnergyEvaluation() {
           </Card>
         </>
       ) : (
-        <Card bordered={false} className="rounded-xl!">
+        <Card variant="borderless" className="rounded-xl!">
           <Empty description="点击「运行评估」开始分析" />
         </Card>
       )}
@@ -483,7 +483,7 @@ export default function EnergyEvaluation() {
   const reportTab = (
     <div className="space-y-4">
       {report ? (
-        <Card bordered={false} className="rounded-xl!">
+        <Card variant="borderless" className="rounded-xl!">
           <div className="space-y-6">
             <h4 className="text-[15px] font-semibold text-slate-200 m-0">
               评估概要
@@ -583,7 +583,7 @@ export default function EnergyEvaluation() {
           </div>
         </Card>
       ) : (
-        <Card bordered={false} className="rounded-xl!">
+        <Card variant="borderless" className="rounded-xl!">
           <Empty description="点击「运行评估」开始分析" />
         </Card>
       )}
