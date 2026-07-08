@@ -98,6 +98,8 @@ export interface SimulationSnapshot {
   plannedDiagramPoints: TrainPositionPoint[];
   /** 计划偏差 */
   planDeviations: StationArrival[];
+  /** 能源优化信息 */
+  energyOptimization?: EnergyOptimizationInfo;
 }
 
 export interface DelayEvent {
@@ -144,6 +146,20 @@ export interface DispatchInfo {
   requiredTrains: number;
   fleetSufficient: boolean;
   dispatchMode: string;
+}
+
+/** 能源优化摘要 (接入调度系统) */
+export interface EnergyOptimizationInfo {
+  currentPeakKw: number;
+  powerSupplyThresholdKw: number;
+  peakRiskLevel: 'safe' | 'warning' | 'danger';
+  tractionCount: number;
+  maxTractionCount: number;
+  totalRecoverableEnergyKw: number;
+  regenCoordinationCount: number;
+  coastingOpportunityCount: number;
+  recommendations: string[];
+  currentLoadFactor: number;
 }
 
 export interface StationGeo {
