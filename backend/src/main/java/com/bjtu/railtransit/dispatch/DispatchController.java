@@ -4,6 +4,7 @@ import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.domain.dto.SimulationRequest;
 import com.bjtu.railtransit.domain.dto.StrategyRequest;
 import com.bjtu.railtransit.domain.model.DispatchPlan;
+import com.bjtu.railtransit.domain.model.SimulationLog;
 import com.bjtu.railtransit.domain.model.SimulationSnapshot;
 import com.bjtu.railtransit.domain.model.StationGeo;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,7 +30,8 @@ public class DispatchController {
     @PostMapping("/simulations/start")
     public ApiResponse<String> startSimulation(@RequestBody SimulationRequest request) {
         simulationService.startSimulation(request.getSimulationDuration());
-        return ApiResponse.ok("simulation started", "Simulation started with duration " + request.getSimulationDuration() + "s");
+        return ApiResponse.ok("simulation started",
+                "Simulation started with duration " + request.getSimulationDuration() + "s");
     }
 
     @PostMapping("/simulations/step")
@@ -75,6 +77,13 @@ public class DispatchController {
             return ApiResponse.ok("simulation not running", null);
         }
         simulationService.applyStrategy(request.getTrainId(), request.getStrategyType(), request.getTargetValue());
-        return ApiResponse.ok("strategy applied", "Strategy " + request.getStrategyType() + " applied to " + request.getTrainId());
+        return ApiResponse.ok("strategy applied",
+                "Strategy " + request.getStrategyType() + " applied to " + request.getTrainId());
+    }
+
+    @GetMapping("/simulations/logs")
+    public ApiResponse<List<SimulationLog>> getSimulationLogs() {
+        List<SimulationLog> logs = simulationService.getSimulationLogs();
+        return ApiResponse.ok("simulation logs", logs);
     }
 }

@@ -357,7 +357,7 @@ public class SimulationSnapshot {
     }
 
     /**
-     * 能源优化摘要信息 (供前端能耗看板展示)
+     * 能源优化摘要信息 (供前端能耗看板实时展示)
      */
     public static class EnergyOptimizationInfo {
         private double currentPeakKw;
@@ -370,6 +370,13 @@ public class SimulationSnapshot {
         private int coastingOpportunityCount;
         private List<String> recommendations = new ArrayList<>();
         private double currentLoadFactor;
+        // ── 实时累计能耗 ──
+        private double totalTractionEnergyKwh;   // 累计牵引能耗 kWh
+        private double totalRegenEnergyKwh;      // 累计再生制动回收 kWh
+        private double netEnergyKwh;             // 净能耗 kWh
+        private double simulationTimeSeconds;    // 当前仿真时间(s)
+        private double auxiliaryEnergyKwh;       // 累计辅助能耗(空调/照明) kWh
+        private double cruisingEnergyKwh;        // 累计巡航能耗 kWh
 
         public double getCurrentPeakKw() { return currentPeakKw; }
         public void setCurrentPeakKw(double v) { this.currentPeakKw = v; }
@@ -391,5 +398,19 @@ public class SimulationSnapshot {
         public void setRecommendations(List<String> v) { this.recommendations = v; }
         public double getCurrentLoadFactor() { return currentLoadFactor; }
         public void setCurrentLoadFactor(double v) { this.currentLoadFactor = v; }
+
+        public double getTotalTractionEnergyKwh() { return totalTractionEnergyKwh; }
+        public void setTotalTractionEnergyKwh(double v) { this.totalTractionEnergyKwh = v; }
+        public double getTotalRegenEnergyKwh() { return totalRegenEnergyKwh; }
+        public void setTotalRegenEnergyKwh(double v) { this.totalRegenEnergyKwh = v; }
+        public double getNetEnergyKwh() { return netEnergyKwh; }
+        public void setNetEnergyKwh(double v) { this.netEnergyKwh = v; }
+        public double getSimulationTimeSeconds() { return simulationTimeSeconds; }
+        public void setSimulationTimeSeconds(double v) { this.simulationTimeSeconds = v; }
+
+        public double getAuxiliaryEnergyKwh() { return auxiliaryEnergyKwh; }
+        public void setAuxiliaryEnergyKwh(double v) { this.auxiliaryEnergyKwh = v; }
+        public double getCruisingEnergyKwh() { return cruisingEnergyKwh; }
+        public void setCruisingEnergyKwh(double v) { this.cruisingEnergyKwh = v; }
     }
 }

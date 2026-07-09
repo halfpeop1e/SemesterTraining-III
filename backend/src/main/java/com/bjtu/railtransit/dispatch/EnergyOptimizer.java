@@ -1,6 +1,7 @@
 package com.bjtu.railtransit.dispatch;
 
 import com.bjtu.railtransit.domain.model.*;
+import com.bjtu.railtransit.energy.TractionPhysics;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -28,6 +29,12 @@ import java.util.stream.Collectors;
  */
 @Service
 public class EnergyOptimizer {
+
+    private final TractionPhysics physics;
+
+    public EnergyOptimizer(TractionPhysics physics) {
+        this.physics = physics;
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // 错峰启动参数
@@ -361,18 +368,19 @@ public class EnergyOptimizer {
         return result;
     }
 
-    /** 实时峰值功率估算 (简化: 基于加速度与速度) */
+    /** 实时峰值功率估算 (基于 TB/T 1407.2 物理模型: 加速+巡航均计入) */
     private double computeInstantPeakPower(Map<String, TrainState> trains) {
         double totalPowerKw = 0;
         for (TrainState t : trains.values()) {
             if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus())) continue;
-            // 牵引/加速状态才计入峰值
-            if (t.getAcceleration() > 0 && t.getSpeed() > 0) {
-                double massKg = t.getCarCount() * 35000.0;
-                double forceN = massKg * (t.getAcceleration() / 3.6) + 2000.0; // N
-                double speedMs = t.getSpeed() / 3.6;
-                double powerKw = (forceN * speedMs) / (0.85 * 1000.0); // 牵引效率 85%
-                totalPowerKw += powerKw;
+            if (t.getSpeed() <= 0) continue;
+
+            if (t.getAcceleration() > 0.1) {
+                // 加速工况: 惯性力 + Davis阻力 + 坡道阻力
+                totalPowerKw += physics.tractionPowerKw(t);
+            } else if (t.getSpeed() > 5) {
+                // 巡航工况: 仅克服阻力
+                totalPowerKw += physics.cruisingPowerKw(t);
             }
         }
         return totalPowerKw;

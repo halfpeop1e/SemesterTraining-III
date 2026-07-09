@@ -1,6 +1,7 @@
 package com.bjtu.railtransit.dispatch;
 
 import com.bjtu.railtransit.domain.model.*;
+import com.bjtu.railtransit.energy.TractionPhysics;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -10,18 +11,18 @@ import java.util.stream.Collectors;
  * 多列车协同仿真引擎 —— 七状态完整状态机 + ATP/ATO/ATS 多系统协同。
  *
  * 架构层次:
- *   Layer 1: ScheduleManager  ─ 时刻表管理 (ATS)
- *   Layer 2: SafetyEnforcer    ─ 安全间隔 + 紧急制动 (ATP)
- *   Layer 3: TrainController   ─ 列车运行状态机 + 运动学 (ATO)
- *   Layer 4: CommandExecutor   ─ 调度指令执行
- *   Layer 5: Recorder          ─ 事件记录与快照
+ * Layer 1: ScheduleManager ─ 时刻表管理 (ATS)
+ * Layer 2: SafetyEnforcer ─ 安全间隔 + 紧急制动 (ATP)
+ * Layer 3: TrainController ─ 列车运行状态机 + 运动学 (ATO)
+ * Layer 4: CommandExecutor ─ 调度指令执行
+ * Layer 5: Recorder ─ 事件记录与快照
  *
  * 状态转移:
- *   DEPOT_WAITING ─(发车时刻到)→ DEPARTING ─(v>0)→ ACCELERATING ─(v≈target)→ CRUISING
- *       ↑                                                                    ↓
- *       │                                                        (接近下站)→ BRAKING
- *       │                                                                    ↓
- *       └──────────────────(到站,停站完成)── DWELLING ←──(v=0, 到站)─────────┘
+ * DEPOT_WAITING ─(发车时刻到)→ DEPARTING ─(v>0)→ ACCELERATING ─(v≈target)→ CRUISING
+ * ↑ ↓
+ * │ (接近下站)→ BRAKING
+ * │ ↓
+ * └──────────────────(到站,停站完成)── DWELLING ←──(v=0, 到站)─────────┘
  *
  * 所有时间单位: 仿真秒 (simulation seconds)
  * 所有距离单位: 米 (meters)
@@ -32,6 +33,7 @@ public class SimulationService {
     private final DispatchEngine dispatchEngine;
     private final LineDataService lineDataService;
     private final EnergyOptimizer energyOptimizer;
+    private final TractionPhysics physics;
 
     private boolean simulationRunning = false;
     private double simulationTimeSeconds = 0;
@@ -51,18 +53,28 @@ public class SimulationService {
     private double lastSampleTime = -10;
     private final Map<String, List<SimulationSnapshot.StationArrival>> stationArrivalMap = new LinkedHashMap<>();
     private double totalEnergyKwh = 0;
+    private double totalTractionEnergyKwh = 0; // 累计牵引能耗 kWh
+    private double totalRegenEnergyKwh = 0; // 累计再生制动回收 kWh
+    private double totalAuxEnergyKwh = 0; // 累计辅助能耗 kWh
+    private double totalCruisingEnergyKwh = 0; // 累计巡航能耗 kWh
+
+    // ── 仿真日志采集（供能源评估等模块使用）──
+    private final List<SimulationLog> simulationLogs = new ArrayList<>();
+
+    public List<SimulationLog> getSimulationLogs() {
+        return new ArrayList<>(simulationLogs);
+    }
 
     // ── 物理常量 ──
-    private static final double ACCEL_KMH_PER_S = 3.6; // 起动加速度 km/h/s (≈1.0 m/s²)
-    private static final double BRAKE_KMH_PER_S  = 3.6; // 常用制动减速度 km/h/s (≈1.0 m/s²)
     private static final double EBRAKE_KMH_PER_S = 4.68; // 紧急制动 km/h/s (≈1.3 m/s²)
-    private static final double CRUISE_SPEED     = 70.0; // 默认巡航速度 km/h
+    private static final double CRUISE_SPEED = 70.0; // 默认巡航速度 km/h
 
     public SimulationService(LineDataService lineDataService, DispatchEngine dispatchEngine,
-                              EnergyOptimizer energyOptimizer) {
+            EnergyOptimizer energyOptimizer, TractionPhysics physics) {
         this.lineDataService = lineDataService;
         this.dispatchEngine = dispatchEngine;
         this.energyOptimizer = energyOptimizer;
+        this.physics = physics;
     }
 
     // ================================================================
@@ -85,6 +97,11 @@ public class SimulationService {
         positionHistory.clear();
         stationArrivalMap.clear();
         totalEnergyKwh = 0;
+        totalTractionEnergyKwh = 0;
+        totalRegenEnergyKwh = 0;
+        totalAuxEnergyKwh = 0;
+        totalCruisingEnergyKwh = 0;
+        simulationLogs.clear();
         lastSampleTime = -10;
 
         lineProfile = lineDataService.getLineProfile();
@@ -98,7 +115,6 @@ public class SimulationService {
         dispatchEngine.generateTimetable(lineProfile, trainCount, 0);
 
         List<LineProfile.Station> stations = lineProfile.getStations();
-        int stationCount = stations.size();
 
         // ── 交路分配: 大部分全程, 1/4 用南段小交路增加多样性 ──
         RoutePattern fullRoute = RoutePattern.fullRoute();
@@ -119,7 +135,8 @@ public class SimulationService {
             // ── 能源感知: 根据满载率自动选择运行等级 ──
             String opLevel = OperationLevel.NORMAL;
             PassengerFlowModel.TimePeriod period = dispatchEngine.getFlowModel().getCurrentPeriod(0);
-            if (period == PassengerFlowModel.TimePeriod.EARLY_MORNING || period == PassengerFlowModel.TimePeriod.NIGHT) {
+            if (period == PassengerFlowModel.TimePeriod.EARLY_MORNING
+                    || period == PassengerFlowModel.TimePeriod.NIGHT) {
                 opLevel = OperationLevel.ENERGY_SAVE;
             }
             train.setOperationLevel(opLevel);
@@ -181,7 +198,8 @@ public class SimulationService {
         int stationCount = stations.size();
 
         for (int step = 0; step < steps; step++) {
-            if (!simulationRunning) return;
+            if (!simulationRunning)
+                return;
             simulationTimeSeconds += 1;
 
             // ═══ Layer 1: ATS ── 时刻表检查 + 发车控制 ═══
@@ -212,7 +230,8 @@ public class SimulationService {
 
     private void atsCheckDepartures(List<LineProfile.Station> stations) {
         for (TrainState train : trains.values()) {
-            if (!"DEPOT_WAITING".equals(train.getStatus())) continue;
+            if (!"DEPOT_WAITING".equals(train.getStatus()))
+                continue;
             String tid = train.getTrainId();
 
             // HOLD 指令覆盖发车
@@ -247,11 +266,13 @@ public class SimulationService {
                 SimulationSnapshot.TrainCommand departCmd = new SimulationSnapshot.TrainCommand();
                 departCmd.setTrainId(tid);
                 departCmd.setCommandType("DEPART");
-                departCmd.setReason(String.format("计划发车时刻 %s 到达 (车次 %s, 上行)", formatTime(simulationTimeSeconds), train.getTrainNumber()));
+                departCmd.setReason(String.format("计划发车时刻 %s 到达 (车次 %s, 上行)", formatTime(simulationTimeSeconds),
+                        train.getTrainNumber()));
                 commandLog.add(departCmd);
 
                 double delay = simulationTimeSeconds - train.getPlannedDepartureFromDepot();
-                if (delay > 0) train.setDelaySeconds(delay);
+                if (delay > 0)
+                    train.setDelaySeconds(delay);
             }
         }
     }
@@ -268,7 +289,8 @@ public class SimulationService {
             TrainState leading = active.get(i + 1);
 
             // 跳过站停/等待列车(它们不构成威胁)
-            if ("DWELLING".equals(following.getStatus()) || "DEPOT_WAITING".equals(following.getStatus())) continue;
+            if ("DWELLING".equals(following.getStatus()) || "DEPOT_WAITING".equals(following.getStatus()))
+                continue;
 
             // 计算移动授权 (CBTC Movement Authority)
             double ma = dispatchEngine.calcMovementAuthority(leading, following);
@@ -332,7 +354,8 @@ public class SimulationService {
         String status = train.getStatus();
         String tid = train.getTrainId();
 
-        if ("FINISHED".equals(status)) return;
+        if ("FINISHED".equals(status))
+            return;
 
         // ── DEPOT_WAITING: 等待 ATS 发车指令 ──
         if ("DEPOT_WAITING".equals(status)) {
@@ -488,7 +511,6 @@ public class SimulationService {
             train.setDirection(wasUp ? "DOWN" : "UP");
             train.setTurnbackCount(train.getTurnbackCount() + 1);
 
-            RoutePattern rp = getRoutePattern(train);
             int currentStationIdx = train.getCurrentStationIndex();
             int nextIdx;
 
@@ -552,7 +574,7 @@ public class SimulationService {
         // ── 根据运行等级获取参数 ──
         OperationLevel opLevel = getOperationLevel(train);
         double cruiseSpeed = opLevel.getCruiseSpeedKmh();
-        double accelKmhPerS = opLevel.getAccelMs2() * 3.6;  // 转换为 km/h/s
+        double accelKmhPerS = opLevel.getAccelMs2() * 3.6; // 转换为 km/h/s
         double decelMs2 = opLevel.getDecelMs2();
 
         // ── 赶点区间加速: 检查活跃SPEED_UP指令的恢复等级 ──
@@ -560,7 +582,8 @@ public class SimulationService {
         if (speedCmd != null && "SPEED_UP".equals(speedCmd.getCommandType()) && speedCmd.getTargetValue() > 0) {
             int recoverLevel = Math.min((int) speedCmd.getTargetValue(), DispatchEngine.RECOVERY_CRITICAL);
             double boost = DispatchEngine.RECOVERY_SPEED_BOOST[recoverLevel];
-            if (boost > 0) cruiseSpeed += boost;
+            if (boost > 0)
+                cruiseSpeed += boost;
         }
 
         // 紧急制动优先
@@ -686,7 +709,8 @@ public class SimulationService {
         String tid = train.getTrainId();
         SimulationSnapshot.TrainCommand speedUpCmd = activeCommands.get(tid);
         if (speedUpCmd != null && "SPEED_UP".equals(speedUpCmd.getCommandType())) {
-            int recoverLevel = Math.min(Math.max((int) speedUpCmd.getTargetValue(), 0), DispatchEngine.RECOVERY_CRITICAL);
+            int recoverLevel = Math.min(Math.max((int) speedUpCmd.getTargetValue(), 0),
+                    DispatchEngine.RECOVERY_CRITICAL);
             double dwellCut = DispatchEngine.RECOVERY_DWELL_CUTS[recoverLevel];
             plannedDwell = Math.max(DispatchEngine.DWELL_MIN, plannedDwell - dwellCut);
             // 指令保持活跃 让区间加速继续在运动学中生效
@@ -742,8 +766,10 @@ public class SimulationService {
     // ── 到站检测 (双向感知) ──
     private void checkStationArrival(TrainState train, List<LineProfile.Station> stations, int stationCount) {
         int nextIdx = train.getNextStationIndex();
-        if (nextIdx >= stationCount || nextIdx < 0) return;
-        if ("DWELLING".equals(train.getStatus()) || "DEPOT_WAITING".equals(train.getStatus())) return;
+        if (nextIdx >= stationCount || nextIdx < 0)
+            return;
+        if ("DWELLING".equals(train.getStatus()) || "DEPOT_WAITING".equals(train.getStatus()))
+            return;
 
         double posKm = train.getPositionMeters() / 1000.0;
         double stationKm = stations.get(nextIdx).getKm();
@@ -805,7 +831,8 @@ public class SimulationService {
 
     private void energyOptimizeStep() {
         // 每20仿真秒评估一次 (避免每步都计算)
-        if (simulationTimeSeconds % 20 != 0) return;
+        if (simulationTimeSeconds % 20 != 0)
+            return;
 
         lastEnergyResult = energyOptimizer.evaluate(trains, simulationTimeSeconds, dispatchEngine);
 
@@ -832,7 +859,8 @@ public class SimulationService {
         // ── 策略2: 再生制动协同 ──
         for (EnergyOptimizer.RegenCoordination rc : lastEnergyResult.regenCoordinations) {
             TrainState absorbing = trains.get(rc.absorbingTrainId);
-            if (absorbing != null && (absorbing.getAcceleration() >= 0 || "CRUISING".equals(absorbing.getStatus()) || "DWELLING".equals(absorbing.getStatus()))) {
+            if (absorbing != null && (absorbing.getAcceleration() >= 0 || "CRUISING".equals(absorbing.getStatus())
+                    || "DWELLING".equals(absorbing.getStatus()))) {
                 // 优先让附近可吸收列车恢复/维持正常加速（不用限速）
                 absorbing.setMaxSpeedLimit(OperationLevel.normal().getCruiseSpeedKmh());
 
@@ -848,7 +876,8 @@ public class SimulationService {
         }
 
         // ── 策略3: 峰值功率控制 ──
-        if ("danger".equals(lastEnergyResult.peakRiskLevel) && lastEnergyResult.tractionCount > EnergyOptimizer.MAX_SIMULTANEOUS_TRACTION) {
+        if ("danger".equals(lastEnergyResult.peakRiskLevel)
+                && lastEnergyResult.tractionCount > EnergyOptimizer.MAX_SIMULTANEOUS_TRACTION) {
             // 同时牵引列车过多 → 对晚出发的列车施加微延迟
             List<TrainState> accelTrains = trains.values().stream()
                     .filter(t -> "ACCELERATING".equals(t.getStatus()) || "DEPARTING".equals(t.getStatus()))
@@ -877,8 +906,10 @@ public class SimulationService {
 
         // ── 策略4: 运行等级自适应 ──
         for (TrainState t : trains.values()) {
-            if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus())) continue;
-            if ("ACCELERATING".equals(t.getStatus()) || "CRUISING".equals(t.getStatus()) || "DWELLING".equals(t.getStatus())) {
+            if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus()))
+                continue;
+            if ("ACCELERATING".equals(t.getStatus()) || "CRUISING".equals(t.getStatus())
+                    || "DWELLING".equals(t.getStatus())) {
                 String recommendedLevel = energyOptimizer.recommendOperationLevel(
                         Math.max(0, lastEnergyResult.currentLoadFactor),
                         EnergyOptimizer.TimePeriod.fromSimTime(simulationTimeSeconds));
@@ -928,8 +959,9 @@ public class SimulationService {
             }
 
             for (SimulationSnapshot.DelayEvent evt : delayResult.events) {
-                delayEventLog.removeIf(e ->
-                    e.getTrainId().equals(evt.getTrainId()) && e.getEventType().equals(evt.getEventType()));
+                // 去重：同一列车同一类型的事件只保留最新的
+                delayEventLog.removeIf(
+                        e -> e.getTrainId().equals(evt.getTrainId()) && e.getEventType().equals(evt.getEventType()));
                 delayEventLog.add(evt);
             }
             dispatchEngine.logDelayEvents(delayResult.events);
@@ -943,7 +975,8 @@ public class SimulationService {
                 .sorted(Comparator.comparingDouble(TrainState::getPositionMeters))
                 .collect(Collectors.toList());
 
-        DispatchEngine.DelayResult propResult = dispatchEngine.evaluateDelayPropagation(activeMoving, simulationTimeSeconds);
+        DispatchEngine.DelayResult propResult = dispatchEngine.evaluateDelayPropagation(activeMoving,
+                simulationTimeSeconds);
         for (SimulationSnapshot.TrainCommand cmd : propResult.commands) {
             applyCommand(cmd);
         }
@@ -961,7 +994,8 @@ public class SimulationService {
         // 位置采样 (每5秒, 更密集以支持双向运行图)
         if (simulationTimeSeconds - lastSampleTime >= 5) {
             for (TrainState t : trains.values()) {
-                if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus())) continue;
+                if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus()))
+                    continue;
                 SimulationSnapshot.TrainPositionPoint pt = new SimulationSnapshot.TrainPositionPoint();
                 pt.setTrainId(t.getTrainId());
                 pt.setTimeSeconds(simulationTimeSeconds);
@@ -972,15 +1006,90 @@ public class SimulationService {
             lastSampleTime = simulationTimeSeconds;
         }
 
-        // 能耗估算 (牵引时计算)
+        // 每步采集仿真日志 + 能耗估算
         for (TrainState t : trains.values()) {
-            if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus())) continue;
-            if (t.getSpeed() > 0 && t.getAcceleration() >= 0) {
-                double speedMs = t.getSpeed() / 3.6;
-                double force = (t.getCarCount() * 35000.0) * Math.abs(t.getAcceleration() / 3.6) + 2000.0;
-                totalEnergyKwh += (force * speedMs) / 3600000.0;
+            if ("FINISHED".equals(t.getStatus()) || "DEPOT_WAITING".equals(t.getStatus()))
+                continue;
+
+            // ── 构建 SimulationLog ──
+            SimulationLog log = new SimulationLog();
+            log.setTimestamp(Math.round(simulationTimeSeconds * 1000)); // ms
+            log.setSpeed(t.getSpeed() / 3.6); // km/h → m/s
+            log.setPosition(t.getPositionMeters());
+            log.setDirection(t.isUpDirection() ? "up" : "down");
+            log.setLoadWeight(0); // 乘客重量后续可从客流模型获取
+            log.setEmergencyBrake(t.isEmergencyBraking());
+            log.setAvailableTractionCount(t.getCarCount());
+            log.setAvailableBrakeCount(t.getCarCount());
+            log.setFaultSpeedLimit(0);
+            log.setDrivingMode(t.isEmergencyBraking() ? "EUM" : "CM");
+
+            // 根据位置估算当前Seg编号
+            log.setCurrentSegId(estimateSegId(t.getPositionMeters()));
+
+            // 解析 trainId: "T1" → 1
+            try {
+                log.setTrainId(Integer.parseInt(t.getTrainId().substring(1)));
+            } catch (NumberFormatException e) {
+                log.setTrainId(0);
             }
+
+            // ── 基于 TB/T 1407.2 牵引物理模型计算能耗 ──
+            double accelMs2 = t.getAcceleration() / 3.6;
+            double mass = t.getCarCount() * 35000.0;
+            double resistanceN = physics.totalResistanceForce(t);
+            double inertiaForceN = physics.inertiaForce(mass, accelMs2);
+
+            if (t.getSpeed() <= 0.5) {
+                // 停站中
+                log.setTractiveBrakeCmd("coast");
+                log.setTractiveBrakePercent(0);
+                log.setTractionForce(0);
+                log.setBrakeForce(0);
+            } else if (accelMs2 > 0.05) {
+                // 牵引工况 — Davis阻力 + 惯性力 + 坡道阻力
+                double tractionForceN = resistanceN + Math.max(0, inertiaForceN);
+                log.setTractiveBrakeCmd("traction");
+                log.setTractiveBrakePercent(Math.min(100, Math.abs(accelMs2) / 1.0 * 100));
+                log.setTractionForce(tractionForceN);
+                log.setBrakeForce(0);
+
+                double stepKwh = physics.tractionStepEnergyKwh(t);
+                totalEnergyKwh += stepKwh;
+                totalTractionEnergyKwh += stepKwh;
+            } else if (accelMs2 < -0.05) {
+                // 制动工况 — 再生制动回收
+                double brakeForceN = Math.abs(inertiaForceN);
+                log.setTractiveBrakeCmd("brake");
+                log.setTractiveBrakePercent(Math.min(100, Math.abs(accelMs2) / 1.0 * 100));
+                log.setTractionForce(0);
+                log.setBrakeForce(brakeForceN);
+
+                totalRegenEnergyKwh += physics.regenStepEnergyKwh(t, 0.65);
+            } else {
+                // 惰行/巡航 — 仅克服阻力 (Davis + 坡道)
+                log.setTractiveBrakeCmd("coast");
+                log.setTractiveBrakePercent(0);
+                log.setTractionForce(0);
+                log.setBrakeForce(0);
+
+                if (t.getSpeed() > 5) {
+                    double stepKwh = physics.cruisingStepEnergyKwh(t);
+                    totalEnergyKwh += stepKwh;
+                    totalCruisingEnergyKwh += stepKwh;
+                }
+            }
+
+            // ── 辅助能耗 (空调/照明, 在线列车均计入) ──
+            totalAuxEnergyKwh += physics.auxiliaryStepEnergyKwh(t.getCarCount());
+
+            simulationLogs.add(log);
         }
+    }
+
+    /** 根据位置估算所属Seg编号（按约1000m一个Seg粗略划分） */
+    private int estimateSegId(double positionMeters) {
+        return (int) (positionMeters / 1000) + 1;
     }
 
     // ================================================================
@@ -1004,18 +1113,24 @@ public class SimulationService {
     /** 获取列车对应的交路模式 */
     private RoutePattern getRoutePattern(TrainState train) {
         String pid = train.getRoutePattern();
-        if (RoutePattern.SHORT_S.equals(pid)) return RoutePattern.shortSouth();
-        if (RoutePattern.SHORT_N.equals(pid)) return RoutePattern.shortNorth();
-        if (RoutePattern.EXPRESS.equals(pid)) return RoutePattern.fullRoute();
+        if (RoutePattern.SHORT_S.equals(pid))
+            return RoutePattern.shortSouth();
+        if (RoutePattern.SHORT_N.equals(pid))
+            return RoutePattern.shortNorth();
+        if (RoutePattern.EXPRESS.equals(pid))
+            return RoutePattern.fullRoute();
         return RoutePattern.fullRoute();
     }
 
     /** 获取列车当前的运行等级参数 */
     private OperationLevel getOperationLevel(TrainState train) {
         String level = train.getOperationLevel();
-        if (OperationLevel.ENERGY_SAVE.equals(level)) return OperationLevel.energySaving();
-        if (OperationLevel.EXPRESS.equals(level)) return OperationLevel.express();
-        if (OperationLevel.SLOW.equals(level)) return OperationLevel.slow();
+        if (OperationLevel.ENERGY_SAVE.equals(level))
+            return OperationLevel.energySaving();
+        if (OperationLevel.EXPRESS.equals(level))
+            return OperationLevel.express();
+        if (OperationLevel.SLOW.equals(level))
+            return OperationLevel.slow();
         return OperationLevel.normal();
     }
 
@@ -1024,7 +1139,8 @@ public class SimulationService {
      */
     public void applyStrategy(String trainId, String strategyType, double targetValue) {
         TrainState train = trains.get(trainId);
-        if (train == null) return;
+        if (train == null)
+            return;
 
         SimulationSnapshot.TrainCommand cmd = new SimulationSnapshot.TrainCommand();
         cmd.setTrainId(trainId);
@@ -1044,9 +1160,11 @@ public class SimulationService {
             case "SKIP_STATION":
                 train.setSkipNextStation(true);
                 cmd.setTargetValue(targetValue);
-                cmd.setReason(String.format("甩站指令: 下一站(%s)不停车通过", 
-                        train.getNextStationIndex() >= 0 && train.getNextStationIndex() < lineProfile.getStations().size()
-                        ? lineProfile.getStations().get(train.getNextStationIndex()).getName() : "未知"));
+                cmd.setReason(String.format("甩站指令: 下一站(%s)不停车通过",
+                        train.getNextStationIndex() >= 0
+                                && train.getNextStationIndex() < lineProfile.getStations().size()
+                                        ? lineProfile.getStations().get(train.getNextStationIndex()).getName()
+                                        : "未知"));
                 break;
 
             case "SHORT_TURN":
@@ -1081,7 +1199,8 @@ public class SimulationService {
         int activeCount = 0;
         for (TrainState t : trains.values()) {
             trainList.add(copyTrainState(t));
-            if (!"FINISHED".equals(t.getStatus())) activeCount++;
+            if (!"FINISHED".equals(t.getStatus()))
+                activeCount++;
         }
         snapshot.setTotalTrains(trains.size());
         snapshot.setActiveTrains(activeCount);
@@ -1109,7 +1228,8 @@ public class SimulationService {
             hw.setDistanceMeters(gap);
             hw.setSafetyDistanceMeters(safeDist);
             hw.setTimeSeconds(following.getSpeed() > 0 ? gap / (following.getSpeed() / 3.6) : 999);
-            hw.setStatus(gap < safeDist * 0.5 ? "DANGER" : gap < safeDist * 0.8 ? "WARNING" : gap < safeDist ? "CAUTION" : "SAFE");
+            hw.setStatus(gap < safeDist * 0.5 ? "DANGER"
+                    : gap < safeDist * 0.8 ? "WARNING" : gap < safeDist ? "CAUTION" : "SAFE");
             headwayList.add(hw);
         }
         snapshot.setHeadways(headwayList);
@@ -1118,8 +1238,8 @@ public class SimulationService {
         List<SimulationSnapshot.TrainCommand> cmds = new ArrayList<>(activeCommands.values());
         for (int i = commandLog.size() - 1; i >= 0 && cmds.size() < 40; i--) {
             SimulationSnapshot.TrainCommand c = commandLog.get(i);
-            if (cmds.stream().noneMatch(x ->
-                    x.getTrainId().equals(c.getTrainId()) && x.getCommandType().equals(c.getCommandType()))) {
+            if (cmds.stream().noneMatch(
+                    x -> x.getTrainId().equals(c.getTrainId()) && x.getCommandType().equals(c.getCommandType()))) {
                 cmds.add(c);
             }
         }
@@ -1146,8 +1266,8 @@ public class SimulationService {
         // ── 计划运行图点位 (所有列车全时刻表 → 前端画计划线) ──
         if (dispatchEngine.getTimetable() != null) {
             List<SimulationSnapshot.TrainPositionPoint> planned = new ArrayList<>();
-            List<LineProfile.Station> stats = lineProfile.getStations();
-            for (Map.Entry<String, Map<Integer, DispatchEngine.TimetableEntry>> trainEntry : dispatchEngine.getTimetable().entrySet()) {
+            for (Map.Entry<String, Map<Integer, DispatchEngine.TimetableEntry>> trainEntry : dispatchEngine
+                    .getTimetable().entrySet()) {
                 String tid = trainEntry.getKey();
                 for (DispatchEngine.TimetableEntry te : trainEntry.getValue().values()) {
                     SimulationSnapshot.TrainPositionPoint pp = new SimulationSnapshot.TrainPositionPoint();
@@ -1193,6 +1313,13 @@ public class SimulationService {
             eoi.setCoastingOpportunityCount(lastEnergyResult.coastingOpportunities.size());
             eoi.setRecommendations(new ArrayList<>(lastEnergyResult.recommendations));
             eoi.setCurrentLoadFactor(lastEnergyResult.currentLoadFactor);
+            // ── 实时累计能耗 ──
+            eoi.setTotalTractionEnergyKwh(totalTractionEnergyKwh);
+            eoi.setTotalRegenEnergyKwh(totalRegenEnergyKwh);
+            eoi.setNetEnergyKwh(totalTractionEnergyKwh - totalRegenEnergyKwh);
+            eoi.setSimulationTimeSeconds(simulationTimeSeconds);
+            eoi.setAuxiliaryEnergyKwh(totalAuxEnergyKwh);
+            eoi.setCruisingEnergyKwh(totalCruisingEnergyKwh);
             snapshot.setEnergyOptimization(eoi);
         }
 

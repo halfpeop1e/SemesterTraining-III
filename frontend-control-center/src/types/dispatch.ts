@@ -148,7 +148,7 @@ export interface DispatchInfo {
   dispatchMode: string;
 }
 
-/** 能源优化摘要 (接入调度系统) */
+/** 能源优化摘要 (接入调度系统，实时推送) */
 export interface EnergyOptimizationInfo {
   currentPeakKw: number;
   powerSupplyThresholdKw: number;
@@ -160,6 +160,18 @@ export interface EnergyOptimizationInfo {
   coastingOpportunityCount: number;
   recommendations: string[];
   currentLoadFactor: number;
+  /** 实时累计牵引能耗 kWh */
+  totalTractionEnergyKwh: number;
+  /** 实时累计再生制动回收 kWh */
+  totalRegenEnergyKwh: number;
+  /** 实时净能耗 kWh */
+  netEnergyKwh: number;
+  /** 当前仿真时间 s */
+  simulationTimeSeconds: number;
+  /** 累计辅助能耗(空调/照明) kWh */
+  auxiliaryEnergyKwh: number;
+  /** 累计巡航能耗 kWh */
+  cruisingEnergyKwh: number;
 }
 
 export interface StationGeo {
