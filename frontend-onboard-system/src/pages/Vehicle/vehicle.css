@@ -1,714 +1,226 @@
-/* 郭逸晨车载模块（成员三）—— Vehicle 页面局部样式 */
+/* ═══════════════════════════════════════════════
+   Vehicle Page — 车载仿真主页面布局
+   Design tokens reference: ../styles/global.css :root
+   ═══════════════════════════════════════════════ */
 
 .vehicle-page {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-sm);
   height: 100%;
   min-height: 0;
+  overflow-y: auto;
 }
 
+/* ── Header ── */
 .vehicle-page__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  gap: 12px;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.vehicle-page__header h2 {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--color-text-heading);
+  white-space: nowrap;
+  letter-spacing: -0.02em;
 }
 
 .vehicle-page__eyebrow {
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #718096;
+  color: var(--color-text-secondary);
   margin-bottom: 1px;
-}
-
-.vehicle-page__header h2 {
-  font-size: 14px;
-  font-weight: 700;
-  color: #1a365d;
 }
 
 .vehicle-page__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: nowrap;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
 }
 
-/* 主内容区：左右并排，填满剩余高度 */
+/* ── Main Content Grid ── */
 .vehicle-main-area {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--space-md);
   flex: 1;
   min-height: 0;
 }
 
+@media (max-width: 1400px) {
+  .vehicle-main-area {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1100px) {
+  .vehicle-main-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow-y: auto;
+  }
+}
+
+/* ── Error State ── */
 .vehicle-error {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  background: #fff5f5;
-  border: 1px solid #feb2b2;
-  border-radius: 6px;
-  color: #c53030;
-  font-size: 13px;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
   flex-shrink: 0;
 }
 
 .vehicle-error button {
-  padding: 4px 10px;
-  border: 1px solid #c53030;
-  background: #fff;
-  color: #c53030;
-  border-radius: 4px;
+  padding: 4px 12px;
+  border: 1px solid var(--color-danger);
+  background: var(--color-bg-elevated);
+  color: var(--color-danger);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  transition: all var(--transition-fast);
 }
 
-/* 控制按钮 */
-.vehicle-start-btn {
-  padding: 6px 16px;
-  font-size: 13px;
-  font-weight: 600;
+.vehicle-error button:hover {
+  background: var(--color-danger);
   color: #fff;
-  background: #2b6cb0;
+}
+
+/* ── Buttons ── */
+.vehicle-start-btn {
+  padding: 6px var(--space-lg);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: #fff;
+  background: var(--color-primary);
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   white-space: nowrap;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-fast);
 }
-
+.vehicle-start-btn:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
 .vehicle-start-btn:disabled {
-  background: #a0aec0;
+  background: var(--color-text-disabled);
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .vehicle-secondary-btn {
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 6px var(--space-md);
+  font-size: var(--text-sm);
   font-weight: 600;
-  color: #2b6cb0;
-  background: #ebf4ff;
-  border: 1px solid #bee3f8;
-  border-radius: 5px;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
   cursor: pointer;
   white-space: nowrap;
+  transition: all var(--transition-fast);
 }
-
+.vehicle-secondary-btn:hover:not(:disabled) {
+  background: var(--color-primary);
+  color: #fff;
+  transform: translateY(-1px);
+}
 .vehicle-secondary-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
 .vehicle-ghost-btn {
-  padding: 6px 12px;
-  font-size: 13px;
-  color: #718096;
+  padding: 6px var(--space-md);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
   background: transparent;
-  border: 1px solid #cbd5e0;
-  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   cursor: pointer;
   white-space: nowrap;
+  transition: all var(--transition-fast);
 }
-
+.vehicle-ghost-btn:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-text-tertiary);
+  background: var(--color-bg-hover);
+}
 .vehicle-ghost-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
 
+/* ── Status text ── */
 .vehicle-status-text {
-  font-size: 12px;
-  color: #718096;
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
   white-space: nowrap;
+  padding: 3px 10px;
+  background: var(--color-bg-surface);
+  border-radius: var(--radius-full);
+  font-weight: 500;
 }
 
-/* 倍速按钮组 */
+/* ── Speed multiplier group ── */
 .vehicle-speed-group {
   display: inline-flex;
   gap: 2px;
   align-items: center;
-  background: #edf2f7;
-  border: 1px solid #cbd5e0;
-  border-radius: 5px;
-  padding: 2px;
-}
-
-.vehicle-speed-btn {
-  padding: 3px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: #718096;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-  font-family: inherit;
-}
-
-.vehicle-speed-btn:hover:not(:disabled) {
-  background: #e2e8f0;
-  color: #2d3748;
-}
-
-.vehicle-speed-btn.is-active {
-  background: #2b6cb0;
-  color: #fff;
-}
-
-.vehicle-speed-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-
-.vehicle-intro {
-  color: #555;
-  font-size: 14px;
-}
-
-.vehicle-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.vehicle-start-btn {
-  padding: 10px 24px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  background: #2b6cb0;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.vehicle-start-btn:disabled {
-  background: #a0aec0;
-  cursor: not-allowed;
-}
-
-.vehicle-status-text {
-  font-size: 14px;
-  color: #666;
-}
-
-.vehicle-error {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: #fff5f5;
-  border: 1px solid #feb2b2;
-  border-radius: 6px;
-  color: #c53030;
-  font-size: 14px;
-}
-
-.vehicle-error button {
-  padding: 6px 14px;
-  border: 1px solid #c53030;
-  background: #fff;
-  color: #c53030;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.vehicle-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-}
-
-.vehicle-card {
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-  text-align: center;
-}
-
-.vehicle-card .label {
-  font-size: 13px;
-  color: #888;
-  margin-bottom: 8px;
-}
-
-.vehicle-card .value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #1a365d;
-}
-
-.vehicle-card .value.phase-traction {
-  color: #2b6cb0;
-}
-
-.vehicle-card .value.phase-coast {
-  color: #38a169;
-}
-
-.vehicle-card .value.phase-braking {
-  color: #dd6b20;
-}
-
-.vehicle-card .value.phase-stopped {
-  color: #718096;
-}
-
-/* ---- 阶段 1.5：车载视角 2D 俯视导航图（第三轮视觉返工） ----
-   设计思路：整张地图固定使用垂直向下的正交俯视视角（类似高德/百度导航），列车
-   图标的几何中心固定对齐视口水平 30% 处；起点/限速标/目标停车点等地标同样用
-   `left: calc(30% + offsetPx)` 定位其"图钉尖端"坐标，offsetPx = (地标position -
-   当前position) * TRACK_SCALE_PX_PER_METER（在 index.tsx 中计算）。地标与列车的
-   垂直对齐都固定在同一条路线中心线（.scene-route-band 的纵向中点）上，且都用
-   translateX(-50%) 做水平居中——这是本轮修正的关键：上一版列车用了
-   translateX(-18%) 这种拍脑袋的偏移，导致列车"视觉中心"和坐标点不重合，本轮
-   统一为几何中心对齐，停站误差趋近于 0 时目标点图钉与列车中心会精确重合。 */
-
-.vehicle-scene-wrapper {
-  background: #eef1f5;
-  border: 1px solid #d6dce3;
-  border-radius: 10px;
-  padding: 14px 16px 16px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
-}
-
-/* 顶部仪表盘风格状态条：呼吸灯 + 标题，营造"导航终端"氛围。 */
-.scene-hud {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 4px 10px;
-  font-size: 12px;
-  letter-spacing: 0.03em;
-  color: #4a5568;
-}
-
-.hud-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #38a169;
-  box-shadow: 0 0 6px 2px rgba(56, 161, 105, 0.5);
-  animation: hud-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes hud-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.vehicle-scene {
-  position: relative;
-  height: 220px;
-  overflow: hidden;
-  border-radius: 8px;
-  background: #e7ebf0;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
-}
-
-/* 地图底纹：浅灰蓝色街区网格，模拟导航 App 地图底图上的建筑色块，纯装饰，
-   与路线带使用同一套滚动速度（正交俯视视角下不做远近视差）。 */
-.scene-map-base {
-  position: absolute;
-  inset: 0;
-  background-image:
-    repeating-linear-gradient(
-      0deg,
-      rgba(203, 213, 224, 0.6) 0px,
-      rgba(203, 213, 224, 0.6) 1px,
-      transparent 1px,
-      transparent 40px
-    ),
-    repeating-linear-gradient(
-      90deg,
-      rgba(203, 213, 224, 0.6) 0px,
-      rgba(203, 213, 224, 0.6) 1px,
-      transparent 1px,
-      transparent 70px
-    ),
-    repeating-linear-gradient(
-      90deg,
-      rgba(180, 194, 209, 0.5) 0px,
-      rgba(180, 194, 209, 0.5) 46px,
-      transparent 46px,
-      transparent 70px
-    );
-  transition: background-position-x 0.06s linear;
-}
-
-/* 路线带：模拟导航 App 中"选中路线"的高亮蓝色带，贯穿整个场景宽度，
-   垂直方向固定在场景纵向中点（作为列车与地标共用的对齐基准线）。 */
-.scene-route-band {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 34px;
-  transform: translateY(-50%);
-  background: linear-gradient(to bottom, #5b9bf7 0%, #3f7fe0 50%, #3169c4 100%);
-  border-top: 2px solid rgba(255, 255, 255, 0.5);
-  border-bottom: 2px solid rgba(0, 0, 0, 0.15);
-  box-shadow: 0 3px 10px rgba(49, 105, 196, 0.35);
-  overflow: hidden;
-  z-index: 1;
-}
-
-/* 车道虚线：白色短横线沿路线带滚动，模拟"沿路线导航中"的行驶动感。 */
-.scene-route-lane-dashes {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 4px;
-  transform: translateY(-50%);
-  background-image: repeating-linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.9) 0px,
-    rgba(255, 255, 255, 0.9) 18px,
-    transparent 18px,
-    transparent 36px
-  );
-  transition: background-position-x 0.06s linear;
-}
-
-/* 目标停车点站台区：路线带上一段浅色高亮区域，代表站台范围，与 landmarks
-   使用完全相同的定位规则（calc(30% + offsetPx) + translateX(-50%)），
-   垂直方向占满路线带高度并略微凸出，形成"站台"的视觉体感。 */
-.scene-platform-zone {
-  position: absolute;
-  top: 50%;
-  width: 76px;
-  height: 44px;
-  transform: translate(-50%, -50%);
-  background: rgba(255, 214, 145, 0.35);
-  border-left: 2px dashed rgba(221, 107, 32, 0.6);
-  border-right: 2px dashed rgba(221, 107, 32, 0.6);
-  transition: left 0.06s linear;
-  z-index: 0;
-}
-
-/* 地标统一使用"图钉"造型：圆形头部 + 三角尖端，尖端精确对齐轨道坐标，
-   风格接近导航 App 的兴趣点标记。图钉整体挂在路线带上方，标签文字画在
-   图钉上方，避免和路线带上的列车图标发生遮挡。 */
-.scene-landmark {
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  transition: left 0.06s linear;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  z-index: 3;
-}
-
-.map-pin {
-  position: absolute;
-  left: 50%;
-  bottom: calc(50% + 17px);
-  width: 22px;
-  height: 22px;
-  border-radius: 50% 50% 50% 0;
-  transform: translateX(-50%) rotate(-45deg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
-}
-
-.map-pin-start {
-  background: #38a169;
-}
-
-.map-pin-target {
-  background: #e53e3e;
-}
-
-.map-pin-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #fff;
-  transform: rotate(45deg);
-}
-
-.map-pin-tag {
-  position: absolute;
-  left: 50%;
-  bottom: calc(50% + 44px);
-  transform: translateX(-50%);
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-  background: #fff;
-  padding: 3px 9px;
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
-}
-
-.map-pin-tag-start {
-  color: #276749;
-}
-
-.map-pin-tag-target {
-  color: #9b2c2c;
-}
-
-/* 限速标：黄底红边圆牌，风格接近真实路侧限速标志，挂在路线带正上方，
-   自身也用 translate(-50%, -50%) 对齐轨道坐标，与其他地标基准一致。 */
-.speed-limit-sign {
-  position: absolute;
-  left: 50%;
-  bottom: calc(50% + 20px);
-  transform: translateX(-50%);
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #fffef0, #fefcbf 60%, #f6e05e 100%);
-  border: 3px solid #c53030;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-}
-
-.speed-limit-value {
-  font-size: 12px;
-  font-weight: 800;
-  color: #1a202c;
-  line-height: 1;
-}
-
-/* 停车偏移标注：挂在目标点图钉旁边，与目标点使用同一个 scene-landmark 容器，
-   随目标点一起滚动，播放结束后才出现，不会和路线带上的列车图标重叠
-   （目标点标签在路线带上方，列车在路线带正中央）。 */
-.stop-offset-badge {
-  position: absolute;
-  bottom: calc(50% + 44px);
-  left: 100%;
-  margin-left: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 9px;
-  border-radius: 10px;
-  white-space: nowrap;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.stop-offset-arrow {
-  font-size: 9px;
-}
-
-.stop-offset-badge.is-overshoot {
-  background: linear-gradient(135deg, #f6ad55, #dd6b20);
-  color: #1a202c;
-}
-
-.stop-offset-badge.is-undershoot {
-  background: linear-gradient(135deg, #63b3ed, #3182ce);
-  color: #fff;
-}
-
-/* 列车图标：俯视胶囊造型，几何中心用 translate(-50%, -50%) 精确对齐视口水平
-   30% 处与路线带纵向中点——与所有地标使用完全相同的对齐基准，因此停站误差
-   趋近于 0 时目标点图钉与列车中心会精确重合。呼吸光圈模拟导航 App
-   "当前位置"定位点效果，车头箭头指示前进方向。纯 CSS/DOM，不引入图片/图标库。 */
-.scene-train {
-  position: absolute;
-  left: 30%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.train-pulse-ring {
-  position: absolute;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: rgba(66, 153, 225, 0.35);
-  animation: train-pulse 1.8s ease-out infinite;
-}
-
-@keyframes train-pulse {
-  0% { transform: scale(0.6); opacity: 0.8; }
-  100% { transform: scale(1.6); opacity: 0; }
-}
-
-.train-capsule {
-  position: relative;
-  display: flex;
-  align-items: center;
-  height: 20px;
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-  z-index: 1;
-}
-
-.train-segment {
-  height: 20px;
-  background: linear-gradient(to bottom, #63b3ed 0%, #2b6cb0 100%);
-  border: 1.5px solid #1a365d;
-}
-
-.train-segment-tail {
-  width: 20px;
-  border-radius: 10px 0 0 10px;
-}
-
-.train-segment-mid {
-  width: 18px;
-  border-left: none;
-  border-right: none;
-  background: linear-gradient(to bottom, #7bb8ec 0%, #3182ce 100%);
-}
-
-.train-segment-head {
-  width: 22px;
-  border-left: none;
-  border-radius: 0 10px 10px 0;
-  background: linear-gradient(to bottom, #4299e1 0%, #2b6cb0 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.train-heading-arrow {
-  width: 0;
-  height: 0;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  border-left: 5px solid #fff;
-}
-
-.scene-info-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-top: 12px;
-  padding: 0 4px;
-  font-size: 13px;
-  color: #718096;
-}
-
-.scene-info-primary {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.scene-remaining-label {
-  font-size: 12px;
-  color: #718096;
-}
-
-.scene-remaining-value {
-  font-size: 20px;
-  font-weight: 800;
-  color: #2b6cb0;
-  font-family: 'Consolas', 'SFMono-Regular', monospace;
-}
-
-.scene-remaining-unit {
-  font-size: 12px;
-  color: #718096;
-}
-
-.vehicle-result {
-  background: #fff;
-  border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-}
-
-.vehicle-result h3 {
-  font-size: 16px;
-  color: #1a365d;
-  margin-bottom: 10px;
-}
-
-.vehicle-result + .vehicle-result {
-  margin-top: 4px;
-}
-
-.vehicle-result table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.vehicle-result td {
-  padding: 6px 4px;
-  border-bottom: 1px solid #edf2f7;
-  color: #444;
-}
-
-.vehicle-result td:first-child {
-  color: #888;
-  width: 40%;
-}
-
-.vehicle-result .stop-success {
-  color: #38a169;
-  font-weight: 600;
-}
-
-.vehicle-result .stop-fail {
-  color: #dd6b20;
-  font-weight: 600;
-}
-
-/* 倍速按钮组 */
-.vehicle-speed-group {
-  display: inline-flex;
-  gap: 2px;
-  align-items: center;
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
-  padding: 2px;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 3px;
 }
 
 .vehicle-speed-btn {
   padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: 700;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--color-text-secondary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  font-family: inherit;
+  transition: all var(--transition-fast);
+  font-family: var(--font-mono);
 }
-
 .vehicle-speed-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
+  background: var(--color-bg-hover);
+  color: var(--color-text);
 }
-
 .vehicle-speed-btn.is-active {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--color-primary);
   color: #fff;
+  box-shadow: var(--shadow-sm);
 }
-
 .vehicle-speed-btn:disabled {
   opacity: 0.35;
   cursor: default;
 }
 
-/* 阶段4B：起止站选择器 */
+/* ── Station selector ── */
 .vehicle-station-selector {
   display: flex;
   align-items: center;
@@ -716,78 +228,154 @@
 }
 
 .vehicle-station-label {
-  font-size: 11px;
-  color: #718096;
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
   white-space: nowrap;
+  font-weight: 600;
 }
 
 .vehicle-station-select {
-  padding: 4px 6px;
-  font-size: 12px;
-  border: 1px solid #cbd5e0;
-  border-radius: 4px;
-  background: #fff;
-  color: #2d3748;
+  padding: 5px 8px;
+  font-size: var(--text-xs);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
   cursor: pointer;
   max-width: 110px;
+  font-weight: 500;
+  transition: border-color var(--transition-fast);
 }
-
+.vehicle-station-select:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
 .vehicle-station-select:disabled {
-  background: #edf2f7;
+  background: var(--color-bg-surface);
   cursor: not-allowed;
   opacity: 0.7;
 }
 
 .vehicle-station-arrow {
-  font-size: 13px;
-  color: #4a5568;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  font-weight: 700;
 }
 
-/* 当前仿真区间标签 */
+/* ── Section label ── */
 .vehicle-section-label {
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: #2b6cb0;
+  color: var(--color-primary);
   white-space: nowrap;
-  padding: 3px 8px;
-  background: #ebf8ff;
-  border-radius: 4px;
-  border: 1px solid #bee3f8;
+  padding: 4px 10px;
+  background: var(--color-primary-light);
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
 }
-
 .vehicle-section-label--pending {
-  color: #718096;
-  background: #f7fafc;
-  border-color: #e2e8f0;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-surface);
+  border-color: var(--color-border);
   font-weight: 400;
 }
 
-/* SafetyEvent 紧凑条（本轮新增，不影响主布局）*/
+/* ── Safety Event bar ── */
 .vehicle-safety-bar {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 4px 10px;
-  background: #fff5f5;
-  border: 1px solid #fed7d7;
-  border-radius: 4px;
-  font-size: 11px;
-  color: #c53030;
+  padding: 6px var(--space-md);
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--color-danger);
   font-weight: 600;
 }
 
 .vehicle-safety-chip {
-  font-weight: 400;
-  color: #742a2a;
-  background: #fff;
-  border: 1px solid #feb2b2;
-  border-radius: 3px;
-  padding: 1px 6px;
-  font-family: monospace;
+  font-weight: 500;
+  color: var(--color-danger);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
-.integration-panel{margin:8px 16px;padding:10px 14px;border:1px solid #1f6f78;border-radius:8px;background:#071c22;color:#d8f5f2;display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px}
-.integration-panel button{border:1px solid #2d8b91;background:#0b343b;color:#d8f5f2;border-radius:4px;padding:5px 9px;cursor:pointer}
+
+/* ── Integration Panel ── */
+.integration-panel {
+  margin: 4px 0;
+  padding: 8px var(--space-md);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  box-shadow: var(--shadow-sm);
+}
+.integration-panel button {
+  border: 1px solid var(--color-accent);
+  background: var(--color-bg-surface);
+  color: var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--text-xs);
+  transition: all var(--transition-fast);
+}
+.integration-panel button:hover {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+/* ── 车载时刻表 ── */
+.onboard-timetable {
+  width: 100%;
+  flex-basis: 100%;
+  margin-top: 6px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 6px;
+}
+
+.onboard-timetable-title {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-primary);
+  margin-bottom: 4px;
+}
+
+.onboard-timetable-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.onboard-timetable-table th {
+  padding: 3px 6px;
+  text-align: left;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.onboard-timetable-table td {
+  padding: 2px 6px;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.onboard-timetable-table tr:hover td {
+  background: rgba(255,255,255,0.03);
+}
