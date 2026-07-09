@@ -8,7 +8,13 @@ import {
 
 export default function DispatcherWorkstationPanel() {
   const [data, setData] = useState<DispatcherWorkstation | null>(null);
-  const refresh = async () => setData(await getDispatcherWorkstation());
+  const refresh = async () => {
+    try {
+      setData(await getDispatcherWorkstation());
+    } catch {
+      // /api/dispatch/workstation 端点暂未实现，静默处理
+    }
+  };
 
   useEffect(() => {
     void refresh();

@@ -20,13 +20,21 @@ echarts.use([
   LegendComponent,
   CanvasRenderer,
 ]);
-import { getLineMap, applyStrategy } from "../../api/dispatch";
+import {
+  getLineMap,
+  applyStrategy,
+  injectFault,
+  clearFault,
+  getSystemStates,
+} from "../../api/dispatch";
 import { useSimulation } from "../../context/SimulationContext";
 import type {
   StationGeo,
   TrainState,
   TrainPositionPoint,
   TrainCommand,
+  TractionSystemState,
+  BrakingSystemState,
 } from "../../types/dispatch";
 import DispatcherWorkstationPanel from "./DispatcherWorkstation";
 
@@ -400,14 +408,17 @@ function MapView({
     }).addTo(map);
     mapRef.current = map;
     const fix = () => {
-      map.invalidateSize();
+      if (!mapRef.current) return;
+      mapRef.current.invalidateSize();
     };
-    setTimeout(fix, 100);
-    setTimeout(fix, 400);
+    const t1 = setTimeout(fix, 100);
+    const t2 = setTimeout(fix, 400);
     window.addEventListener("resize", fix);
     const ro = new ResizeObserver(() => fix());
     if (containerRef.current) ro.observe(containerRef.current);
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
       window.removeEventListener("resize", fix);
       ro.disconnect();
       tileLayerRef.current?.remove();
@@ -473,11 +484,23 @@ function MapView({
     // Auto-fit map bounds to cover all stations (delay ensures container has size)
     if (!fitDone.current) {
       const doFit = () => {
+        const map = mapRef.current;
+        if (!map || !containerRef.current) return;
+        // 确保容器有尺寸再调用 fitBounds，避免 Leaflet _leaflet_pos 错误
+        const container = containerRef.current;
+        if (container.clientWidth === 0 || container.clientHeight === 0) {
+          setTimeout(doFit, 200);
+          return;
+        }
         const bounds = L.latLngBounds(
           sorted.map((s) => [s.latitude, s.longitude]),
         );
-        map.fitBounds(bounds, { padding: [30, 30] });
-        fitDone.current = true;
+        try {
+          map.fitBounds(bounds, { padding: [30, 30] });
+          fitDone.current = true;
+        } catch {
+          // fitBounds 在容器尺寸变化时可能失败，忽略
+        }
       };
       setTimeout(doFit, 300);
     }
@@ -570,7 +593,6 @@ export default function Dispatch() {
       .catch((e) => setError("Line load: " + (e?.message || "network")));
   }, []);
 
-
   const doStrategy = useCallback(
     async (trainId: string, type: string, val: number = 0) => {
       try {
@@ -581,7 +603,7 @@ export default function Dispatch() {
     },
     [],
   );
-  // T1-T8 are owned exclusively by the multi-train simulation. Independent
+  // OB1-OB8 are owned exclusively by the multi-train simulation. Independent
   // onboard endpoints are displayed in DispatcherWorkstationPanel only.
   const trains = snapshot?.trains ?? [];
   const headways = snapshot?.headways ?? [];
@@ -600,6 +622,52 @@ export default function Dispatch() {
       recoveryMap.set(c.trainId, Math.min(c.targetValue, 3));
     }
   });
+
+  // ── CBTC 执行层: 牵引/制动系统状态 ──
+  const [tractionStates, setTractionStates] = useState<
+    Record<string, TractionSystemState>
+  >({});
+  const [brakeStates, setBrakeStates] = useState<
+    Record<string, BrakingSystemState>
+  >({});
+  const [showFaultPanel, setShowFaultPanel] = useState(false);
+  const [faultTarget, setFaultTarget] = useState("");
+
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(async () => {
+      try {
+        const states = await getSystemStates();
+        if (states?.traction) setTractionStates(states.traction);
+        if (states?.brake) setBrakeStates(states.brake);
+      } catch {
+        /* silent poll */
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [isRunning]);
+
+  const doInjectFault = async (trainId: string, faultType: string) => {
+    try {
+      await injectFault(trainId, faultType);
+      const states = await getSystemStates();
+      if (states?.traction) setTractionStates(states.traction);
+      if (states?.brake) setBrakeStates(states.brake);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const doClearFault = async (trainId: string, faultType: string) => {
+    try {
+      await clearFault(trainId, faultType);
+      const states = await getSystemStates();
+      if (states?.traction) setTractionStates(states.traction);
+      if (states?.brake) setBrakeStates(states.brake);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
   if (stations.length === 0 && !error) {
     return (
@@ -623,7 +691,7 @@ export default function Dispatch() {
               </div>
               <div>
                 <span className="d-tb-title">多车仿真调度中心</span>
-                <span className="d-tb-sub">T1-T8 SIMULATION</span>
+                <span className="d-tb-sub">OB1-OB8 SIMULATION</span>
               </div>
             </div>
           </div>
@@ -641,6 +709,111 @@ export default function Dispatch() {
     <>
       <style>{STYLES}</style>
       <DispatcherWorkstationPanel />
+      {/* ── CBTC 故障注入面板 (浮动) ── */}
+      {showFaultPanel && (
+        <div
+          style={{
+            position: "fixed",
+            top: 80,
+            right: 20,
+            zIndex: 9999,
+            background: "rgba(15,23,42,0.97)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            borderRadius: 10,
+            padding: 16,
+            width: 280,
+            maxHeight: "80vh",
+            overflow: "auto",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+          }}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-red-400 font-bold text-xs">故障注入</span>
+            <button
+              type="button"
+              className="text-slate-500 text-[10px] ml-auto"
+              onClick={() => setShowFaultPanel(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <select
+            className="bg-slate-800 border border-slate-600 rounded text-slate-200 text-[11px] p-1.5 w-full mb-2"
+            title="选择目标列车"
+            value={faultTarget}
+            onChange={(e) => setFaultTarget(e.target.value)}
+          >
+            <option value="">选择列车...</option>
+            {trains
+              .filter(
+                (t) => t.status !== "FINISHED" && t.status !== "DEPOT_WAITING",
+              )
+              .map((t) => (
+                <option key={t.trainId} value={t.trainId}>
+                  {t.trainId} ({t.speed.toFixed(0)}km/h)
+                </option>
+              ))}
+          </select>
+          {faultTarget && (
+            <div className="flex flex-col gap-1">
+              {[
+                { id: "MOTOR_FAILURE", label: "电机故障 (-4台)", icon: "🔧" },
+                {
+                  id: "INVERTER_FAULT",
+                  label: "逆变器降级 (50%功率)",
+                  icon: "⚡",
+                },
+                { id: "ELECTRIC_BRAKE_LOSS", label: "电制动丧失", icon: "🔌" },
+                {
+                  id: "AIR_BRAKE_DEGRADED",
+                  label: "空气制动衰减 (50%)",
+                  icon: "🛑",
+                },
+                { id: "TCU_COMM_LOSS", label: "牵引通信中断", icon: "📡" },
+              ].map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="text-left text-[11px] text-slate-300 hover:bg-[rgba(239,68,68,0.15)] px-2 py-1.5 rounded"
+                  onClick={() => doInjectFault(faultTarget, f.id)}
+                >
+                  {f.icon} {f.label}
+                </button>
+              ))}
+              <hr className="border-slate-700 my-1" />
+              <button
+                type="button"
+                className="text-[11px] text-green-400 hover:bg-[rgba(34,197,94,0.1)] px-2 py-1.5 rounded"
+                onClick={() => doClearFault(faultTarget, "ALL")}
+              >
+                ✅ 清除全部故障
+              </button>
+            </div>
+          )}
+          {Object.keys(tractionStates).length > 0 && (
+            <div className="mt-3 pt-2 border-t border-slate-700">
+              <span className="text-slate-500 text-[10px]">系统状态快照</span>
+              {Object.entries(tractionStates)
+                .filter(
+                  ([tid]) =>
+                    tractionStates[tid]?.faultCode ||
+                    brakeStates[tid]?.faultCode,
+                )
+                .map(([tid, ts]) => (
+                  <div key={tid} className="text-[10px] text-red-400 mt-1">
+                    {tid}: {ts.faultCode || brakeStates[tid]?.faultCode}
+                  </div>
+                ))}
+              {Object.values(tractionStates).every((ts) => !ts.faultCode) &&
+                Object.values(brakeStates).every((bs) => !bs.faultCode) && (
+                  <div className="text-[10px] text-green-500 mt-1">
+                    全部系统正常
+                  </div>
+                )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="d-root">
         {/* ════ Top Bar ════ */}
         <header className="d-topbar">
@@ -675,7 +848,9 @@ export default function Dispatch() {
               </div>
               <div>
                 <span className="d-tb-title">多车仿真调度中心</span>
-                <span className="d-tb-sub">T1-T8 SIMULATION &middot; LINE 9</span>
+                <span className="d-tb-sub">
+                  OB1-OB8 SIMULATION &middot; LINE 9
+                </span>
               </div>
             </div>
           </div>
@@ -761,6 +936,19 @@ export default function Dispatch() {
                 ↺ 重置
               </button>
             )}
+            <button
+              type="button"
+              className="d-btn"
+              style={{
+                background: showFaultPanel ? "#ef444420" : "#1e293b",
+                border: "1px solid #334155",
+                fontSize: 11,
+              }}
+              onClick={() => setShowFaultPanel(!showFaultPanel)}
+              title="故障注入"
+            >
+              ⚠ 故障注入
+            </button>
           </div>
         </header>
 
@@ -953,6 +1141,8 @@ export default function Dispatch() {
                           <th>状态</th>
                           <th>交路</th>
                           <th>折返</th>
+                          <th>牵引</th>
+                          <th>制动</th>
                           <th>策略</th>
                         </tr>
                       </thead>
@@ -1072,6 +1262,57 @@ export default function Dispatch() {
                                 }}
                               >
                                 {t.turnbackCount > 0 ? t.turnbackCount : "—"}
+                              </td>
+                              {/* CBTC 牵引状态 */}
+                              <td className="text-[9px]">
+                                {(() => {
+                                  const ts = tractionStates[t.trainId];
+                                  if (!ts)
+                                    return (
+                                      <span className="text-slate-600">—</span>
+                                    );
+                                  const healthColor =
+                                    ts.health === "FAULT"
+                                      ? "#ef4444"
+                                      : ts.health === "DEGRADED"
+                                        ? "#f59e0b"
+                                        : "#22c55e";
+                                  return (
+                                    <span
+                                      className="d-mono"
+                                      style={{ color: healthColor }}
+                                    >
+                                      {ts.health === "NORMAL"
+                                        ? `${ts.availableMotors}/24`
+                                        : ts.health}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                              {/* CBTC 制动状态 */}
+                              <td className="text-[9px]">
+                                {(() => {
+                                  const bs = brakeStates[t.trainId];
+                                  if (!bs)
+                                    return (
+                                      <span className="text-slate-600">—</span>
+                                    );
+                                  const healthColor =
+                                    bs.health === "FAULT"
+                                      ? "#ef4444"
+                                      : bs.health === "DEGRADED"
+                                        ? "#f59e0b"
+                                        : "#22c55e";
+                                  return (
+                                    <span
+                                      className="d-mono"
+                                      style={{ color: healthColor }}
+                                    >
+                                      {bs.blendingMode}
+                                      {bs.faultCode ? "!" : ""}
+                                    </span>
+                                  );
+                                })()}
                               </td>
                               <td className="flex gap-0.5">
                                 {t.status !== "FINISHED" &&
@@ -1757,137 +1998,183 @@ export default function Dispatch() {
 
 const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-.dispatcher-workstation{position:fixed;right:18px;bottom:18px;width:360px;max-height:42vh;overflow:auto;z-index:1000;background:#0b1622;border:1px solid #227c88;border-radius:10px;padding:12px;color:#dcebf0;box-shadow:0 12px 35px #0009;font-size:11px}
-.dispatcher-workstation header{display:flex;justify-content:space-between;margin-bottom:8px}.dispatcher-workstation .online{color:#06d6a0}.dispatcher-workstation .paused{color:#f7b731}
-.workstation-metrics{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px}.workstation-metrics span{background:#101f2d;padding:5px;border-radius:4px}
-.dispatcher-workstation button{background:#087f8c;color:white;border:0;border-radius:4px;padding:5px 8px;cursor:pointer}
-.pending-command{display:grid;gap:5px;margin-top:8px;padding:8px;border-left:3px solid #f7b731;background:#111f2b}.pending-command span{color:#91a4b7}
-.onboard-event{margin-top:6px;padding:6px;background:#351a20;color:#ffb7bf;border-radius:4px}
-.onboard-monitor-title{margin:8px 0 5px;color:#77dbe5;font-weight:700}
-.onboard-monitor-empty{padding:9px;margin-bottom:8px;color:#7f93a5;background:#0f1d29;border:1px dashed #294052;border-radius:5px}
-.onboard-monitor-card{display:grid;gap:3px;margin-bottom:7px;padding:8px;background:#101f2d;border-left:3px solid #586979;border-radius:4px;color:#c7d6e2}
-.onboard-monitor-card.is-online{border-left-color:#06d6a0}.onboard-monitor-card.is-offline{opacity:.62}
-.onboard-monitor-head{display:flex;align-items:center;gap:8px}.onboard-monitor-head span{color:#06d6a0}.onboard-monitor-card.is-offline .onboard-monitor-head span{color:#fc5c65}.onboard-monitor-head small{margin-left:auto;color:#8ca0b2}
-.onboard-monitor-meta{color:#71879a;font-size:10px}
-.onboard-monitor-conflict{color:#ffbe55;font-weight:700}
-.onboard-depart-actions{display:flex;gap:6px;margin-top:5px}.onboard-depart-actions button{flex:1;background:#087f8c}.onboard-depart-actions button+button{background:#35546b}
-.onboard-emergency-actions{margin-top:5px;padding:6px;background:#351a20;color:#ffb7bf;border-radius:4px}.onboard-emergency-actions button{width:100%;background:#b43a45}
+/* ═══════════════════════════════════════════════
+   Dispatcher Workstation panel (调度面板内嵌)
+   ═══════════════════════════════════════════════ */
+.dispatcher-workstation{width:100%;max-height:36vh;overflow:auto;background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-md);color:var(--color-text);box-shadow:var(--shadow-sm);font-size:var(--text-xs);transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.dispatcher-workstation:hover{border-color:rgba(0,168,232,0.2);box-shadow:var(--shadow-md)}
+.dispatcher-workstation header{display:flex;justify-content:space-between;margin-bottom:var(--space-sm)}.dispatcher-workstation .online{color:var(--color-success)}.dispatcher-workstation .paused{color:var(--color-warning)}
+.workstation-metrics{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:var(--space-sm)}.workstation-metrics span{background:var(--color-bg-hover);padding:5px;border-radius:var(--radius-sm)}
+.dispatcher-workstation button{background:var(--color-accent);color:white;border:0;border-radius:var(--radius-sm);padding:5px var(--space-sm);cursor:pointer;transition:all var(--transition-fast)}
+.dispatcher-workstation button:hover{opacity:0.9;transform:translateY(-1px)}
+.pending-command{display:grid;gap:5px;margin-top:var(--space-sm);padding:var(--space-sm);border-left:3px solid var(--color-warning);background:var(--color-bg-hover);border-radius:0 var(--radius-sm) var(--radius-sm) 0}.pending-command span{color:var(--color-text-secondary)}
+.onboard-event{margin-top:6px;padding:6px;background:var(--color-danger-bg);color:var(--color-danger);border-radius:var(--radius-sm)}
+.onboard-monitor-title{margin:var(--space-sm) 0 5px;color:var(--color-accent);font-weight:700}
+.onboard-monitor-empty{padding:9px;margin-bottom:var(--space-sm);color:var(--color-text-tertiary);background:var(--color-bg-elevated);border:1px dashed var(--color-border);border-radius:var(--radius-md)}
+.onboard-monitor-card{display:grid;gap:3px;margin-bottom:7px;padding:var(--space-sm);background:var(--color-bg-hover);border-left:3px solid var(--color-text-tertiary);border-radius:0 var(--radius-sm) var(--radius-sm) 0;color:var(--color-text);transition:border-color var(--transition-fast)}
+.onboard-monitor-card:hover{border-left-color:var(--color-accent)}
+.onboard-monitor-card.is-online{border-left-color:var(--color-success)}.onboard-monitor-card.is-offline{opacity:.62}
+.onboard-monitor-head{display:flex;align-items:center;gap:var(--space-sm)}.onboard-monitor-head span{color:var(--color-success)}.onboard-monitor-card.is-offline .onboard-monitor-head span{color:var(--color-danger)}.onboard-monitor-head small{margin-left:auto;color:var(--color-text-secondary)}
+.onboard-monitor-meta{color:var(--color-text-tertiary);font-size:10px}
+.onboard-monitor-conflict{color:var(--color-warning);font-weight:700}
+.onboard-depart-actions{display:flex;gap:6px;margin-top:5px}.onboard-depart-actions button{flex:1;background:var(--color-accent);transition:all var(--transition-fast)}.onboard-depart-actions button:hover{opacity:0.9}.onboard-depart-actions button+button{background:var(--color-bg-hover)}
+.onboard-emergency-actions{margin-top:5px;padding:6px;background:var(--color-danger-bg);color:var(--color-danger);border-radius:var(--radius-sm)}.onboard-emergency-actions button{width:100%;background:#b43a45;transition:all var(--transition-fast)}.onboard-emergency-actions button:hover{opacity:0.9}
 
-.d-root{height:100%;min-height:100%;display:flex;flex-direction:column;background:#060b11;overflow:hidden}
-.d-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:48px;flex-shrink:0;gap:10px;background:rgba(13,21,32,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #152433;z-index:20}
-.d-tb-left{display:flex;align-items:center;gap:8px;min-width:0}
-.d-tb-back{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;color:#617088;transition:all .15s;flex-shrink:0}
-.d-tb-back:hover{background:#182537;color:#94a3b8}
+/* ═══════════════════════════════════════════════
+   Root & Topbar
+   ═══════════════════════════════════════════════ */
+.d-root{height:100%;min-height:100%;display:flex;flex-direction:column;background:var(--color-bg-base);overflow:hidden}
+.d-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 var(--space-md);height:48px;flex-shrink:0;gap:var(--space-sm);background:rgba(13,21,32,0.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid var(--color-border-light);z-index:20}
+.d-tb-left{display:flex;align-items:center;gap:6px;min-width:0;flex-shrink:0}
+.d-tb-back{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:var(--radius-md);color:var(--color-text-tertiary);transition:all var(--transition-fast);flex-shrink:0}
+.d-tb-back:hover{background:var(--color-bg-hover);color:var(--color-text-secondary);transform:translateX(-2px)}
 .d-tb-brand{display:flex;align-items:center;gap:7px}
-.d-tb-logo{width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#00a8e8,#0077b6);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 0 14px rgba(0,168,232,0.25)}
-.d-tb-title{font-size:13px;font-weight:700;color:#e2e8f0;letter-spacing:-0.2px;white-space:nowrap}
-.d-tb-sub{display:block;font-size:8px;color:#617088;letter-spacing:1.5px;font-weight:600;text-transform:uppercase}
+.d-tb-logo{width:32px;height:32px;border-radius:var(--radius-md);background:linear-gradient(135deg,var(--color-accent),#0077b6);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 0 18px var(--color-accent-glow)}
+.d-tb-title{font-size:var(--text-xl);font-weight:700;color:var(--color-text-heading);letter-spacing:-0.2px;white-space:nowrap}
+.d-tb-sub{display:block;font-size:8px;color:var(--color-text-tertiary);letter-spacing:1.5px;font-weight:600;text-transform:uppercase}
+@media(max-width:768px){.d-tb-title{font-size:11px}.d-tb-sub{display:none}.d-tb-logo{width:24px;height:24px}}
 .d-tb-center{flex:1;display:flex;justify-content:center;min-width:0}
+@media(max-width:900px){.d-tb-center{display:none}}
 .d-tb-clock{text-align:center}
-.d-tb-clock-lbl{display:block;font-size:8px;color:#617088;letter-spacing:3px;font-weight:700}
-.d-tb-clock-val{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#e2e8f0;letter-spacing:3px;line-height:1.15}
-.d-tb-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.d-tb-err{font-size:10px;color:#fc5c65;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.d-speed-group{display:flex;border-radius:4px;overflow:hidden;border:1px solid #1c2a3e}
-.d-speed-btn{padding:3px 8px;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;background:transparent;color:#617088;border:none;cursor:pointer;transition:all .12s;border-right:1px solid #1c2a3e}
+.d-tb-clock-lbl{display:block;font-size:8px;color:var(--color-text-tertiary);letter-spacing:3px;font-weight:700}
+.d-tb-clock-val{font-family:var(--font-mono);font-size:22px;font-weight:700;color:var(--color-text-heading);letter-spacing:3px;line-height:1.15}
+.d-tb-right{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:768px){.d-tb-right{gap:4px}}
+.d-tb-err{font-size:var(--text-xs);color:var(--color-danger);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Speed & Mode buttons ── */
+.d-speed-group{display:flex;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--color-border)}
+.d-speed-btn{padding:3px 8px;font-size:var(--text-xs);font-weight:600;font-family:var(--font-mono);background:transparent;color:var(--color-text-tertiary);border:none;cursor:pointer;transition:all var(--transition-fast);border-right:1px solid var(--color-border)}
 .d-speed-btn:last-child{border-right:none}
-.d-speed-btn:hover:not(:disabled){background:#182537;color:#94a3b8}
-.d-speed-btn.active{background:#00a8e8;color:#060b11}
+.d-speed-btn:hover:not(:disabled){background:var(--color-bg-hover);color:var(--color-text-secondary)}
+.d-speed-btn.active{background:var(--color-accent);color:var(--color-bg-base);box-shadow:0 0 10px var(--color-accent-glow)}
 .d-speed-btn:disabled{opacity:0.35;cursor:not-allowed}
-.d-map-mode{display:flex;border-radius:4px;overflow:hidden;border:1px solid #1c2a3e}
-.d-mode-btn{padding:3px 7px;font-size:9px;font-weight:600;background:transparent;color:#617088;border:none;cursor:pointer;transition:all .12s;border-right:1px solid #1c2a3e;text-transform:uppercase;letter-spacing:.5px}
+.d-map-mode{display:flex;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--color-border)}
+.d-mode-btn{padding:3px 7px;font-size:9px;font-weight:600;background:transparent;color:var(--color-text-tertiary);border:none;cursor:pointer;transition:all var(--transition-fast);border-right:1px solid var(--color-border);text-transform:uppercase;letter-spacing:.5px}
 .d-mode-btn:last-child{border-right:none}
-.d-mode-btn:hover{background:#182537;color:#94a3b8}
-.d-mode-btn.active{background:#1c2a3e;color:#00a8e8}
-.d-btn{display:flex;align-items:center;gap:4px;padding:4px 12px;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;white-space:nowrap}
+.d-mode-btn:hover{background:var(--color-bg-hover);color:var(--color-text-secondary)}
+.d-mode-btn.active{background:var(--color-border);color:var(--color-accent)}
+
+/* ── Generic action buttons ── */
+.d-btn{display:flex;align-items:center;gap:4px;padding:4px 10px;border:none;border-radius:var(--radius-sm);font-size:var(--text-xs);font-weight:600;cursor:pointer;transition:all var(--transition-fast);white-space:nowrap}
 .d-btn:disabled{opacity:0.35;cursor:not-allowed}
-.d-btn-start{background:#06d6a0;color:#060b11}
-.d-btn-start:hover:not(:disabled){background:#05c492}
-.d-btn-step{background:#1c2a3e;color:#94a3b8}
-.d-btn-step:hover:not(:disabled){background:#253448;color:#cbd5e1}
-.d-btn-stop{background:#fc5c65;color:#fff}
-.d-btn-stop:hover{background:#e55058}
+@media(max-width:768px){.d-btn{padding:3px 8px;font-size:10px}}
+.d-btn-start{background:var(--color-success);color:var(--color-bg-base)}
+.d-btn-start:hover:not(:disabled){background:#05c492;box-shadow:0 0 14px rgba(6,214,160,0.3);transform:translateY(-1px)}
+.d-btn-step{background:var(--color-border);color:var(--color-text-secondary)}
+.d-btn-step:hover:not(:disabled){background:#253448;color:var(--color-text);transform:translateY(-1px)}
+.d-btn-stop{background:var(--color-danger);color:#fff}
+.d-btn-stop:hover{background:#e55058;box-shadow:0 0 14px rgba(252,92,101,0.3);transform:translateY(-1px)}
+.d-btn-reset{background:#1e293b;color:var(--color-text-secondary)}
+.d-btn-reset:hover:not(:disabled){background:#253448;color:var(--color-text)}
 
-/* ── Body ── */
-.d-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:auto minmax(0,1fr);flex:1;padding:6px 12px 8px;overflow:hidden;min-height:0;gap:6px 10px;align-items:stretch}
+/* ═══════════════════════════════════════════════
+   Body Grid Layout
+   ═══════════════════════════════════════════════ */
+.d-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,460px);grid-template-rows:auto minmax(0,1fr);flex:1;padding:var(--space-sm) var(--space-md) var(--space-sm);overflow:hidden;min-height:0;gap:var(--space-sm) 10px;align-items:stretch}
 .d-info-bar{grid-column:1/-1;grid-row:1;display:flex;align-items:center;gap:6px;padding:4px 0;width:100%;flex-shrink:0;flex-wrap:wrap}
-.d-info-chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);border:1px solid color-mix(in srgb,var(--c) 25%,transparent);white-space:nowrap}
+.d-info-chip{display:inline-flex;align-items:center;padding:3px 10px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:600;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);border:1px solid color-mix(in srgb,var(--c) 25%,transparent);white-space:nowrap;transition:all var(--transition-fast)}
+.d-info-chip:hover{border-color:color-mix(in srgb,var(--c) 45%,transparent)}
+@media(max-width:1400px){.d-body{grid-template-columns:minmax(0,1fr) minmax(280px,380px)}}
 @media(max-width:1200px){.d-body{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto;overflow:auto}}
+@media(max-width:768px){.d-body{padding:4px 6px 6px;gap:4px}}
 
-/* ── Left ── */
-.d-left{grid-column:1;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px}
-@media(max-width:1200px){.d-left{grid-column:1;min-height:60vh}}
-.d-map-panel{flex:1;min-height:200px;display:flex;flex-direction:column;background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e}
+/* ═══════════════════════════════════════════════
+   Left Column - Map & Diagram panels
+   ═══════════════════════════════════════════════ */
+.d-left{grid-column:1;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:var(--space-sm)}
+@media(max-width:1200px){.d-left{grid-column:1;min-height:55vh}}
+@media(max-width:768px){.d-left{min-height:45vh;gap:6px}}
+.d-map-panel{flex:1;min-height:200px;display:flex;flex-direction:column;background:var(--color-bg-elevated);border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--color-border);transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.d-map-panel:hover{border-color:rgba(0,168,232,0.2);box-shadow:var(--shadow-md)}
 .d-map-body{flex:1;min-height:150px;position:relative}
 .d-map-inner{width:100%;height:100%;position:absolute;top:0;left:0}
-.d-map-stats{display:flex;border-top:1px solid #1c2a3e;background:#0a1019;flex-shrink:0}
-.d-mstat{flex:1;text-align:center;padding:7px 4px;border-right:1px solid #1c2a3e}
+.d-map-stats{display:flex;border-top:1px solid var(--color-border);background:var(--color-bg-surface);flex-shrink:0}
+.d-mstat{flex:1;text-align:center;padding:7px 4px;border-right:1px solid var(--color-border);transition:background var(--transition-fast)}
+.d-mstat:hover{background:var(--color-bg-hover)}
 .d-mstat:last-child{border-right:none}
-.d-mstat-val{display:block;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#e2e8f0}
-.d-mstat-lbl{font-size:9px;color:#617088;margin-top:1px}
+.d-mstat-val{display:block;font-family:var(--font-mono);font-size:var(--text-sm);font-weight:700;color:var(--color-text-heading)}
+.d-mstat-lbl{font-size:9px;color:var(--color-text-tertiary);margin-top:1px}
+@media(max-width:768px){.d-mstat-val{font-size:10px}.d-mstat-lbl{font-size:8px}.d-map-stats{flex-wrap:wrap}}
 
-/* ── Train Diagram ── */
-.d-diagram-panel{height:180px;flex-shrink:0;display:flex;flex-direction:column;background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e}
+/* ═══════════════════════════════════════════════
+   Train Diagram panel
+   ═══════════════════════════════════════════════ */
+.d-diagram-panel{flex-shrink:0;display:flex;flex-direction:column;background:var(--color-bg-elevated);border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--color-border);min-height:140px;max-height:240px;transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.d-diagram-panel:hover{border-color:rgba(247,183,49,0.2);box-shadow:var(--shadow-md)}
 .d-diagram{flex:1;width:100%}
-.d-empty-panel{flex:1;display:flex;align-items:center;justify-content:center;color:#374151;font-size:12px}
+.d-empty-panel{flex:1;display:flex;align-items:center;justify-content:center;color:var(--color-text-disabled);font-size:var(--text-sm)}
+@media(max-width:768px){.d-diagram-panel{max-height:160px}}
 
 /* ── Panel Head ── */
-.d-panel-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#0a1019;border-bottom:1px solid #1c2a3e;flex-shrink:0}
-.d-panel-title{font-size:11px;font-weight:600;color:#e2e8f0;display:flex;align-items:center;gap:6px;letter-spacing:-0.1px}
-.d-panel-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.d-panel-badge{font-size:10px;color:#617088;font-weight:500}
+.d-panel-head{display:flex;align-items:center;justify-content:space-between;padding:8px var(--space-md);background:var(--color-bg-surface);border-bottom:1px solid var(--color-border);flex-shrink:0}
+.d-panel-title{font-size:var(--text-xs);font-weight:600;color:var(--color-text-heading);display:flex;align-items:center;gap:6px;letter-spacing:-0.1px}
+.d-panel-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor}
+.d-panel-badge{font-size:var(--text-xs);color:var(--color-text-tertiary);font-weight:500}
 
-/* ── Right ── */
-.d-right{grid-column:2;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px;overflow:hidden}
-@media(max-width:1200px){.d-right{grid-column:1;width:100%;flex:initial}}
+/* ═══════════════════════════════════════════════
+   Right Column - Tabs & Data panels
+   ═══════════════════════════════════════════════ */
+.d-right{grid-column:2;grid-row:2;min-width:260px;min-height:0;display:flex;flex-direction:column;gap:var(--space-sm);overflow:hidden}
+@media(max-width:1400px){.d-right{min-width:240px;gap:6px}}
+@media(max-width:1200px){.d-right{grid-column:1;width:100%;max-height:50vh;flex:initial}}
+@media(max-width:768px){.d-right{max-height:45vh}}
 
 /* ── Tab Bar ── */
-.d-tab-bar{display:flex;gap:2px;margin-bottom:8px;flex-shrink:0}
-.d-tab{display:flex;align-items:center;gap:5px;padding:6px 12px;font-size:11px;font-weight:600;border:none;border-radius:5px;cursor:pointer;transition:all .15s;background:transparent;color:#617088}
-.d-tab:hover{background:#182537;color:#94a3b8}
-.d-tab.active{background:#0d1520;color:#e2e8f0;border:1px solid #1c2a3e}
-.d-tab-dot{width:5px;height:5px;border-radius:50%}
+.d-tab-bar{display:flex;gap:2px;margin-bottom:var(--space-sm);flex-shrink:0;overflow-x:auto;scrollbar-width:none}
+.d-tab-bar::-webkit-scrollbar{display:none}
+.d-tab{display:flex;align-items:center;gap:5px;padding:6px 10px;font-size:var(--text-xs);font-weight:600;border:none;border-radius:var(--radius-md);cursor:pointer;transition:all var(--transition-fast);background:transparent;color:var(--color-text-tertiary);white-space:nowrap;flex-shrink:0}
+.d-tab:hover{background:var(--color-bg-hover);color:var(--color-text-secondary)}
+.d-tab.active{background:var(--color-bg-elevated);color:var(--color-text-heading);border:1px solid var(--color-border);box-shadow:var(--shadow-sm)}
+.d-tab-dot{width:6px;height:6px;border-radius:50%}
+@media(max-width:768px){.d-tab{padding:4px 8px;font-size:10px}}
 
 /* ── Right scroll area ── */
 .d-right-scroll{flex:1;overflow-y:auto;min-height:0}
 .d-right-scroll-flex{display:flex;flex-direction:column}
 .d-right-scroll-flex .d-panel-flex{flex:1;min-height:0}
 
-/* ── Tables ── */
-.d-panel{background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e;display:flex;flex-direction:column}
+/* ═══════════════════════════════════════════════
+   Tables & Data Display
+   ═══════════════════════════════════════════════ */
+.d-panel{background:var(--color-bg-elevated);border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--color-border);display:flex;flex-direction:column;transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.d-panel:hover{border-color:rgba(59,130,246,0.12);box-shadow:var(--shadow-md)}
 .d-panel-flex{flex:1;min-height:0}
-.d-tbl-scroll{overflow:auto;max-height:240px;min-height:0}
-.d-tbl-scroll-sm{max-height:120px}
-.d-tbl{width:100%;border-collapse:collapse;font-size:11px}
+.d-tbl-scroll{overflow:auto;max-height:260px;min-height:0}
+.d-tbl-scroll-sm{max-height:140px}
+.d-tbl{width:100%;border-collapse:collapse;font-size:var(--text-xs)}
 .d-tbl thead{position:sticky;top:0;z-index:2}
-.d-tbl th{background:#0a1019;color:#617088;font-weight:600;padding:6px 8px;text-align:left;border-bottom:1px solid #1c2a3e;font-size:9px;text-transform:uppercase;letter-spacing:.5px}
-.d-tbl td{padding:6px 8px;border-bottom:1px solid #152433;color:#cbd5e1}
-.d-tbl tbody tr:hover{background:rgba(255,255,255,0.02)}
+.d-tbl th{background:var(--color-bg-surface);color:var(--color-text-tertiary);font-weight:700;padding:8px;text-align:left;border-bottom:1px solid var(--color-border);font-size:9px;text-transform:uppercase;letter-spacing:.5px}
+.d-tbl td{padding:8px;border-bottom:1px solid var(--color-border-light);color:var(--color-text-secondary)}
+.d-tbl tbody tr{transition:background var(--transition-fast)}
+.d-tbl tbody tr:hover{background:var(--color-bg-active)}
 .d-tbl tbody tr:last-child td{border-bottom:none}
-.d-mono{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500}
-.d-train-id{font-weight:700;color:#e2e8f0;font-family:'JetBrains Mono',monospace}
-.d-status-dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:4px;vertical-align:middle}
-.d-empty{text-align:center;color:#374151;padding:24px 8px!important;font-size:11px}
-.d-h-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;color:var(--c);background:var(--bg)}
+.d-mono{font-family:var(--font-mono);font-size:10px;font-weight:500;font-variant-numeric:tabular-nums}
+.d-train-id{font-weight:700;color:var(--color-text-heading);font-family:var(--font-mono)}
+.d-status-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle;box-shadow:0 0 4px currentColor}
+.d-empty{text-align:center;color:var(--color-text-disabled);padding:24px 8px!important;font-size:var(--text-xs)}
+.d-h-badge{display:inline-block;padding:2px 8px;border-radius:var(--radius-full);font-size:9px;font-weight:700;color:var(--c);background:var(--bg);transition:transform var(--transition-fast)}
+.d-h-badge:hover{transform:scale(1.05)}
 
-/* ── Commands ── */
+/* ── Commands list ── */
 .d-cmd-wrap{overflow-y:auto;flex:1;min-height:0}
-.d-cmd{display:flex;align-items:center;gap:7px;padding:6px 12px;border-bottom:1px solid #152433;font-size:11px}
+.d-cmd{display:flex;align-items:center;gap:7px;padding:8px var(--space-md);border-bottom:1px solid var(--color-border-light);font-size:var(--text-xs);transition:background var(--transition-fast)}
+.d-cmd:hover{background:var(--color-bg-hover)}
 .d-cmd:last-child{border-bottom:none}
-.d-cmd-tag{padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;color:var(--c);background:var(--bg);white-space:nowrap}
-.d-cmd-train{font-weight:700;color:#e2e8f0;font-family:'JetBrains Mono',monospace;font-size:10px;min-width:24px}
-.d-cmd-reason{color:#94a3b8;flex:1;font-size:10px}
+.d-cmd-tag{padding:2px 8px;border-radius:var(--radius-full);font-size:9px;font-weight:700;color:var(--c);background:var(--bg);white-space:nowrap}
+.d-cmd-train{font-weight:700;color:var(--color-text-heading);font-family:var(--font-mono);font-size:10px;min-width:24px}
+.d-cmd-reason{color:var(--color-text-secondary);flex:1;font-size:10px}
 
 /* ── Strategy action buttons ── */
-.d-act-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:18px;border:1px solid #1c2a3e;border-radius:3px;background:transparent;color:#617088;cursor:pointer;font-size:10px;padding:0;transition:all .12s;line-height:1}
-.d-act-btn:hover{background:#182537;color:#00a8e8;border-color:#00a8e8}
+.d-act-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:transparent;color:var(--color-text-tertiary);cursor:pointer;font-size:11px;padding:0;transition:all var(--transition-fast);line-height:1}
+.d-act-btn:hover{background:var(--color-bg-active);color:var(--color-accent);border-color:var(--color-accent);transform:scale(1.1)}
 
 /* ── Leaflet overrides ── */
-.leaflet-container{background:#060b11!important}
-.leaflet-control-zoom a{background:#0d1520!important;color:#94a3b8!important;border-color:#1c2a3e!important}
-.leaflet-control-zoom a:hover{background:#182537!important;color:#e2e8f0!important}
-.leaflet-control-attribution{background:rgba(13,21,32,0.8)!important;color:#617088!important;font-size:8px!important;padding:2px 5px!important}
-.leaflet-control-attribution a{color:#00a8e8!important}
+.leaflet-container{background:var(--color-bg-base)!important}
+.leaflet-control-zoom a{background:var(--color-bg-elevated)!important;color:var(--color-text-secondary)!important;border-color:var(--color-border)!important;border-radius:var(--radius-sm)!important;transition:all var(--transition-fast)!important}
+.leaflet-control-zoom a:hover{background:var(--color-bg-hover)!important;color:var(--color-text-heading)!important}
+.leaflet-control-attribution{background:rgba(13,21,32,0.8)!important;color:var(--color-text-tertiary)!important;font-size:8px!important;padding:2px 5px!important;border-radius:var(--radius-sm)!important}
+.leaflet-control-attribution a{color:var(--color-accent)!important}
 
-.d-tooltip{font-size:11px!important;padding:5px 8px!important;border-radius:5px!important;border:none!important;background:rgba(13,21,32,0.95)!important;color:#e2e8f0!important;box-shadow:0 2px 12px rgba(0,0,0,0.4)!important}
-.d-tooltip::before{border-top-color:rgba(13,21,32,0.95)!important}`;
+.d-tooltip{font-size:var(--text-xs)!important;padding:5px 8px!important;border-radius:var(--radius-md)!important;border:none!important;background:rgba(13,21,32,0.96)!important;color:var(--color-text-heading)!important;box-shadow:var(--shadow-lg)!important}
+.d-tooltip::before{border-top-color:rgba(13,21,32,0.96)!important}`;

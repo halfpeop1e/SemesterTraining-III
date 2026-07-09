@@ -30,10 +30,15 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import type { EvaluationReport, SimulationLog } from "../../types";
-import type { EnergyOptimizationInfo } from "../../types/dispatch";
+import type {
+  EnergyOptimizationInfo,
+  EnergyDataPoint,
+  PowerSupplyData,
+} from "../../types/dispatch";
 import { generateReport } from "../../api/evaluation";
 import { getSnapshot } from "../../api/dispatch";
 import { getSimulationLogs } from "../../api/dispatch";
+import { LineChart, Line, Area, AreaChart } from "recharts";
 
 const riskLevelLabel: Record<string, string> = {
   safe: "安全",
@@ -205,6 +210,16 @@ export default function EnergyEvaluation() {
   const [liveEnergy, setLiveEnergy] = useState<EnergyOptimizationInfo | null>(
     null,
   );
+  const [snapshotEnergy, setSnapshotEnergy] = useState<{
+    totalKwh: number;
+    tractionKwh: number;
+    regenKwh: number;
+    auxKwh: number;
+    cruisingKwh: number;
+  }>({ totalKwh: 0, tractionKwh: 0, regenKwh: 0, auxKwh: 0, cruisingKwh: 0 });
+  const [energyHistory, setEnergyHistory] = useState<EnergyDataPoint[]>([]);
+  const [powerSupply, setPowerSupply] = useState<PowerSupplyData[]>([]);
+  const [coastingSaved, setCoastingSaved] = useState(0);
   const [isSimRunning, setIsSimRunning] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -214,6 +229,16 @@ export default function EnergyEvaluation() {
       if (snap && snap.activeTrains > 0) {
         setIsSimRunning(true);
         if (snap.energyOptimization) setLiveEnergy(snap.energyOptimization);
+        setSnapshotEnergy({
+          totalKwh: snap.totalEnergyKwh ?? 0,
+          tractionKwh: snap.totalTractionKwh ?? 0,
+          regenKwh: snap.totalRegenKwh ?? 0,
+          auxKwh: snap.totalAuxKwh ?? 0,
+          cruisingKwh: snap.totalCruisingKwh ?? 0,
+        });
+        setEnergyHistory(snap.energyHistory ?? []);
+        setPowerSupply(snap.powerSupplyStatus ?? []);
+        setCoastingSaved(snap.coastingSavedKwh ?? 0);
       } else setIsSimRunning(false);
     } catch {
       setIsSimRunning(false);
@@ -247,34 +272,34 @@ export default function EnergyEvaluation() {
           scenarioName: "北京9号线仿真场景",
           simulationLogs: logs,
           stationPositions: {
-            1: 313,
-            2: 1660,
-            3: 2448,
-            4: 3429,
-            5: 5014,
-            6: 6339,
-            7: 8118,
-            8: 9429,
-            9: 10598,
-            10: 11996,
-            11: 13906,
-            12: 14954,
-            13: 16048,
+            1: 313, // 郭公庄
+            2: 1660, // 丰台科技园
+            3: 2448, // 科怡路
+            4: 3429, // 丰台南路
+            5: 5014, // 丰台东大街
+            6: 6339, // 七里庄
+            7: 8118, // 六里桥
+            8: 9429, // 六里桥东
+            9: 10598, // 北京西站
+            10: 11996, // 军事博物馆
+            11: 13906, // 白堆子
+            12: 14954, // 白石桥南
+            13: 16048, // 国家图书馆
           },
           stationNames: {
-            1: "GGZ",
-            2: "FSP",
-            3: "KYL",
-            4: "FTN",
-            5: "FTD",
-            6: "QLZ",
-            7: "LLQ",
-            8: "LLE",
-            9: "BWR",
-            10: "JBG",
-            11: "BDZ",
-            12: "BQS",
-            13: "GTG",
+            1: "郭公庄",
+            2: "丰台科技园",
+            3: "科怡路",
+            4: "丰台南路",
+            5: "丰台东大街",
+            6: "七里庄",
+            7: "六里桥",
+            8: "六里桥东",
+            9: "北京西站",
+            10: "军事博物馆",
+            11: "白堆子",
+            12: "白石桥南",
+            13: "国家图书馆",
           },
           plannedArrivals: {
             1: 120,
@@ -339,9 +364,178 @@ export default function EnergyEvaluation() {
             </Tag>
           )}
           {!isSimRunning && <Tag color="default">仿真未启动</Tag>}
+          <Tag color="blue" className="ml-2">
+            能源 {snapshotEnergy.totalKwh.toFixed(1)} kWh
+          </Tag>
         </div>
       }
     >
+      {/* 快照能源汇总（每秒更新） */}
+      <Row gutter={[8, 8]} style={{ marginBottom: 12 }}>
+        <Col xs={12} sm={4}>
+          <G
+            label="累计总能耗"
+            value={snapshotEnergy.totalKwh}
+            unit="kWh"
+            color="#38bdf8"
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="牵引能耗"
+            value={snapshotEnergy.tractionKwh}
+            unit="kWh"
+            color={CHART_COLORS.traction}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="再生回收"
+            value={snapshotEnergy.regenKwh}
+            unit="kWh"
+            color={CHART_COLORS.regen}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="辅助能耗"
+            value={snapshotEnergy.auxKwh}
+            unit="kWh"
+            color={CHART_COLORS.aux}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="巡航能耗"
+            value={snapshotEnergy.cruisingKwh}
+            unit="kWh"
+            color={CHART_COLORS.cruise}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="净能耗"
+            value={snapshotEnergy.totalKwh - snapshotEnergy.regenKwh}
+            unit="kWh"
+            color={CHART_COLORS.net}
+          />
+        </Col>
+      </Row>
+      {/* 惰行节省 + DC1500V 供电状态 */}
+      <Row gutter={[8, 8]} style={{ marginBottom: 12 }}>
+        <Col xs={24} sm={6}>
+          <div className="p-3 rounded-xl text-center bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+            <div className="text-[10px] text-slate-500 mb-0.5 truncate">
+              惰行节省
+            </div>
+            <div
+              className="text-lg font-bold tabular-nums"
+              style={{ color: "#22c55e", fontFamily: "'Orbitron', monospace" }}
+            >
+              {fmt(coastingSaved, 3)}
+              <span className="text-xs font-normal ml-0.5 text-slate-400">
+                kWh
+              </span>
+            </div>
+          </div>
+        </Col>
+        {powerSupply.slice(0, 5).map((ps) => (
+          <Col xs={12} sm={3} key={ps.trainId}>
+            <div className="p-3 rounded-xl text-center bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+              <div className="text-[10px] text-slate-500 mb-0.5 truncate">
+                {ps.trainId} {ps.nearestSubstation}
+              </div>
+              <div
+                className="text-lg font-bold tabular-nums"
+                style={{
+                  color: ps.voltageOK ? "#22c55e" : "#ef4444",
+                  fontFamily: "'Orbitron', monospace",
+                }}
+              >
+                {ps.voltage.toFixed(0)}
+                <span className="text-xs font-normal ml-0.5 text-slate-400">
+                  V
+                </span>
+              </div>
+              <Progress
+                percent={+(((ps.voltage - 950) / 550) * 100).toFixed(1)}
+                showInfo={false}
+                strokeColor={ps.voltageOK ? "#22c55e" : "#ef4444"}
+                railColor="rgba(148,163,184,0.1)"
+                size="small"
+              />
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                {ps.powerKw.toFixed(0)} kW
+              </div>
+            </div>
+          </Col>
+        ))}
+      </Row>
+      {/* 能耗趋势图 */}
+      {energyHistory.length >= 2 && (
+        <Row style={{ marginBottom: 12 }}>
+          <Col span={24}>
+            <div className="p-3 rounded-xl bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+              <div className="text-[10px] text-slate-500 mb-1">
+                能耗趋势 (kWh)
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <AreaChart data={energyHistory}>
+                  <defs>
+                    <linearGradient id="colTotal" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colTrac" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colReg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#22c55e" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="rgba(148,163,184,0.1)"
+                  />
+                  <XAxis
+                    dataKey="timeSeconds"
+                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    tickFormatter={(v: number) => `${Math.floor(v / 60)}m`}
+                  />
+                  <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} />
+                  <ReTooltip content={<ChartTooltip />} />
+                  <Area
+                    type="monotone"
+                    dataKey="totalKwh"
+                    stroke="#38bdf8"
+                    fill="url(#colTotal)"
+                    strokeWidth={2}
+                    name="总能耗"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="tractionKwh"
+                    stroke="#ef4444"
+                    fill="url(#colTrac)"
+                    strokeWidth={1}
+                    name="牵引"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="regenKwh"
+                    stroke="#22c55e"
+                    fill="url(#colReg)"
+                    strokeWidth={1}
+                    name="再生"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Col>
+        </Row>
+      )}
       {liveE ? (
         <div className="space-y-3">
           {/* 8项实时指标 */}

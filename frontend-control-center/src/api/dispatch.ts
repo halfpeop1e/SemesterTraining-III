@@ -1,4 +1,4 @@
-import type { ApiResponse, SimulationSnapshot, StationGeo } from '../types/dispatch';
+import type { ApiResponse, SimulationSnapshot, StationGeo, SystemStatesResponse } from '../types/dispatch';
 import type { SimulationLog } from '../types';
 
 const API_BASE = '/api';
@@ -35,6 +35,10 @@ export async function stepSimulation(steps: number = 1): Promise<string> {
 
 export async function resetSimulation(): Promise<string> {
   return request<string>('/simulations/reset', { method: 'POST' });
+}
+
+export async function pauseSimulation(): Promise<string> {
+  return request<string>('/simulations/pause', { method: 'POST' });
 }
 
 export async function getSnapshot(): Promise<SimulationSnapshot> {
@@ -132,3 +136,19 @@ export const confirmIntegrationCommand = (commandId: string, approved = true) =>
   request<IntegrationCommand>('/dispatch/commands/confirm', {
     method: 'POST', body: JSON.stringify({ commandId, approved }),
   });
+
+// ── CBTC 执行层: 故障注入 ──
+export const injectFault = (trainId: string, faultType: string, severity = 4) =>
+  request<{ trainId: string; faultType: string; status: string }>('/dispatch/fault/inject', {
+    method: 'POST',
+    body: JSON.stringify({ trainId, faultType, severity }),
+  });
+
+export const clearFault = (trainId: string, faultType: string) =>
+  request<{ trainId: string; faultType: string; status: string }>('/dispatch/fault/clear', {
+    method: 'POST',
+    body: JSON.stringify({ trainId, faultType }),
+  });
+
+export const getSystemStates = () =>
+  request<SystemStatesResponse>('/dispatch/states');

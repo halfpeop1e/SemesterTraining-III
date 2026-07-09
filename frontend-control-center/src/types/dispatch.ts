@@ -91,6 +91,10 @@ export interface SimulationSnapshot {
   positionHistory: TrainPositionPoint[];
   stationArrivals: StationArrival[];
   totalEnergyKwh: number;
+  totalTractionKwh: number;
+  totalRegenKwh: number;
+  totalAuxKwh: number;
+  totalCruisingKwh: number;
   delayEvents: DelayEvent[];
   passengerFlow: PassengerFlowInfo;
   dispatchInfo: DispatchInfo;
@@ -100,6 +104,29 @@ export interface SimulationSnapshot {
   planDeviations: StationArrival[];
   /** 能源优化信息 */
   energyOptimization?: EnergyOptimizationInfo;
+  /** 惰行节省能耗 kWh */
+  coastingSavedKwh: number;
+  /** 能耗历史趋势 */
+  energyHistory: EnergyDataPoint[];
+  /** 供电状态 */
+  powerSupplyStatus: PowerSupplyData[];
+}
+
+export interface EnergyDataPoint {
+  timeSeconds: number;
+  totalKwh: number;
+  tractionKwh: number;
+  regenKwh: number;
+  auxKwh: number;
+}
+
+export interface PowerSupplyData {
+  trainId: string;
+  voltage: number;
+  current: number;
+  powerKw: number;
+  nearestSubstation: string;
+  voltageOK: boolean;
 }
 
 export interface DelayEvent {
@@ -181,6 +208,32 @@ export interface StationGeo {
   longitude: number;
   latitude: number;
   km: number;
+}
+
+// ── CBTC 执行层: 牵引/制动系统状态 ──
+export interface TractionSystemState {
+  trainId: string;
+  health: 'NORMAL' | 'DEGRADED' | 'FAULT';
+  maxTractiveForceN: number;
+  availableMotors: number;
+  electricBrakeAvailable: boolean;
+  maxElectricBrakeForceN: number;
+  electricBrakeAppliedN: number;
+  faultCode: string | null;
+}
+
+export interface BrakingSystemState {
+  trainId: string;
+  health: 'NORMAL' | 'DEGRADED' | 'FAULT';
+  maxAirBrakeForceN: number;
+  electricBrakeRequestN: number;
+  blendingMode: 'ELEC_ONLY' | 'BLEND' | 'AIR_ONLY';
+  faultCode: string | null;
+}
+
+export interface SystemStatesResponse {
+  traction: Record<string, TractionSystemState>;
+  brake: Record<string, BrakingSystemState>;
 }
 
 export interface ApiResponse<T> {
