@@ -1,18 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { StopResult, TrainState } from '../../../types/vehicle';
+import type { StationStop, StopResult, TrainState } from '../../../types/vehicle';
 import { STATIONS } from '../data/lineMap';
+import ThreeRailwayView from './ThreeRailwayView';
 import './DriverCabView.css';
 
 export interface DriverCabViewProps {
   status: 'idle' | 'loading' | 'playing' | 'finished' | 'error';
   currentState: TrainState | null;
   startPosition: number;
+  /**
+   * 全程固定总目标距离（终点站计划里程），用于 summary/路线信息。
+   * 驾驶台"目标距离"仪表盘改为显示下一站距离，不再用此值。
+   */
   targetStopPosition: number;
   speedLimit: number;
   stopResult: StopResult | null;
   safetyEventCount?: number;
   isPaused?: boolean;
+  /**
+   * 多站连续仿真各站停车记录。播放时用来计算"下一站距离"。
+   * 单区间仿真时可不传（fallback 到 targetStopPosition）。
+   */
+  stationStops?: StationStop[];
   // ---- 驾驶员控制回调（全部可选，不传时保持纯本地 UI 状态）----
   /** 当前有效驾驶模式（由父组件同步，仅用于显示；不在 render 中调 setState）。 */
   externalDriveMode?: 'ato' | 'manual' | 'emergency' | null;
@@ -328,8 +338,11 @@ function drawStationAndStopTarget(
   }
 
   const project = buildProjection(width, height);
-  const stationFront = clamp(distanceToTarget - 34, 4, 320);
-  const stationBack = clamp(distanceToTarget + 130, stationFront + 28, 420);
+  // VISUAL/SIM: platform length is assumed for HMI visualization only.
+  // Platform = 120 m total; stop marker is 100 m from entry end (near/camera side)
+  // and 20 m from the far end. After stopping, most platform is behind the camera.
+  const stationFront = clamp(distanceToTarget - 100, 4, 320); // entry (near/camera) end
+  const stationBack = clamp(distanceToTarget + 20, stationFront + 28, 420); // far end
   drawPlatformSide(ctx, width, height, stationFront, stationBack, 'left');
   drawPlatformSide(ctx, width, height, stationFront, stationBack, 'right');
 
@@ -371,6 +384,30 @@ function drawStationAndStopTarget(
   }
 }
 
+/**
+ * 计算下一站距离：返回 stationStops 中第一个 targetPosition >= currentPosition 的站点。
+ * 若无 stationStops（单区间）则 fallback 到 targetStopPosition。
+ * 若已过所有站则返回 0。
+ */
+function computeDistanceToNextStop(
+  currentPosition: number,
+  targetStopPosition: number,
+  stationStops: DriverCabViewProps['stationStops'],
+): { distance: number; nextStopName?: string } {
+  if (!stationStops || stationStops.length === 0) {
+    // 单区间 fallback
+    return { distance: Math.max(0, targetStopPosition - currentPosition) };
+  }
+  for (const stop of stationStops) {
+    if (stop.targetPosition >= currentPosition - 0.5) {
+      const d = Math.max(0, stop.targetPosition - currentPosition);
+      return { distance: d, nextStopName: stop.stationName };
+    }
+  }
+  // 已过所有站
+  return { distance: 0, nextStopName: stationStops[stationStops.length - 1].stationName };
+}
+
 function drawCanvasHud(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -381,7 +418,10 @@ function drawCanvasHud(
   const speedKmh = mpsToKmh(velocity);
   const limitKmh = mpsToKmh(props.speedLimit);
   const currentPosition = props.currentState?.position ?? props.startPosition;
-  const distanceToTarget = props.targetStopPosition - currentPosition;
+  // 驾驶台目标距离 = 下一站距离（目标二）
+  const { distance: distanceToTarget } = computeDistanceToNextStop(
+    currentPosition, props.targetStopPosition, props.stationStops,
+  );
   const phase = normalizePhase(props.currentState?.phase);
   const mode = getOperatingMode(props.status, Boolean(props.isPaused));
   const inbound = distanceToTarget >= 0 && distanceToTarget < 200;
@@ -402,13 +442,13 @@ function drawCanvasHud(
   ctx.fillStyle = 'rgba(4, 9, 10, 0.72)';
   fillRoundRect(ctx, width - metricsWidth - 18, height - 106, metricsWidth, 88, 7);
   ctx.fillStyle = '#f8fafc';
-  ctx.font = '800 22px Consolas, "SFMono-Regular", monospace';
+  ctx.font = '800 16px Consolas, "SFMono-Regular", monospace'; // HMI overlay: was 22px, reduced for realism
   ctx.textAlign = 'left';
   ctx.fillText(`${speedKmh.toFixed(0)} km/h`, width - metricsWidth, height - 76);
   ctx.fillStyle = '#a8bac1';
-  ctx.font = '12px "Microsoft YaHei", sans-serif';
-  ctx.fillText(`限速 ${limitKmh.toFixed(0)} km/h · ${props.speedLimit.toFixed(2)} m/s`, width - metricsWidth, height - 52);
-  ctx.fillText(`目标距离 ${formatDistance(distanceToTarget)} m`, width - metricsWidth, height - 30);
+  ctx.font = '11px "Microsoft YaHei", sans-serif';
+  ctx.fillText(`限速 ${limitKmh.toFixed(0)} km/h · ${props.speedLimit.toFixed(2)} m/s`, width - metricsWidth, height - 56);
+  ctx.fillText(`目标距离 ${formatDistance(distanceToTarget)} m`, width - metricsWidth, height - 38);
 
   const chipY = height - 40;
   let chipX = 18;
@@ -496,30 +536,37 @@ function drawCabViewCanvas(
 ) {
   const currentPosition = props.currentState?.position ?? props.startPosition;
   const velocity = props.currentState?.velocity ?? 0;
-  const distanceToTarget = props.targetStopPosition - currentPosition;
 
+  // HUD-only mode: canvas is transparent so Three.js shows through.
+  // Only draw overlays (station info and HMI metrics). Physical station geometry is rendered by ThreeRailwayView.
+  // The tunnel / track surface / lights are rendered by ThreeRailwayView.
   ctx.clearRect(0, 0, width, height);
-  drawTunnel(ctx, width, height, now);
-  drawTunnelLights(ctx, width, height, currentPosition, velocity);
-  drawTrackSurface(ctx, width, height);
-  drawSleepers(ctx, width, height, currentPosition);
-  drawStationAndStopTarget(ctx, width, height, distanceToTarget, props.status, props.stopResult);
-  drawRails(ctx, width, height);
 
-  const vignette = ctx.createRadialGradient(width * 0.5, height * 0.5, height * 0.24, width * 0.5, height * 0.5, width * 0.64);
+  // Subtle vignette so HUD text is readable against 3D background
+  const vignette = ctx.createRadialGradient(width * 0.5, height * 0.5, height * 0.3, width * 0.5, height * 0.5, width * 0.62);
   vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.46)');
+  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.38)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.strokeStyle = 'rgba(206, 218, 216, 0.16)';
+  // Frame border
+  ctx.strokeStyle = 'rgba(206, 218, 216, 0.14)';
   ctx.lineWidth = 2;
   ctx.strokeRect(10, 10, width - 20, height - 20);
+
+  // Station approach HUD
   drawStationHud(ctx, width, height, currentPosition);
+  // Speed / phase / distance HUD chips
   drawCanvasHud(ctx, width, height, props);
+
+  void velocity; // used by ThreeRailwayView, not needed here
+  void now;      // was used by drawTunnel scan lines, not needed in HUD-only mode
 }
 
 type DriveMode = 'ato' | 'manual';
+
+/** Whether Three.js is available (dynamic import succeeds) */
+let threeAvailable: boolean | null = null;
 
 function DriverCabView({
   status,
@@ -530,6 +577,7 @@ function DriverCabView({
   stopResult,
   safetyEventCount = 0,
   isPaused = false,
+  stationStops,
   externalDriveMode,
   onRequestManual,
   onBrakeLevel,
@@ -562,7 +610,7 @@ function DriverCabView({
     }
   }, [externalDriveMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 用于 Canvas 渲染的 props 快照
+  // 用于 Canvas 渲染的 props 快照（含 stationStops，驾驶台 HUD 用于计算下一站距离）
   const propsRef = useRef<DriverCabViewProps>({
     status,
     currentState,
@@ -572,6 +620,7 @@ function DriverCabView({
     stopResult,
     safetyEventCount,
     isPaused,
+    stationStops,
   });
 
   propsRef.current = {
@@ -583,6 +632,7 @@ function DriverCabView({
     stopResult,
     safetyEventCount,
     isPaused,
+    stationStops,
   };
 
   useEffect(() => {
@@ -632,7 +682,12 @@ function DriverCabView({
   const currentAcceleration = currentState?.acceleration ?? 0;
   const speedKmh = mpsToKmh(currentVelocity);
   const speedLimitKmh = mpsToKmh(speedLimit);
-  const distanceToTarget = targetStopPosition - currentPosition;
+  // 目标距离 = 下一站距离（目标二）
+  const { distance: distanceToTarget, nextStopName } = computeDistanceToNextStop(
+    currentPosition, targetStopPosition, stationStops,
+  );
+  // 全程总目标距离（用于 summary 信息展示）
+  const totalDistanceToTarget = targetStopPosition - currentPosition;
   const normalizedPhase = normalizePhase(currentState?.phase);
   const operatingMode = getOperatingMode(status, isPaused);
   const speedRatio = speedLimit > 0 ? currentVelocity / speedLimit : 0;
@@ -672,6 +727,11 @@ function DriverCabView({
   } as CSSProperties;
 
   const distanceTrend = useMemo(() => {
+    if (distanceToTarget === 0 && stationStops && stationStops.length > 0) {
+      // 已过所有站或已到终点
+      const allPassed = stationStops.every((s) => s.actualPosition <= currentPosition + 1);
+      return allPassed ? '已到达' : '到站';
+    }
     if (distanceToTarget > 300) {
       return '巡航区间';
     }
@@ -682,7 +742,7 @@ function DriverCabView({
       return '入站区间';
     }
     return '已越过目标';
-  }, [distanceToTarget]);
+  }, [distanceToTarget, stationStops, currentPosition]);
 
   const systemLights = useMemo(
     () => [
@@ -710,6 +770,9 @@ function DriverCabView({
     [safetyEventCount, status],
   );
 
+  // Speed ratio for ThreeRailwayView motion sense
+  const speedRatioForThree = speedLimit > 0 ? clamp(currentVelocity / speedLimit, 0, 1.2) : 0;
+
   return (
     <section
       className={`driver-cab-view driver-cab-view--${status} ${isPaused ? 'is-paused' : ''}`}
@@ -717,11 +780,20 @@ function DriverCabView({
     >
       <div className="driver-cab-view__layout">
 
-        {/* ── 左列：Canvas + 底部仪表条 ── */}
+        {/* ── 左列：3D场景 + Canvas HUD + 底部仪表条 ── */}
         <div className="driver-cab-view__left-col">
 
           <div className="driver-cab-view__viewport">
-            <canvas ref={canvasRef} className="driver-cab-view__canvas" aria-label="第一人称前方轨道仿真视景" />
+            {/* Three.js 3D 背景层：不白屏兜底 */}
+            <ThreeRailwayView
+              currentState={currentState}
+              speedRatio={speedRatioForThree}
+              targetStopPosition={targetStopPosition}
+              stationStops={stationStops}
+              className="driver-cab-view__three-bg"
+            />
+            {/* Canvas HUD 叠加层（透明背景，叠在 Three.js 上方）*/}
+            <canvas ref={canvasRef} className="driver-cab-view__canvas driver-cab-view__canvas--hud" aria-label="驾驶台仪表叠加层" />
             <div className={`driver-cab-view__mode-chip driver-cab-view__mode-chip--${operatingMode.tone}`}>
               <span />
               <strong>{operatingMode.label}</strong>
@@ -763,11 +835,14 @@ function DriverCabView({
             </div>
 
             <div className="cab-instrument cab-instrument--distance">
-              <div className="cab-instrument__label">目标距离</div>
-              <div className={distanceToTarget < 0 ? 'cab-distance is-passed' : 'cab-distance'}>
-                <span>{formatDistance(distanceToTarget)}</span>
+              <div className="cab-instrument__label">下一站距离</div>
+              <div className={distanceToTarget <= 0 ? 'cab-distance is-passed' : 'cab-distance'}>
+                <span>{distanceToTarget === 0 ? '0.0' : formatDistance(distanceToTarget)}</span>
                 <small>m</small>
               </div>
+              {nextStopName && (
+                <div className="cab-instrument__stop-name" title={nextStopName}>{nextStopName}</div>
+              )}
               <div className="cab-instrument__subline">{distanceTrend}</div>
             </div>
 
@@ -841,6 +916,40 @@ function DriverCabView({
                 <small className="cab-stop-error">误差 {stopResult.stopError.toFixed(2)} m</small>
               )}
             </div>
+
+            {/* 各站停车精度 strip（目标三：紧凑站点条，不做大表格）*/}
+            {stationStops && stationStops.length > 0 && (
+              <div className="cab-station-stops" aria-label="各站停车精度">
+                <span className="cab-panel-label">各站精度</span>
+                <div className="cab-station-stops__list">
+                  {stationStops.map((stop, idx) => {
+                    // 判断是否为当前站：最近刚到达（actualPosition <= currentPosition + 1）
+                    const isPassed = stop.actualPosition <= currentPosition + 1;
+                    const isNearest = isPassed && (
+                      idx === stationStops.length - 1
+                      || stationStops[idx + 1].actualPosition > currentPosition + 1
+                    );
+                    const hasResult = isPassed;
+                    return (
+                      <div
+                        key={stop.stationId}
+                        className={`cab-stop-chip ${hasResult ? (stop.inWindow ? 'is-ok' : 'is-warn') : 'is-pending'} ${isNearest ? 'is-current' : ''}`}
+                        title={`${stop.stationName}\n目标 ${stop.targetPosition.toFixed(0)}m\n实停 ${stop.actualPosition.toFixed(0)}m\n误差 ${stop.stopError.toFixed(2)}m\n驻留 ${stop.dwellTime.toFixed(0)}s`}
+                      >
+                        <span className="cab-stop-chip__name">{stop.stationName}</span>
+                        {hasResult ? (
+                          <span className="cab-stop-chip__err">
+                            {stop.stopError >= 0 ? '+' : ''}{stop.stopError.toFixed(2)}m
+                          </span>
+                        ) : (
+                          <span className="cab-stop-chip__err">—</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 驾驶员控制面板 */}

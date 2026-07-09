@@ -385,25 +385,38 @@ public class VehicleSimulationService {
         java.util.List<com.bjtu.railtransit.vehicle.dto.StationStop> stationStops = new java.util.ArrayList<>();
 
         double lineStartAbsM = stationEntries.get(0).km * 1000.0;
-        double positionOffset = 0.0;  // 本次仿真已走过的累积里程（= 前几段之和）
         double timeOffset = 0.0;      // 全程累积时间
         double maxVelocityAll = 0.0;
         com.bjtu.railtransit.vehicle.dto.StopResult finalStopResult = null;
 
-        double totalTargetPosition = 0.0;
-        for (int seg = 0; seg < stationEntries.size() - 1; seg++) {
-            totalTargetPosition += (stationEntries.get(seg + 1).km - stationEntries.get(seg).km) * 1000.0;
+        // scheduledCumPos[i] = 第 i 站相对于 fromStation 的固定计划累积位置（由 km 数据决定）。
+        // 这是"计划目标"，不随实际停车误差变化。
+        double[] scheduledCumPos = new double[stationEntries.size()];
+        scheduledCumPos[0] = 0.0;
+        for (int i = 1; i < stationEntries.size(); i++) {
+            scheduledCumPos[i] = (stationEntries.get(i).km - stationEntries.get(0).km) * 1000.0;
         }
+        // 全程固定总目标距离（终点站的计划累积位置），不受误差影响。
+        double totalTargetPosition = scheduledCumPos[stationEntries.size() - 1];
+
+        // actualCumPosition：列车当前实际累积位置（每段停车后更新，作为下段积分起点）。
+        // 与 scheduledCumPos 分开跟踪，避免误差串联传递到后续段的目标距离计算。
+        double actualCumPosition = 0.0;
 
         for (int seg = 0; seg < stationEntries.size() - 1; seg++) {
             LineProfileJsonLoader.StationEntry fromSt = stationEntries.get(seg);
             LineProfileJsonLoader.StationEntry toSt = stationEntries.get(seg + 1);
             boolean isLastSeg = (seg == stationEntries.size() - 2);
 
-            double segDistM = (toSt.km - fromSt.km) * 1000.0;
+            // 本段的固定计划目标（来自 km 数据，不被前一站误差带偏）。
+            double scheduledTargetCum = scheduledCumPos[seg + 1];
+            // 本段实际运行距离 = 计划目标 - 当前实际位置（含前站误差补偿）。
+            double segDistM = scheduledTargetCum - actualCumPosition;
             if (segDistM <= 0) {
                 throw new IllegalArgumentException(
-                        "区间 " + fromSt.name + " → " + toSt.name + " 距离为 0 或负值");
+                        "区间 " + fromSt.name + " → " + toSt.name
+                        + " 计划距离为 0 或负值（scheduledTargetCum=" + scheduledTargetCum
+                        + " actualCumPosition=" + actualCumPosition + "）");
             }
 
             com.bjtu.railtransit.vehicle.model.LineProfile segLine =
@@ -417,9 +430,10 @@ public class VehicleSimulationService {
             SimulationResult segResult = run(segScenario);
             java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> segStates = segResult.getStates();
 
-            // 把局部 states 加偏移，写入全程连续坐标
+            // 把局部 states 加偏移，写入全程连续坐标。
+            // TrainState.position 从 fromStation 开始的连续累积实际里程，跨站不归零。
             for (com.bjtu.railtransit.vehicle.dto.TrainState st : segStates) {
-                double globalPos = positionOffset + st.getPosition();
+                double globalPos = actualCumPosition + st.getPosition();
                 double absPos = lineStartAbsM + globalPos;
                 com.bjtu.railtransit.vehicle.dto.TrainState adjusted = new com.bjtu.railtransit.vehicle.dto.TrainState(
                         st.getTime() + timeOffset,
@@ -439,7 +453,7 @@ public class VehicleSimulationService {
                 allSafetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
                         se.getReason(),
                         se.getTime() + timeOffset,
-                        positionOffset + se.getPosition(),
+                        actualCumPosition + se.getPosition(),
                         se.getVelocity(),
                         se.getAction()
                 ));
@@ -448,16 +462,21 @@ public class VehicleSimulationService {
             // 记录本站停车信息
             com.bjtu.railtransit.vehicle.dto.TrainState lastSeg = segStates.get(segStates.size() - 1);
             double arrivalTime = lastSeg.getTime() + timeOffset;
-            double targetSegPos = positionOffset + segDistM;        // 累积目标
-            double actualSegPos = positionOffset + lastSeg.getPosition(); // 累积实际
-            double segStopError = lastSeg.getPosition() - segDistM;
-            boolean inWindow = Math.abs(segStopError) <= STOP_POSITION_TOLERANCE
+            // 实际停车累积位置
+            double actualStopCum = actualCumPosition + lastSeg.getPosition();
+            // targetPosition = 固定计划位置（不被前站误差带偏）
+            // stopError = actualPosition - targetPosition（符合语义：正=冲标，负=欠标）
+            double stopErr = actualStopCum - scheduledTargetCum;
+            boolean inWindow = Math.abs(stopErr) <= STOP_POSITION_TOLERANCE
                     && lastSeg.getVelocity() <= STOP_VELOCITY_TOLERANCE;
 
             stationStops.add(new com.bjtu.railtransit.vehicle.dto.StationStop(
                     toSt.id, toSt.name,
-                    positionOffset, targetSegPos, actualSegPos,
-                    segStopError, inWindow,
+                    scheduledCumPos[seg],   // segmentStartPosition = 本段计划起点（上一站计划位置）
+                    scheduledTargetCum,     // targetPosition = 固定计划目标，不被误差带偏
+                    actualStopCum,          // actualPosition = 实际停车累积里程
+                    stopErr,                // stopError = actualPosition - targetPosition
+                    inWindow,
                     arrivalTime, isLastSeg ? 0.0 : dwell
             ));
 
@@ -465,25 +484,28 @@ public class VehicleSimulationService {
             timeOffset += lastSeg.getTime();
 
             if (isLastSeg) {
-                // 最终站：构造全程 stopResult（targetStopPosition = 全程总距离）
+                // 最终站：全程 stopError = actualStopCum - totalTargetPosition（固定总目标）
+                double finalStopErr = actualStopCum - totalTargetPosition;
                 com.bjtu.railtransit.vehicle.enums.StopWindowState ws =
-                        deriveStopWindowState(segStopError, lastSeg.getVelocity());
+                        deriveStopWindowState(finalStopErr, lastSeg.getVelocity());
+                boolean finalSuccess = Math.abs(finalStopErr) <= STOP_POSITION_TOLERANCE
+                        && lastSeg.getVelocity() <= STOP_VELOCITY_TOLERANCE;
                 finalStopResult = new StopResult(
-                        totalTargetPosition,       // 全程总目标距离
-                        actualSegPos,              // 实际停车绝对累积里程
-                        actualSegPos - totalTargetPosition,
-                        inWindow,
-                        inWindow ? null : String.format("停车误差 %.3fm 或末速度 %.3fm/s 超出阈值",
-                                segStopError, lastSeg.getVelocity()),
+                        totalTargetPosition,   // 全程固定总目标距离（来自 km 数据）
+                        actualStopCum,         // 实际停车累积里程
+                        finalStopErr,          // stopError = actualStop - totalTarget
+                        finalSuccess,
+                        finalSuccess ? null : String.format(
+                                "停车误差 %.3fm 或末速度 %.3fm/s 超出阈值", finalStopErr, lastSeg.getVelocity()),
                         ws,
-                        positionOffset + (segResult.getStopResult() != null
+                        actualCumPosition + (segResult.getStopResult() != null
                                 ? segResult.getStopResult().getBrakeTriggerPosition() : 0.0),
-                        positionOffset + (segResult.getStopResult() != null
+                        actualCumPosition + (segResult.getStopResult() != null
                                 ? segResult.getStopResult().getPredictedStopPosition() : 0.0)
                 );
             } else {
-                // 中间站：插入 dwell 帧（position 不变，time 递增）
-                double dwellPos = actualSegPos;    // 累积相对里程，不变
+                // 中间站：插入 dwell 帧（position = 实际停车位置，time 递增）
+                double dwellPos = actualStopCum;  // 驻留期间位置不变（实际停车处）
                 double dwellAbsPos = lineStartAbsM + dwellPos;
                 int dwellFrames = (int) Math.round(dwell / dt);
                 for (int f = 1; f <= dwellFrames; f++) {
@@ -496,9 +518,9 @@ public class VehicleSimulationService {
                     allStates.add(dSt);
                 }
 
-                // 更新偏移（下一段起点）
+                // 更新偏移：下一段从实际停车位置出发（含误差补偿）
                 timeOffset += dwell;
-                positionOffset = actualSegPos;
+                actualCumPosition = actualStopCum;
             }
         }
 

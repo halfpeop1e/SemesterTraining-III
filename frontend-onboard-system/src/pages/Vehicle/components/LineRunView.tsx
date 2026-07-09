@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LINE_MAP } from '../data/lineMap';
-import type { StopResult, TrainState } from '../../../types/vehicle';
+import type { StationStop, StopResult, TrainState } from '../../../types/vehicle';
 import './LineRunView.css';
 
 export interface LineRunViewProps {
@@ -10,13 +10,8 @@ export interface LineRunViewProps {
   targetStopPosition: number;
   speedLimit: number;
   stopResult: StopResult | null;
-  /**
-   * 阶段4B：真实线路绝对起点里程偏移，单位 m（= lineStartPosition from summary）。
-   * 组件内部：absolutePosition = positionOffset + currentState.position
-   * 用于把相对仿真坐标映射回全线地图的绝对里程位置，不影响 DriverCabView 的相对显示。
-   * 默认为 0（兼容旧调用方）。
-   */
   positionOffset?: number;
+  stationStops?: StationStop[];
 }
 
 interface ViewWindow {
@@ -123,6 +118,67 @@ function describeStopWindowState(stopWindowState: string | undefined) {
   return '未停准';
 }
 
+/** 计算下一站驾驶辅助数据（方案 B 面板）*/
+function computeDrivingAid(
+  currentPosition: number,
+  currentVelocity: number,
+  speedLimit: number,
+  stationStops: StationStop[] | undefined,
+  targetStopPosition: number,
+  positionOffset: number,
+  stopResult: StopResult | null,
+) {
+  // 找下一个未到达的停车站（绝对里程坐标）
+  let nextStopName = '终点';
+  let nextStopAbsM = positionOffset + targetStopPosition;
+
+  if (stationStops && stationStops.length > 0) {
+    for (const stop of stationStops) {
+      const absTarget = positionOffset + stop.targetPosition;
+      if (absTarget >= currentPosition - 0.5) {
+        nextStopName = stop.stationName;
+        nextStopAbsM = absTarget;
+        break;
+      }
+    }
+  }
+
+  const distanceM = Math.max(0, nextStopAbsM - currentPosition);
+
+  // 推荐制动点：v² / (2 * a_brake)，a_brake = 1.1 m/s²（SIM 常用制动默认值）
+  const SIM_BRAKE_DECEL = 1.1; // m/s²
+  const brakingDistanceM = currentVelocity > 0 ? (currentVelocity * currentVelocity) / (2 * SIM_BRAKE_DECEL) : 0;
+  const brakeMarginM = distanceM - brakingDistanceM;
+
+  // 预计剩余时间（简化：匀速估算）
+  const etaS = currentVelocity > 0.1 ? distanceM / currentVelocity : null;
+
+  // 最近到站误差（上一站结果）
+  let lastStopError: number | null = null;
+  if (stationStops) {
+    const passed = stationStops.filter((s) => positionOffset + s.targetPosition < currentPosition - 0.5 && s.actualPosition > 0);
+    if (passed.length > 0) lastStopError = passed[passed.length - 1].stopError;
+  } else if (stopResult) {
+    lastStopError = stopResult.stopError;
+  }
+
+  return {
+    nextStopName,
+    distanceM,
+    brakingDistanceM,
+    brakeMarginM,
+    etaS,
+    speedLimitKmh: speedLimit * 3.6,
+    lastStopError,
+  };
+}
+
+function formatEta(etaS: number | null): string {
+  if (etaS === null || etaS > 9999) return '—';
+  if (etaS < 60) return `${Math.round(etaS)}s`;
+  return `${Math.floor(etaS / 60)}m${Math.round(etaS % 60)}s`;
+}
+
 function LineRunView({
   status,
   currentState,
@@ -131,6 +187,7 @@ function LineRunView({
   speedLimit,
   stopResult,
   positionOffset = 0,
+  stationStops,
 }: LineRunViewProps) {
   // 坐标优先级：TrainState.absolutePosition（多站时已正确填充）> positionOffset + position
   const relativePosition = currentState?.position ?? startPosition;
@@ -138,6 +195,22 @@ function LineRunView({
     ? currentState.absolutePosition
     : positionOffset + relativePosition;
   const currentPosition = clamp(absolutePosition, LINE_MAP.lineStartM, LINE_MAP.lineEndM);
+  const currentVelocity = currentState?.velocity ?? 0;
+
+  // 方案 B：下一站驾驶辅助数据
+  const drivingAid = useMemo(
+    () => computeDrivingAid(
+      currentPosition,
+      currentVelocity,
+      speedLimit,
+      stationStops,
+      targetStopPosition,
+      positionOffset,
+      stopResult,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentPosition, currentVelocity, speedLimit, stationStops, targetStopPosition, positionOffset, stopResult],
+  );
 
   // startPosition 和 targetStopPosition 加偏移，用于全线地图定位
   const absoluteStartPosition = positionOffset + startPosition;
@@ -252,12 +325,18 @@ function LineRunView({
   };
 
   const returnToTrain = () => {
-    setIsFollowing(true);
-    if (status === 'finished') {
-      setViewWindow(buildFinishedWindow(absoluteTargetStopPosition, actualStopPosition));
-      return;
-    }
-    setViewWindow(buildFollowWindow(currentPosition));
+    // 方案 A：不设 isFollowing=true，避免 useEffect 用 buildFollowWindow 覆盖当前 span。
+    // 只移动视图中心到列车位置，span（缩放比例）完全保持不变。
+    // "复位"按钮才恢复默认全线窗口。
+    setViewWindow((current) => {
+      const currentSpan = current.end - current.start;
+      const center =
+        status === 'finished' && stopResult?.actualStopPosition !== undefined
+          ? positionOffset + stopResult.actualStopPosition
+          : currentPosition;
+      return expandWindowAround(center, currentSpan);
+    });
+    // isFollowing 保持 false，useEffect 不触发，span 不被覆盖。
   };
 
   // 阶段4B：所有坐标都用绝对里程，用于在全线地图上正确定位
@@ -419,6 +498,46 @@ function LineRunView({
           <text x="0" y="-36">{currentState ? currentState.trainId : 'T1'}</text>
         </g>
       </svg>
+
+      {/* ── 方案 B：下一站驾驶辅助 ─────────────────────────────────── */}
+      <div className="line-run-view__driving-aid" aria-label="下一站驾驶辅助">
+        <div className="lrv-aid__title">下一站驾驶辅助</div>
+        <div className="lrv-aid__grid">
+          <div className="lrv-aid__item">
+            <span className="lrv-aid__label">下一站</span>
+            <span className="lrv-aid__value lrv-aid__value--name">{drivingAid.nextStopName}</span>
+          </div>
+          <div className="lrv-aid__item">
+            <span className="lrv-aid__label">距下一站</span>
+            <span className="lrv-aid__value">{drivingAid.distanceM.toFixed(0)}<small>m</small></span>
+          </div>
+          <div className="lrv-aid__item">
+            <span className="lrv-aid__label">推荐制动距离</span>
+            <span className="lrv-aid__value">{drivingAid.brakingDistanceM.toFixed(0)}<small>m</small></span>
+          </div>
+          <div className="lrv-aid__item">
+            <span className="lrv-aid__label">制动余量</span>
+            <span className={`lrv-aid__value ${drivingAid.brakeMarginM < 20 ? 'lrv-aid__value--warn' : 'lrv-aid__value--ok'}`}>
+              {drivingAid.brakeMarginM.toFixed(0)}<small>m</small>
+            </span>
+          </div>
+          <div className="lrv-aid__item">
+            <span className="lrv-aid__label">预计剩余时间</span>
+            <span className="lrv-aid__value">{formatEta(drivingAid.etaS)}</span>
+          </div>
+          <div className="lrv-aid__item">
+            <span className="lrv-aid__label">当前限速</span>
+            <span className="lrv-aid__value">{drivingAid.speedLimitKmh.toFixed(0)}<small>km/h</small></span>
+          </div>
+          <div className="lrv-aid__item lrv-aid__item--full">
+            <span className="lrv-aid__label">上次到站误差</span>
+            <span className={`lrv-aid__value ${drivingAid.lastStopError === null ? '' : Math.abs(drivingAid.lastStopError) <= 0.5 ? 'lrv-aid__value--ok' : 'lrv-aid__value--warn'}`}>
+              {drivingAid.lastStopError === null ? '—' : `${drivingAid.lastStopError >= 0 ? '+' : ''}${drivingAid.lastStopError.toFixed(2)}`}<small>{drivingAid.lastStopError !== null ? 'm' : ''}</small>
+            </span>
+          </div>
+        </div>
+      </div>
+
     </section>
   );
 }
