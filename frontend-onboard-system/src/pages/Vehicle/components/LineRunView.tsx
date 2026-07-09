@@ -132,20 +132,18 @@ function LineRunView({
   stopResult,
   positionOffset = 0,
 }: LineRunViewProps) {
-  // 阶段4B：把相对仿真坐标映射到全线地图绝对里程
-  // absolutePosition = positionOffset + currentState.position
+  // 坐标优先级：TrainState.absolutePosition（多站时已正确填充）> positionOffset + position
   const relativePosition = currentState?.position ?? startPosition;
-  const absolutePosition = positionOffset + relativePosition;
-  const currentPosition = clamp(
-    absolutePosition,
-    LINE_MAP.lineStartM,
-    LINE_MAP.lineEndM,
-  );
-  // startPosition 和 targetStopPosition 也需要加上偏移量，用于在全线地图上定位
+  const absolutePosition = currentState?.absolutePosition !== undefined
+    ? currentState.absolutePosition
+    : positionOffset + relativePosition;
+  const currentPosition = clamp(absolutePosition, LINE_MAP.lineStartM, LINE_MAP.lineEndM);
+
+  // startPosition 和 targetStopPosition 加偏移，用于全线地图定位
   const absoluteStartPosition = positionOffset + startPosition;
   const absoluteTargetStopPosition = positionOffset + targetStopPosition;
   const actualStopPosition = stopResult ? stopResult.actualStopPosition : null;
-  // 阶段4B：actualStopPosition 是相对坐标，加偏移得到全线绝对里程
+  // actualStopPosition 是从 fromStation 起的累积坐标，需要加 lineStartAbsM 得到全线绝对里程
   const absoluteActualStopPosition = actualStopPosition === null ? null : positionOffset + actualStopPosition;
   const [viewWindow, setViewWindow] = useState<ViewWindow>(() => buildFollowWindow(currentPosition));
   const [isFollowing, setIsFollowing] = useState(true);

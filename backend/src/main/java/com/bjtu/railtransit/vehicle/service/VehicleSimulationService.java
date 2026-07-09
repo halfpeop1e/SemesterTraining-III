@@ -1,10 +1,12 @@
 package com.bjtu.railtransit.vehicle.service;
 
 import com.bjtu.railtransit.vehicle.dto.SafetyEvent;
+import com.bjtu.railtransit.vehicle.dto.SimulationControlRequest;
 import com.bjtu.railtransit.vehicle.dto.SimulationResult;
 import com.bjtu.railtransit.vehicle.dto.SimulationSummary;
 import com.bjtu.railtransit.vehicle.dto.StopResult;
 import com.bjtu.railtransit.vehicle.dto.TrainState;
+import com.bjtu.railtransit.vehicle.enums.DrivingMode;
 import com.bjtu.railtransit.vehicle.enums.SimulationPhase;
 import com.bjtu.railtransit.vehicle.enums.StopWindowState;
 import com.bjtu.railtransit.vehicle.model.LineProfile;
@@ -345,5 +347,413 @@ public class VehicleSimulationService {
             return StopWindowState.OVERSHOOT;
         }
         return StopWindowState.UNDERSHOOT;
+    }
+
+    // ==================== 多站连续仿真（本轮新增）====================
+
+    /**
+     * 默认驻留时间，单位 s。
+     */
+    static final double DEFAULT_DWELL_TIME_SECONDS = 30.0;
+
+    /**
+     * 多站连续仿真：从 stationEntries[0] 出发，经若干中间站，到达最后一站。
+     *
+     * <p><b>坐标规则</b>：返回的所有 {@link com.bjtu.railtransit.vehicle.dto.TrainState}
+     * 的 {@code position} 均从 fromStation 开始连续累积，跨越中间站不归零。
+     * {@link com.bjtu.railtransit.vehicle.dto.StopResult#getTargetStopPosition()}
+     * 等于 fromStation 到最终 toStation 的总距离，与 states 末态 position 同坐标系。</p>
+     *
+     * <p>实现方式：对每段区间调用 {@link #run(com.bjtu.railtransit.vehicle.model.ScenarioConfig)}
+     * 得到局部 states（position 0→segDist），然后对每个局部 state 加上 positionOffset
+     * 得到全程累积坐标。absolutePosition = lineStartAbsM + 全程累积 position。</p>
+     */
+    public SimulationResult runMultiStation(
+            java.util.List<LineProfileJsonLoader.StationEntry> stationEntries,
+            Double dwellTimeSeconds,
+            DemoScenarioProvider demoProvider) {
+
+        if (stationEntries == null || stationEntries.size() < 2) {
+            throw new IllegalArgumentException("多站仿真至少需要 2 个站点");
+        }
+
+        double dwell = dwellTimeSeconds != null ? dwellTimeSeconds : DEFAULT_DWELL_TIME_SECONDS;
+        double dt = 0.5; // DemoScenarioProvider.DT，不改 dtPerFrame
+
+        java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> allStates = new java.util.ArrayList<>();
+        java.util.List<com.bjtu.railtransit.vehicle.dto.SafetyEvent> allSafetyEvents = new java.util.ArrayList<>();
+        java.util.List<com.bjtu.railtransit.vehicle.dto.StationStop> stationStops = new java.util.ArrayList<>();
+
+        double lineStartAbsM = stationEntries.get(0).km * 1000.0;
+        double positionOffset = 0.0;  // 本次仿真已走过的累积里程（= 前几段之和）
+        double timeOffset = 0.0;      // 全程累积时间
+        double maxVelocityAll = 0.0;
+        com.bjtu.railtransit.vehicle.dto.StopResult finalStopResult = null;
+
+        double totalTargetPosition = 0.0;
+        for (int seg = 0; seg < stationEntries.size() - 1; seg++) {
+            totalTargetPosition += (stationEntries.get(seg + 1).km - stationEntries.get(seg).km) * 1000.0;
+        }
+
+        for (int seg = 0; seg < stationEntries.size() - 1; seg++) {
+            LineProfileJsonLoader.StationEntry fromSt = stationEntries.get(seg);
+            LineProfileJsonLoader.StationEntry toSt = stationEntries.get(seg + 1);
+            boolean isLastSeg = (seg == stationEntries.size() - 2);
+
+            double segDistM = (toSt.km - fromSt.km) * 1000.0;
+            if (segDistM <= 0) {
+                throw new IllegalArgumentException(
+                        "区间 " + fromSt.name + " → " + toSt.name + " 距离为 0 或负值");
+            }
+
+            com.bjtu.railtransit.vehicle.model.LineProfile segLine =
+                    new com.bjtu.railtransit.vehicle.model.LineProfile(
+                            0.0, segDistM,
+                            LineProfileJsonLoader.ASSUMED_SPEED_LIMIT_MPS,
+                            java.util.Collections.emptyList());
+            com.bjtu.railtransit.vehicle.model.ScenarioConfig segScenario =
+                    demoProvider.buildScenario(segLine);
+
+            SimulationResult segResult = run(segScenario);
+            java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> segStates = segResult.getStates();
+
+            // 把局部 states 加偏移，写入全程连续坐标
+            for (com.bjtu.railtransit.vehicle.dto.TrainState st : segStates) {
+                double globalPos = positionOffset + st.getPosition();
+                double absPos = lineStartAbsM + globalPos;
+                com.bjtu.railtransit.vehicle.dto.TrainState adjusted = new com.bjtu.railtransit.vehicle.dto.TrainState(
+                        st.getTime() + timeOffset,
+                        globalPos,
+                        st.getVelocity(),
+                        st.getAcceleration(),
+                        st.getPhase(),
+                        "T1"
+                );
+                adjusted.setAbsolutePosition(absPos);
+                allStates.add(adjusted);
+                if (st.getVelocity() > maxVelocityAll) maxVelocityAll = st.getVelocity();
+            }
+
+            // 追加区间 safetyEvents（time 平移，position 加偏移）
+            for (com.bjtu.railtransit.vehicle.dto.SafetyEvent se : segResult.getSafetyEvents()) {
+                allSafetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
+                        se.getReason(),
+                        se.getTime() + timeOffset,
+                        positionOffset + se.getPosition(),
+                        se.getVelocity(),
+                        se.getAction()
+                ));
+            }
+
+            // 记录本站停车信息
+            com.bjtu.railtransit.vehicle.dto.TrainState lastSeg = segStates.get(segStates.size() - 1);
+            double arrivalTime = lastSeg.getTime() + timeOffset;
+            double targetSegPos = positionOffset + segDistM;        // 累积目标
+            double actualSegPos = positionOffset + lastSeg.getPosition(); // 累积实际
+            double segStopError = lastSeg.getPosition() - segDistM;
+            boolean inWindow = Math.abs(segStopError) <= STOP_POSITION_TOLERANCE
+                    && lastSeg.getVelocity() <= STOP_VELOCITY_TOLERANCE;
+
+            stationStops.add(new com.bjtu.railtransit.vehicle.dto.StationStop(
+                    toSt.id, toSt.name,
+                    positionOffset, targetSegPos, actualSegPos,
+                    segStopError, inWindow,
+                    arrivalTime, isLastSeg ? 0.0 : dwell
+            ));
+
+            // 更新时间偏移（含本段运行时间）
+            timeOffset += lastSeg.getTime();
+
+            if (isLastSeg) {
+                // 最终站：构造全程 stopResult（targetStopPosition = 全程总距离）
+                com.bjtu.railtransit.vehicle.enums.StopWindowState ws =
+                        deriveStopWindowState(segStopError, lastSeg.getVelocity());
+                finalStopResult = new StopResult(
+                        totalTargetPosition,       // 全程总目标距离
+                        actualSegPos,              // 实际停车绝对累积里程
+                        actualSegPos - totalTargetPosition,
+                        inWindow,
+                        inWindow ? null : String.format("停车误差 %.3fm 或末速度 %.3fm/s 超出阈值",
+                                segStopError, lastSeg.getVelocity()),
+                        ws,
+                        positionOffset + (segResult.getStopResult() != null
+                                ? segResult.getStopResult().getBrakeTriggerPosition() : 0.0),
+                        positionOffset + (segResult.getStopResult() != null
+                                ? segResult.getStopResult().getPredictedStopPosition() : 0.0)
+                );
+            } else {
+                // 中间站：插入 dwell 帧（position 不变，time 递增）
+                double dwellPos = actualSegPos;    // 累积相对里程，不变
+                double dwellAbsPos = lineStartAbsM + dwellPos;
+                int dwellFrames = (int) Math.round(dwell / dt);
+                for (int f = 1; f <= dwellFrames; f++) {
+                    com.bjtu.railtransit.vehicle.dto.TrainState dSt =
+                            new com.bjtu.railtransit.vehicle.dto.TrainState(
+                                    timeOffset + f * dt,
+                                    dwellPos, 0.0, 0.0,
+                                    SimulationPhase.DWELL, "T1");
+                    dSt.setAbsolutePosition(dwellAbsPos);
+                    allStates.add(dSt);
+                }
+
+                // 更新偏移（下一段起点）
+                timeOffset += dwell;
+                positionOffset = actualSegPos;
+            }
+        }
+
+        // 构造汇总 summary
+        com.bjtu.railtransit.vehicle.dto.TrainState lastAll = allStates.get(allStates.size() - 1);
+        SimulationSummary summary = new SimulationSummary(
+                maxVelocityAll, lastAll.getTime(), lastAll.getPosition(),
+                LineProfileJsonLoader.ASSUMED_SPEED_LIMIT_MPS, dt);
+        summary.setLineStartPosition(lineStartAbsM);
+        summary.setLineTargetPosition(stationEntries.get(stationEntries.size() - 1).km * 1000.0);
+        summary.setFromStationName(stationEntries.get(0).name);
+        summary.setToStationName(stationEntries.get(stationEntries.size() - 1).name);
+        summary.setTotalStations(stationEntries.size());
+        summary.setCompletedStops(stationStops.size());
+
+        SimulationResult result = new SimulationResult(allStates, summary, finalStopResult, allSafetyEvents);
+        result.setStationStops(stationStops);
+        return result;
+    }
+
+    // ==================== 驾驶员控制续算（本轮新增）====================
+
+    /**
+     * 驾驶员控制续算：从请求携带的当前帧状态开始，根据 currentMode 和 controlCommand
+     * 重新续算后续状态序列。
+     *
+     * <p><b>坐标规则</b>：{@code request.currentState.position} 是全程累积相对里程，
+     * {@code request.totalTargetPosition} 是本次仿真从 fromStation 到 toStation 的总距离。
+     * 续算在"从当前位置到总目标"的剩余距离上进行，返回的 states.position 以
+     * currentState.position 为起点继续累积（不归零）。</p>
+     *
+     * <p><b>模式语义</b>：</p>
+     * <ul>
+     *   <li>ATO + 普通 brake → 拒绝，保持 ATO 自动续算（不切换模式）。</li>
+     *   <li>MANUAL + brake → targetDecel 约束在 [0, normalBrakeDeceleration]，真实续算。</li>
+     *   <li>任意模式 + emergency_brake → EMERGENCY，使用 emergencyBrakeDeceleration，中断多站任务。</li>
+     *   <li>ATO → MANUAL 模式切换（coast 指令）→ 切换模式，但按 ATO 自动策略续算轨迹。</li>
+     * </ul>
+     */
+    public SimulationResult runContinuation(SimulationControlRequest request, ScenarioConfig scenario) {
+        if (request.getCurrentState() == null) throw new IllegalArgumentException("currentState 不能为空");
+        if (request.getCurrentMode() == null) throw new IllegalArgumentException("currentMode 不能为空");
+        if (request.getControlCommand() == null) throw new IllegalArgumentException("controlCommand 不能为空");
+
+        LineProfile line = scenario.getLineProfile();
+        TrainModel train = scenario.getTrainModel();
+        double dt = scenario.getDt();
+        double dtSub = dt / SUB_STEPS_PER_SAMPLE;
+        double speedLimit = line.getSpeedLimit();
+
+        // 续算的"本地目标停车位置"= 全程总目标 - 当前累积位置
+        // 使用局部坐标跑物理积分，结果再加回偏移
+        double currentCumulativePos = request.getCurrentState().getPosition();
+        double totalTarget = request.getTotalTargetPosition();
+        double localTarget = totalTarget - currentCumulativePos; // 剩余距离
+
+        com.bjtu.railtransit.vehicle.dto.ControlCommand cmd = request.getControlCommand();
+        DrivingMode inputMode = request.getCurrentMode();
+        String commandStr = cmd.getCommand() != null ? cmd.getCommand().toLowerCase() : "";
+        boolean isEB = "emergency_brake".equals(commandStr);
+
+        // 确定实际执行模式
+        DrivingMode effectiveMode;
+        if (isEB) {
+            effectiveMode = DrivingMode.EMERGENCY;
+        } else if (inputMode == DrivingMode.ATO && "brake".equals(commandStr)) {
+            // ATO 下普通 brake 被拒绝，保持 ATO
+            effectiveMode = DrivingMode.ATO;
+        } else {
+            effectiveMode = inputMode;
+        }
+
+        double startT = request.getCurrentState().getTime();
+        double localPos = 0.0;     // 续算时的局部位置（从 0 开始）
+        double v = request.getCurrentState().getVelocity();
+        double t = startT;
+
+        java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> states = new java.util.ArrayList<>();
+        java.util.List<com.bjtu.railtransit.vehicle.dto.SafetyEvent> safetyEvents = new java.util.ArrayList<>();
+
+        boolean brakingTriggered = false;
+        boolean coastEntered = false;
+        double brakeResponseRemaining = 0.0;
+        double brakeTriggerPosition = 0.0;
+        double predictedStopPositionAtTrigger = 0.0;
+
+        // MANUAL brake：立即触发
+        double manualTargetDecel = 0.0;
+        if (effectiveMode == DrivingMode.MANUAL && "brake".equals(commandStr)) {
+            manualTargetDecel = Math.min(Math.max(cmd.getTargetDecel(), 0.0),
+                    train.getNormalBrakeDeceleration());
+            brakingTriggered = true;
+            brakeTriggerPosition = localPos;
+            brakeResponseRemaining = train.getBrakeResponseTime();
+        }
+
+        // EMERGENCY：立即触发，生成 SafetyEvent
+        if (effectiveMode == DrivingMode.EMERGENCY) {
+            brakingTriggered = true;
+            brakeTriggerPosition = localPos;
+            brakeResponseRemaining = train.getBrakeResponseTime();
+            String reason = isEB ? "DRIVER_EMERGENCY_BRAKE" : "EMERGENCY_MODE_ENGAGED";
+            safetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
+                    reason, t, currentCumulativePos, v, "emergency_brake"));
+        }
+
+        final double fManualDecel = manualTargetDecel;
+        final DrivingMode fMode = effectiveMode;
+
+        // 续算积分（局部坐标，0 → localTarget）
+        for (int step = 0; step < MAX_STEPS; step++) {
+            if (brakingTriggered && v <= VELOCITY_EPSILON) {
+                // 写入全程累积坐标
+                states.add(makeGlobal(t, localPos, 0.0, 0.0,
+                        SimulationPhase.STOPPED, currentCumulativePos,
+                        request.getCurrentState().getAbsolutePosition()));
+                break;
+            }
+
+            double sampleT = t;
+            double sampleLocalPos = localPos;
+            double sampleV = v;
+            SimulationPhase samplePhase = null;
+            double sampleAccel = 0.0;
+
+            for (int sub = 0; sub < SUB_STEPS_PER_SAMPLE; sub++) {
+                if (brakingTriggered && v <= VELOCITY_EPSILON) {
+                    if (samplePhase == null) { samplePhase = SimulationPhase.STOPPED; sampleAccel = 0.0; }
+                    break;
+                }
+
+                SimulationPhase phase;
+                double acceleration;
+                double drag = computeNetDrag(localPos, v, train, line);
+
+                if (brakingTriggered) {
+                    phase = SimulationPhase.BRAKING;
+                    if (brakeResponseRemaining > 0) {
+                        acceleration = -drag;
+                        brakeResponseRemaining -= dtSub;
+                    } else {
+                        double brakeDecel = (fMode == DrivingMode.EMERGENCY)
+                                ? train.getEmergencyBrakeDeceleration()
+                                : (fMode == DrivingMode.MANUAL) ? fManualDecel
+                                : train.getNormalBrakeDeceleration();
+                        acceleration = -brakeDecel - drag;
+                    }
+                } else if (fMode == DrivingMode.ATO || fMode == DrivingMode.MANUAL) {
+                    // ATO 或 MANUAL（无 brake 指令）：使用 ATO 自动策略
+                    double predicted = predictStopPosition(localPos, v, train, line, dtSub);
+                    if (predicted >= localTarget) {
+                        brakingTriggered = true;
+                        brakeTriggerPosition = localPos;
+                        predictedStopPositionAtTrigger = predicted;
+                        brakeResponseRemaining = train.getBrakeResponseTime();
+                        phase = SimulationPhase.BRAKING;
+                        acceleration = -drag;
+                    } else if (!coastEntered && v < speedLimit - VELOCITY_EPSILON) {
+                        phase = SimulationPhase.TRACTION;
+                        acceleration = train.getMaxAcceleration() - drag;
+                    } else {
+                        coastEntered = true;
+                        phase = SimulationPhase.COAST;
+                        acceleration = -drag;
+                    }
+                } else {
+                    phase = SimulationPhase.COAST;
+                    acceleration = -drag;
+                }
+
+                double vNext = v + acceleration * dtSub;
+                if (vNext < 0.0) vNext = 0.0;
+                if (phase == SimulationPhase.TRACTION && vNext >= speedLimit) {
+                    vNext = speedLimit; coastEntered = true;
+                }
+                double posNext = localPos + 0.5 * (v + vNext) * dtSub;
+
+                // SafetyGuard：超速检查
+                if (vNext > speedLimit + VELOCITY_EPSILON && !brakingTriggered) {
+                    safetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
+                            "OVERSPEED",
+                            t + (sub + 1) * dtSub,
+                            currentCumulativePos + posNext,
+                            vNext,
+                            "emergency_brake"
+                    ));
+                    brakingTriggered = true;
+                    brakeTriggerPosition = posNext;
+                    predictedStopPositionAtTrigger = predictStopPosition(posNext, vNext, train, line, dtSub);
+                    brakeResponseRemaining = 0.0;
+                    phase = SimulationPhase.BRAKING;
+                }
+
+                if (sub == 0) { samplePhase = phase; sampleAccel = acceleration; }
+                t += dtSub; localPos = posNext; v = vNext;
+            }
+
+            if (samplePhase == null) samplePhase = SimulationPhase.STOPPED;
+            states.add(makeGlobal(sampleT, sampleLocalPos, sampleV, sampleAccel,
+                    samplePhase, currentCumulativePos,
+                    request.getCurrentState().getAbsolutePosition()));
+        }
+
+        if (states.isEmpty() || states.get(states.size() - 1).getPhase() != SimulationPhase.STOPPED) {
+            throw new IllegalStateException("控制续算未在最大步数内收敛到停车状态");
+        }
+
+        // 构造结果：targetStopPosition 仍使用全程总目标距离
+        com.bjtu.railtransit.vehicle.dto.TrainState lastState = states.get(states.size() - 1);
+        double actualCumPos = lastState.getPosition();
+        double stopError = actualCumPos - totalTarget;
+        boolean success = Math.abs(stopError) <= STOP_POSITION_TOLERANCE
+                && lastState.getVelocity() <= STOP_VELOCITY_TOLERANCE;
+        StopWindowState ws = deriveStopWindowState(stopError, lastState.getVelocity());
+        StopResult stopResult = new StopResult(
+                totalTarget, actualCumPos, stopError, success,
+                success ? null : String.format("续算停车误差 %.3fm 或末速 %.3fm/s 超出阈值",
+                        stopError, lastState.getVelocity()),
+                ws, currentCumulativePos + brakeTriggerPosition,
+                currentCumulativePos + predictedStopPositionAtTrigger);
+
+        // 续算时只有这一段 states，不保留旧的 stationStops（EB 中断多站任务）
+        double maxV = states.stream().mapToDouble(com.bjtu.railtransit.vehicle.dto.TrainState::getVelocity).max().orElse(0);
+        SimulationSummary summary = new SimulationSummary(
+                maxV, lastState.getTime(), lastState.getPosition(),
+                speedLimit, dt);
+        summary.setCurrentMode(fMode);
+        if (fMode == DrivingMode.EMERGENCY && lastState.getPhase() == SimulationPhase.STOPPED) {
+            summary.setNextMode(DrivingMode.MANUAL);
+        }
+
+        SimulationResult result = new SimulationResult(states, summary, stopResult, safetyEvents);
+        // 清空 stationStops：EB 或续算中断了多站任务
+        result.setStationStops(java.util.Collections.emptyList());
+        return result;
+    }
+
+    /**
+     * 将局部坐标（0→segDist）的 state 转换为全程累积坐标。
+     *
+     * @param localPos           局部位置（0 起点算）
+     * @param cumulativeOffset   当前帧之前的累积里程
+     * @param baseAbsolutePos    续算起点的 absolutePosition（可为 null）
+     */
+    private com.bjtu.railtransit.vehicle.dto.TrainState makeGlobal(
+            double t, double localPos, double velocity, double acceleration,
+            SimulationPhase phase,
+            double cumulativeOffset, Double baseAbsolutePos) {
+        double globalPos = cumulativeOffset + localPos;
+        com.bjtu.railtransit.vehicle.dto.TrainState st =
+                new com.bjtu.railtransit.vehicle.dto.TrainState(
+                        t, globalPos, velocity, acceleration, phase, "T1");
+        if (baseAbsolutePos != null) {
+            st.setAbsolutePosition(baseAbsolutePos + localPos);
+        }
+        return st;
     }
 }

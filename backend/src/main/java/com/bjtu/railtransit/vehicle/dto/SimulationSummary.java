@@ -151,4 +151,34 @@ public class SimulationSummary {
     public void setToStationName(String toStationName) {
         this.toStationName = toStationName;
     }
+
+    // ---- 驾驶模式与多站汇总字段（本轮新增，旧字段全部保留）----
+
+    /**
+     * 续算结束后的驾驶模式（/control 接口返回时填充，/run 接口返回时为 null）。
+     */
+    private com.bjtu.railtransit.vehicle.enums.DrivingMode currentMode;
+
+    /**
+     * 建议的后续驾驶模式（EMERGENCY 停稳后建议切换到 MANUAL，可为 null）。
+     */
+    private com.bjtu.railtransit.vehicle.enums.DrivingMode nextMode;
+
+    /** 总经停站数（含起点和终点）。单区间时为 2。 */
+    private int totalStations;
+
+    /** 已完成停车的站数（含终点站）。 */
+    private int completedStops;
+
+    public com.bjtu.railtransit.vehicle.enums.DrivingMode getCurrentMode() { return currentMode; }
+    public void setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode currentMode) { this.currentMode = currentMode; }
+
+    public com.bjtu.railtransit.vehicle.enums.DrivingMode getNextMode() { return nextMode; }
+    public void setNextMode(com.bjtu.railtransit.vehicle.enums.DrivingMode nextMode) { this.nextMode = nextMode; }
+
+    public int getTotalStations() { return totalStations; }
+    public void setTotalStations(int totalStations) { this.totalStations = totalStations; }
+
+    public int getCompletedStops() { return completedStops; }
+    public void setCompletedStops(int completedStops) { this.completedStops = completedStops; }
 }
