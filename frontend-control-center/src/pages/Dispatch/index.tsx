@@ -26,6 +26,7 @@ import type {
   StationGeo,
   TrainState,
   TrainPositionPoint,
+  TrainCommand,
 } from "../../types/dispatch";
 
 /* ================================================================
@@ -93,6 +94,18 @@ const STATUS_COLOR: Record<TrainState["status"], string> = {
   DWELLING: "#9b59b6",
   TURNING_BACK: "#ff9f43",
   FINISHED: "#fc5c65",
+};
+const RECOVERY_LABEL: Record<number, string> = {
+  0: "L1 赶点",
+  1: "L2 赶点",
+  2: "L3 赶点",
+  3: "L4 赶点",
+};
+const RECOVERY_COLOR: Record<number, string> = {
+  0: "#f7b731",
+  1: "#ff9f43",
+  2: "#fc5c65",
+  3: "#e55058",
 };
 const TRAIN_COLORS = [
   "#00a8e8",
@@ -537,6 +550,7 @@ export default function Dispatch() {
     start,
     stop,
     step,
+    reset,
     setSpeed,
     setError,
   } = useSimulation();
@@ -576,6 +590,12 @@ export default function Dispatch() {
   const plannedHistory = snapshot?.plannedDiagramPoints ?? [];
   const planDeviations = snapshot?.planDeviations ?? [];
   const energy = snapshot?.totalEnergyKwh ?? 0;
+  const recoveryMap = new Map<string, number>();
+  commands.forEach((c) => {
+    if (c.commandType === "SPEED_UP" && c.targetValue !== undefined) {
+      recoveryMap.set(c.trainId, Math.min(c.targetValue, 3));
+    }
+  });
 
   if (stations.length === 0 && !error) {
     return (
@@ -703,7 +723,7 @@ export default function Dispatch() {
               >
                 <polygon points="8,5 19,12 8,19" />
               </svg>
-              启动
+              {snapshot ? "继续" : "启动"}
             </button>
             <button
               type="button"
@@ -724,6 +744,16 @@ export default function Dispatch() {
                   <rect x="6" y="6" width="12" height="12" rx="1.5" />
                 </svg>
                 停止
+              </button>
+            )}
+            {!isRunning && snapshot && (
+              <button
+                type="button"
+                className="d-btn d-btn-reset"
+                onClick={reset}
+                disabled={loading}
+              >
+                ↺ 重置
               </button>
             )}
           </div>
@@ -985,6 +1015,27 @@ export default function Dispatch() {
                                     s
                                   </span>
                                 ) : null}
+                                {recoveryMap.has(t.trainId) && (
+                                  <span
+                                    className="text-[8px] px-[3px] rounded-sm ml-1 font-bold"
+                                    style={{
+                                      background:
+                                        RECOVERY_COLOR[
+                                          recoveryMap.get(t.trainId)!
+                                        ] + "20",
+                                      color:
+                                        RECOVERY_COLOR[
+                                          recoveryMap.get(t.trainId)!
+                                        ],
+                                    }}
+                                  >
+                                    {
+                                      RECOVERY_LABEL[
+                                        recoveryMap.get(t.trainId)!
+                                      ]
+                                    }
+                                  </span>
+                                )}
                               </td>
                               <td className="text-[10px] text-slate-400">
                                 {t.routePattern === "SHORT_S"
