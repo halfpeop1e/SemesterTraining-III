@@ -12,7 +12,9 @@ public class SimulationLog {
     private String direction;        // "up" 上行 / "down" 下行
     private double loadWeight;       // 载重 (kg)
     private double tractionForce;    // 牵引力 (N)，来自动力学模型
-    private double brakeForce;       // 制动力 (N)，来自动力学模型
+    private double brakeForce;       // 总制动力 (N)，来自动力学模型
+    private double electricBrakeForce; // 电制动分量 (N) —— CBTC 执行层力分离
+    private double airBrakeForce;      // 空气制动分量 (N) —— CBTC 执行层力分离
     private String tractiveBrakeCmd; // "traction" / "brake" / "coast"
     private double tractiveBrakePercent; // 牵引/制动百分比 0-100
     private boolean emergencyBrake;  // 紧急制动
@@ -21,6 +23,10 @@ public class SimulationLog {
     private double faultSpeedLimit;  // 故障限速 (m/s)
     private String drivingMode;      // RM/CM/AM/AR/EUM/CAM/FAM
     private int currentSegId;        // 当前所在Seg编号
+    private String tractionHealth;   // 牵引系统健康状态 NORMAL|DEGRADED|FAULT
+    private String brakingHealth;    // 制动系统健康状态 NORMAL|DEGRADED|FAULT
+    private int availableMotors;     // 当前可用电机数
+    private boolean electricBrakeAvailable; // 电制动是否可用
 
     public SimulationLog() {}
 
@@ -49,6 +55,12 @@ public class SimulationLog {
     public double getBrakeForce() { return brakeForce; }
     public void setBrakeForce(double brakeForce) { this.brakeForce = brakeForce; }
 
+    public double getElectricBrakeForce() { return electricBrakeForce; }
+    public void setElectricBrakeForce(double electricBrakeForce) { this.electricBrakeForce = electricBrakeForce; }
+
+    public double getAirBrakeForce() { return airBrakeForce; }
+    public void setAirBrakeForce(double airBrakeForce) { this.airBrakeForce = airBrakeForce; }
+
     public String getTractiveBrakeCmd() { return tractiveBrakeCmd; }
     public void setTractiveBrakeCmd(String tractiveBrakeCmd) { this.tractiveBrakeCmd = tractiveBrakeCmd; }
 
@@ -72,4 +84,16 @@ public class SimulationLog {
 
     public int getCurrentSegId() { return currentSegId; }
     public void setCurrentSegId(int currentSegId) { this.currentSegId = currentSegId; }
+
+    public String getTractionHealth() { return tractionHealth; }
+    public void setTractionHealth(String v) { this.tractionHealth = v; }
+
+    public String getBrakingHealth() { return brakingHealth; }
+    public void setBrakingHealth(String v) { this.brakingHealth = v; }
+
+    public int getAvailableMotors() { return availableMotors; }
+    public void setAvailableMotors(int v) { this.availableMotors = v; }
+
+    public boolean isElectricBrakeAvailable() { return electricBrakeAvailable; }
+    public void setElectricBrakeAvailable(boolean v) { this.electricBrakeAvailable = v; }
 }

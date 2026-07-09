@@ -72,6 +72,10 @@ public class TrainState {
     private String stateSource;         // 状态来源: DISPATCH_ESTIMATED / ONBOARD_REPORTED
     private double minDwellSeconds;     // 本站最小停站时间 (站点类型决定)
 
+    // ── CBTC 执行层: 牵引/制动系统实时状态 ──
+    private TractionSystemState tractionState;
+    private BrakingSystemState brakeState;
+
     /** 判断当前状态是否占用线路 (影响安全间隔和轨道占用计算) */
     public boolean occupiesTrack() {
         if (status == null) return false;
@@ -242,6 +246,13 @@ public class TrainState {
 
     public double getMinDwellSeconds() { return minDwellSeconds; }
     public void setMinDwellSeconds(double v) { this.minDwellSeconds = v; }
+
+    // ── CBTC 执行层状态 ──
+    public TractionSystemState getTractionState() { return tractionState; }
+    public void setTractionState(TractionSystemState v) { this.tractionState = v; }
+
+    public BrakingSystemState getBrakeState() { return brakeState; }
+    public void setBrakeState(BrakingSystemState v) { this.brakeState = v; }
 
     // ── 遗留兼容字段: departureTime (前端可能用到) ──
     public String getDepartureTime() {
