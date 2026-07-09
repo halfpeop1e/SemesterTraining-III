@@ -13,6 +13,16 @@ export interface DispatchCommand {
   commandId: string; trainId: string; commandType: string; targetValue: number;
   reason: string; status: string; source: string;
 }
+export interface TimetableEntry {
+  stationId: number;
+  stationName: string;
+  stationIndex: number;
+  stationKm: number;
+  plannedArrival: number;
+  plannedDeparture: number;
+  plannedDwell: number;
+}
+
 export interface OnboardSnapshot {
   currentTimeSeconds: number;
   train: { trainId: string; speedKmh: number; positionMeters: number; status: string } | null;
@@ -21,6 +31,7 @@ export interface OnboardSnapshot {
   speedLimitKmh: number;
   communicationStatus: string;
   safetyStatus: string;
+  timetable: TimetableEntry[];
 }
 
 async function integrationRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -33,13 +44,13 @@ async function integrationRequest<T>(path: string, init?: RequestInit): Promise<
 }
 
 export const getOnboardSnapshot = (trainId: string) =>
-  integrationRequest<OnboardSnapshot>(`/onboard/${trainId}/snapshot`);
+  integrationRequest<OnboardSnapshot>(`/signal/train/${trainId}/snapshot`);
 export const ackDispatchCommand = (commandId: string, executionStatus = 'EXECUTING') =>
   integrationRequest<DispatchCommand>('/dispatch/commands/ack', {
     method: 'POST', body: JSON.stringify({ commandId, accepted: true, executionStatus }),
   });
 export const reportOnboardStatus = (payload: object) =>
-  integrationRequest<string>('/dispatch/report/status', { method: 'POST', body: JSON.stringify(payload) });
+  integrationRequest<string>('/signal/report/status', { method: 'POST', body: JSON.stringify(payload) });
 export const reportOnboardEvent = (payload: object) =>
   integrationRequest<string>('/dispatch/report/event', { method: 'POST', body: JSON.stringify(payload) });
 
