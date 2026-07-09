@@ -381,4 +381,270 @@ class VehicleSimulationServiceTest {
         }
         return firstCoastVelocity - lastCoastVelocity;
     }
+
+    // ========== 本轮新增测试：多站连续仿真 + 驾驶员控制 ==========
+
+    /** 多站 1→4：position 单调不减且不在中间站归零。 */
+    @org.junit.jupiter.api.Test
+    void multiStation_positionContinuousNeverResets() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> seg = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 4) seg.add(s);
+        }
+        seg.sort((a, b) -> Integer.compare(a.id, b.id));
+
+        SimulationResult result = service.runMultiStation(seg, 30.0, demoScenarioProvider);
+
+        List<TrainState> states = result.getStates();
+        assertFalse(states.isEmpty());
+
+        double prevPos = -1;
+        for (TrainState st : states) {
+            assertTrue(st.getPosition() >= prevPos - 1e-9,
+                    "position 应连续不减，出现回跳: prev=" + prevPos + " cur=" + st.getPosition());
+            prevPos = st.getPosition();
+        }
+        // 从未归零检查：末态 position 应约等于 1→4 总距离
+        double totalDist = 0;
+        for (int i = 0; i < seg.size() - 1; i++) {
+            totalDist += (seg.get(i + 1).km - seg.get(i).km) * 1000.0;
+        }
+        TrainState last = states.get(states.size() - 1);
+        assertTrue(last.getPosition() >= totalDist * 0.9,
+                "末态 position 应接近总距离 " + totalDist + "m，实际=" + last.getPosition());
+    }
+
+    /** 多站 1→4：absolutePosition 单调不减。 */
+    @org.junit.jupiter.api.Test
+    void multiStation_absolutePositionContinuous() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> seg = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 4) seg.add(s);
+        }
+        seg.sort((a, b) -> Integer.compare(a.id, b.id));
+        SimulationResult result = service.runMultiStation(seg, 30.0, demoScenarioProvider);
+
+        Double prevAbs = null;
+        for (TrainState st : result.getStates()) {
+            Double abs = st.getAbsolutePosition();
+            assertNotNull(abs, "absolutePosition 不应为 null");
+            if (prevAbs != null) {
+                assertTrue(abs >= prevAbs - 1e-9,
+                        "absolutePosition 应单调不减: prev=" + prevAbs + " cur=" + abs);
+            }
+            prevAbs = abs;
+        }
+    }
+
+    /** 多站 1→4：stopResult.targetStopPosition 等于 1→4 总距离。 */
+    @org.junit.jupiter.api.Test
+    void multiStation_finalTargetStopPositionEqualsTotalDistance() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> seg = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 4) seg.add(s);
+        }
+        seg.sort((a, b) -> Integer.compare(a.id, b.id));
+
+        double totalDist = 0;
+        for (int i = 0; i < seg.size() - 1; i++) {
+            totalDist += (seg.get(i + 1).km - seg.get(i).km) * 1000.0;
+        }
+
+        SimulationResult result = service.runMultiStation(seg, 30.0, demoScenarioProvider);
+        double targetStop = result.getStopResult().getTargetStopPosition();
+        assertEquals(totalDist, targetStop, 1.0,
+                "targetStopPosition 应等于 1→4 总距离 " + totalDist + "m，实际=" + targetStop);
+    }
+
+    /** 多站 1→4：中间站有 DWELL 帧，velocity=0，position 不变。 */
+    @org.junit.jupiter.api.Test
+    void multiStation_dwellFramesExistAndPositionUnchanged() {
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+        List<LineProfileJsonLoader.StationEntry> seg = new java.util.ArrayList<>();
+        for (LineProfileJsonLoader.StationEntry s : stations) {
+            if (s.id >= 1 && s.id <= 3) seg.add(s);
+        }
+        seg.sort((a, b) -> Integer.compare(a.id, b.id));
+
+        SimulationResult result = service.runMultiStation(seg, 30.0, demoScenarioProvider);
+
+        List<TrainState> dwellFrames = new java.util.ArrayList<>();
+        for (TrainState st : result.getStates()) {
+            if (st.getPhase() == SimulationPhase.DWELL) {
+                dwellFrames.add(st);
+            }
+        }
+        // 30s / 0.5s = 60 帧（±2 帧误差）
+        assertTrue(dwellFrames.size() >= 58 && dwellFrames.size() <= 62,
+                "30s 驻留应约 60 帧 DWELL，实际=" + dwellFrames.size());
+
+        // 检查 DWELL 帧 velocity=0 且相邻帧 position 不变
+        double firstDwellPos = dwellFrames.get(0).getPosition();
+        for (TrainState st : dwellFrames) {
+            assertEquals(0.0, st.getVelocity(), 1e-9, "DWELL 帧速度应为 0");
+            assertEquals(0.0, st.getAcceleration(), 1e-9, "DWELL 帧加速度应为 0");
+            assertEquals(firstDwellPos, st.getPosition(), 1e-9, "DWELL 期间 position 不变");
+        }
+    }
+
+    /** 控制续算：ATO→MANUAL 模式切换不改变轨迹（返回 ATO 自动策略续算）。 */
+    @org.junit.jupiter.api.Test
+    void control_atoToManualModeSwitch_doesNotChangeBrakeDecel() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+        // 给 midState 设置 absolutePosition 以匹配新约定
+        midState.setAbsolutePosition(313.0 + midState.getPosition());
+
+        // ATO→MANUAL 切换：coast 指令，不触发制动
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("coast", 0));
+        req.setTotalTargetPosition(line.getTargetStopPosition()); // 1348m
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        // 续算结果应末态为 STOPPED，模式为 ATO（coast 不切换模式）
+        assertEquals(SimulationPhase.STOPPED,
+                result.getStates().get(result.getStates().size() - 1).getPhase());
+    }
+
+    /** 控制续算：MANUAL brake 指令使后续速度下降，出现 BRAKING。 */
+    @org.junit.jupiter.api.Test
+    void control_manualBrake_reducesVelocity() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+        midState.setAbsolutePosition(313.0 + midState.getPosition());
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.MANUAL);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("brake", 1.0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+
+        boolean brakingSeen = result.getStates().stream()
+                .anyMatch(s -> s.getPhase() == SimulationPhase.BRAKING);
+        assertTrue(brakingSeen, "MANUAL brake 续算应出现 BRAKING 阶段");
+        assertEquals(SimulationPhase.STOPPED,
+                result.getStates().get(result.getStates().size() - 1).getPhase());
+    }
+
+    /** 控制续算：EB 中断多站任务，返回的 states 不继续到多站终点。 */
+    @org.junit.jupiter.api.Test
+    void control_eb_interruptsMultiStationTask() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 2);
+        midState.setAbsolutePosition(313.0 + midState.getPosition());
+
+        // 假设多站仿真的总目标为 5000m（远超 1→2 区间），EB 应在远未到达时停车
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("emergency_brake", 0));
+        req.setTotalTargetPosition(5000.0);
+
+        SimulationResult result = service.runContinuation(req, scenario);
+
+        // EB 返回的 states 末态应为 STOPPED
+        assertEquals(SimulationPhase.STOPPED,
+                result.getStates().get(result.getStates().size() - 1).getPhase());
+        // 实际停车位置远未到达 5000m
+        double finalPos = result.getStates().get(result.getStates().size() - 1).getPosition();
+        assertTrue(finalPos < 5000.0 * 0.5,
+                "EB 续算停车位置应远小于 5000m，实际=" + finalPos);
+        // stationStops 应为空（EB 中断了多站任务）
+        assertTrue(result.getStationStops().isEmpty(), "EB 应清空 stationStops");
+        // SafetyEvent 不为空
+        assertFalse(result.getSafetyEvents().isEmpty(), "EB 应生成 SafetyEvent");
+        assertEquals("DRIVER_EMERGENCY_BRAKE", result.getSafetyEvents().get(0).getReason());
+    }
+
+    /** 控制续算：EB 生成 SafetyEvent，reason=DRIVER_EMERGENCY_BRAKE。 */
+    @org.junit.jupiter.api.Test
+    void control_eb_generatesSafetyEvent() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+        midState.setAbsolutePosition(313.0 + midState.getPosition());
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.MANUAL);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("emergency_brake", 0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertFalse(result.getSafetyEvents().isEmpty(), "EB 应生成至少一条 SafetyEvent");
+        assertEquals("DRIVER_EMERGENCY_BRAKE", result.getSafetyEvents().get(0).getReason());
+        assertEquals("emergency_brake", result.getSafetyEvents().get(0).getAction());
+        assertEquals(com.bjtu.railtransit.vehicle.enums.DrivingMode.EMERGENCY,
+                result.getSummary().getCurrentMode());
+    }
+
+    /** 超速场景：SafetyGuard 能生成 OVERSPEED SafetyEvent（用小目标强制高速续算）。 */
+    @org.junit.jupiter.api.Test
+    void safetyGuard_overspeed_generatesSafetyEvent() {
+        // 构造一个限速极低的 LineProfile（限速 1 m/s），让列车立即超速
+        com.bjtu.railtransit.vehicle.model.LineProfile lowLimitLine =
+                new com.bjtu.railtransit.vehicle.model.LineProfile(0.0, 5000.0, 1.0);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(lowLimitLine);
+
+        // 构造一个已达 18 m/s 的 midState（远超 1 m/s 限速）
+        TrainState overspeedState = new TrainState(40.0, 300.0, 18.0, 0.0,
+                SimulationPhase.COAST, "T1");
+        overspeedState.setAbsolutePosition(313.0 + 300.0);
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(overspeedState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("coast", 0));
+        req.setTotalTargetPosition(5000.0);
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        // 超速应触发 SafetyGuard，生成 OVERSPEED 事件
+        boolean hasOverspeed = result.getSafetyEvents().stream()
+                .anyMatch(e -> "OVERSPEED".equals(e.getReason()));
+        assertTrue(hasOverspeed, "超速场景应生成 OVERSPEED SafetyEvent");
+    }
+
+    /** dtPerFrame 仍为 0.5s，停车阈值不变。 */
+    @org.junit.jupiter.api.Test
+    void constants_dtPerFrameAndThresholdsUnchanged() throws Exception {
+        SimulationResult result = service.runDemoSimulation();
+        assertEquals(0.5, result.getSummary().getDtPerFrame(), 1e-9);
+
+        java.lang.reflect.Field f1 = VehicleSimulationService.class.getDeclaredField("STOP_POSITION_TOLERANCE");
+        f1.setAccessible(true);
+        assertEquals(0.5, f1.getDouble(null), 1e-12);
+
+        java.lang.reflect.Field f2 = VehicleSimulationService.class.getDeclaredField("STOP_VELOCITY_TOLERANCE");
+        f2.setAccessible(true);
+        assertEquals(0.1, f2.getDouble(null), 1e-12);
+    }
 }

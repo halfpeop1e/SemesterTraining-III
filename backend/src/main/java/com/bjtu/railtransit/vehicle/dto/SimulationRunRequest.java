@@ -61,4 +61,25 @@ public class SimulationRunRequest {
     public int resolvedToId() {
         return toStationId != null ? toStationId : 2;
     }
+
+    /**
+     * 中间站驻留时间，单位 s（多站仿真新增可选字段）。
+     *
+     * <p>null 时后端使用默认值 30s。将来可由运行图下发具体驻留时间，
+     * 此字段是扩展点，不写死在前端。</p>
+     */
+    private Double dwellTimeSeconds;
+
+    public Double getDwellTimeSeconds() {
+        return dwellTimeSeconds;
+    }
+
+    public void setDwellTimeSeconds(Double dwellTimeSeconds) {
+        this.dwellTimeSeconds = dwellTimeSeconds;
+    }
+
+    /** 取出有效的驻留时间，null 时返回默认 30s。 */
+    public double resolvedDwellTime() {
+        return dwellTimeSeconds != null ? dwellTimeSeconds : 30.0;
+    }
 }

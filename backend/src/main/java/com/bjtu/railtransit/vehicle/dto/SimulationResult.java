@@ -1,28 +1,35 @@
 package com.bjtu.railtransit.vehicle.dto;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
- * 一次仿真的完整返回结果，四段字段齐全：
- * states / summary / stopResult / safetyEvents。
- *
- * <p>本轮（阶段 1A）由 {@link com.bjtu.railtransit.vehicle.service.VehicleSimulationService}
- * 一次性计算生成，作为 {@code POST /api/vehicle/simulation/run} 的响应数据体，
- * 包裹在 {@link com.bjtu.railtransit.common.ApiResponse} 中返回。</p>
+ * 一次仿真的完整返回结果。
+ * states / summary / stopResult / safetyEvents 四段字段始终存在。
+ * stationStops 仅多站仿真时非空（单区间时为空列表）。
  */
 public class SimulationResult {
 
-    /** 逐时间点列车状态序列，由 service 循环计算生成，非空。 */
+    /** 逐时间点列车状态序列，非空。position 为从 fromStation 起的连续累计里程。 */
     private List<TrainState> states;
 
     /** 仿真总结指标。 */
     private SimulationSummary summary;
 
-    /** 自动停站结果（字段齐全，阶段 1A 用简化判定填充）。 */
+    /**
+     * 最终目标站停车结果。
+     * targetStopPosition = fromStation 到最终 toStation 的总距离（多站时为全程总里程）。
+     */
     private StopResult stopResult;
 
-    /** SafetyGuard 事件列表（阶段 1A 恒为空数组，字段结构已预留）。 */
+    /** SafetyGuard 事件列表。 */
     private List<SafetyEvent> safetyEvents;
+
+    /**
+     * 各站停车记录（多站时非空，单区间时为空列表）。
+     * targetPosition 字段为该站相对于 fromStation 的累计里程，与 states.position 坐标系一致。
+     */
+    private List<StationStop> stationStops;
 
     public SimulationResult() {
     }
@@ -33,37 +40,21 @@ public class SimulationResult {
         this.summary = summary;
         this.stopResult = stopResult;
         this.safetyEvents = safetyEvents;
+        this.stationStops = Collections.emptyList();
     }
 
-    public List<TrainState> getStates() {
-        return states;
-    }
+    public List<TrainState> getStates() { return states; }
+    public void setStates(List<TrainState> states) { this.states = states; }
 
-    public void setStates(List<TrainState> states) {
-        this.states = states;
-    }
+    public SimulationSummary getSummary() { return summary; }
+    public void setSummary(SimulationSummary summary) { this.summary = summary; }
 
-    public SimulationSummary getSummary() {
-        return summary;
-    }
+    public StopResult getStopResult() { return stopResult; }
+    public void setStopResult(StopResult stopResult) { this.stopResult = stopResult; }
 
-    public void setSummary(SimulationSummary summary) {
-        this.summary = summary;
-    }
+    public List<SafetyEvent> getSafetyEvents() { return safetyEvents; }
+    public void setSafetyEvents(List<SafetyEvent> safetyEvents) { this.safetyEvents = safetyEvents; }
 
-    public StopResult getStopResult() {
-        return stopResult;
-    }
-
-    public void setStopResult(StopResult stopResult) {
-        this.stopResult = stopResult;
-    }
-
-    public List<SafetyEvent> getSafetyEvents() {
-        return safetyEvents;
-    }
-
-    public void setSafetyEvents(List<SafetyEvent> safetyEvents) {
-        this.safetyEvents = safetyEvents;
-    }
+    public List<StationStop> getStationStops() { return stationStops; }
+    public void setStationStops(List<StationStop> stationStops) { this.stationStops = stationStops; }
 }
