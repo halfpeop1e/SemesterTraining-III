@@ -51,10 +51,26 @@
   border-radius: 8px;
 }
 
+/* Three.js background layer — fills viewport, behind canvas HUD */
+.driver-cab-view__three-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+/* Canvas HUD overlay — transparent background, sits above Three.js */
 .driver-cab-view__canvas {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.driver-cab-view__canvas--hud {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none; /* allow mouse events to pass through to Three.js layer */
+  background: transparent;
 }
 
 .driver-cab-view__mode-chip {
@@ -391,7 +407,7 @@
 .cab-speed-gauge__value {
   color: #f8fbfc;
   font-family: Consolas, "SFMono-Regular", monospace;
-  font-size: 36px;
+  font-size: 24px;   /* HMI: was 36px, reduced for realistic cab display proportion */
   font-weight: 900;
   line-height: 0.95;
 }
@@ -960,4 +976,126 @@
   .cab-distance span {
     font-size: 34px;
   }
+}
+
+/* ---- 下一站名称（仪表盘 subline，nowrap + tabular-nums 保证数字不换行）---- */
+.cab-instrument__stop-name {
+  overflow: hidden;
+  max-width: 100%;
+  padding: 0 8px;
+  color: #67e8f9;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 所有数字类 subline 强制 nowrap + tabular-nums（目标六约束）*/
+.cab-instrument__subline,
+.cab-distance,
+.cab-accel-value,
+.cab-speed-gauge__value,
+.cab-speed-gauge__mps,
+.cab-stop-error {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 各站停车精度 strip（目标三）---- */
+.cab-station-stops {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0)), #111719;
+  border: 1px solid rgba(174, 194, 204, 0.14);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cab-station-stops__list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* 每个停车站 chip，行内紧凑，不撑大表格 */
+.cab-stop-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(148,163,184,0.14);
+  background: rgba(10, 18, 22, 0.6);
+  min-width: 0;
+}
+
+.cab-stop-chip__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cab-stop-chip__err {
+  flex: 0 0 auto;
+  color: #94a3b8;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 正常停准（窗内） */
+.cab-stop-chip.is-ok .cab-stop-chip__name {
+  color: #86efac;
+}
+.cab-stop-chip.is-ok .cab-stop-chip__err {
+  color: #86efac;
+}
+.cab-stop-chip.is-ok {
+  border-color: rgba(134, 239, 172, 0.22);
+  background: rgba(2, 44, 30, 0.44);
+}
+
+/* 超出停车窗 */
+.cab-stop-chip.is-warn .cab-stop-chip__name {
+  color: #fdba74;
+}
+.cab-stop-chip.is-warn .cab-stop-chip__err {
+  color: #fdba74;
+}
+.cab-stop-chip.is-warn {
+  border-color: rgba(253, 186, 116, 0.26);
+  background: rgba(50, 25, 2, 0.44);
+}
+
+/* 尚未到达 */
+.cab-stop-chip.is-pending {
+  opacity: 0.52;
+}
+
+/* 最近到站：突出显示 */
+.cab-stop-chip.is-current {
+  border-width: 1.5px;
+  border-color: rgba(103, 232, 249, 0.48);
+  background: rgba(5, 36, 44, 0.7);
+  box-shadow: 0 0 8px rgba(103, 232, 249, 0.18);
+}
+.cab-stop-chip.is-current .cab-stop-chip__name {
+  color: #67e8f9;
+}
+.cab-stop-chip.is-current .cab-stop-chip__err {
+  font-size: 12px;
+  font-weight: 900;
+  color: #67e8f9;
 }

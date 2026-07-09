@@ -349,6 +349,7 @@ function Vehicle() {
           stopResult={result?.stopResult ?? null}
           safetyEventCount={allSafetyEvents.length}
           isPaused={isPaused}
+          stationStops={result?.stationStops}
           externalDriveMode={drivingMode}
           onRequestManual={handleRequestManual}
           onBrakeLevel={handleBrakeLevel}
@@ -362,6 +363,7 @@ function Vehicle() {
           speedLimit={speedLimitValue}
           stopResult={result?.stopResult ?? null}
           positionOffset={lineStartPosition}
+          stationStops={result?.stationStops}
         />
       </div>
 
