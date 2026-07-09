@@ -1,0 +1,1461 @@
+{
+  "lineId": "line-9",
+  "gradients": [
+    {
+      "startSegId": 233,
+      "startOffset": 0,
+      "endSegId": 231,
+      "endOffset": 10326,
+      "gradientPermille": 42,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 231,
+      "startOffset": 10327,
+      "endSegId": 1,
+      "endOffset": 19326,
+      "gradientPermille": 35,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 1,
+      "startOffset": 19327,
+      "endSegId": 2,
+      "endOffset": 53500,
+      "gradientPermille": 34,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 2,
+      "startOffset": 53501,
+      "endSegId": 2,
+      "endOffset": 83500,
+      "gradientPermille": 300,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 2,
+      "startOffset": 83501,
+      "endSegId": 4,
+      "endOffset": 6793,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 5,
+      "startOffset": 0,
+      "endSegId": 5,
+      "endOffset": 22068,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 6,
+      "startOffset": 0,
+      "endSegId": 7,
+      "endOffset": 600,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 8,
+      "startOffset": 0,
+      "endSegId": 10,
+      "endOffset": 3369,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 11,
+      "startOffset": 0,
+      "endSegId": 14,
+      "endOffset": 731,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 15,
+      "startOffset": 0,
+      "endSegId": 15,
+      "endOffset": 6769,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 16,
+      "startOffset": 0,
+      "endSegId": 19,
+      "endOffset": 5100,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 21,
+      "startOffset": 0,
+      "endSegId": 21,
+      "endOffset": 6261,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 20,
+      "startOffset": 0,
+      "endSegId": 22,
+      "endOffset": 5677,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 22,
+      "startOffset": 5678,
+      "endSegId": 23,
+      "endOffset": 13877,
+      "gradientPermille": 240,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 23,
+      "startOffset": 13878,
+      "endSegId": 235,
+      "endOffset": 7236,
+      "gradientPermille": 90,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 235,
+      "startOffset": 7237,
+      "endSegId": 25,
+      "endOffset": 4098,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 25,
+      "startOffset": 4099,
+      "endSegId": 25,
+      "endOffset": 24198,
+      "gradientPermille": 250,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 25,
+      "startOffset": 24199,
+      "endSegId": 25,
+      "endOffset": 41698,
+      "gradientPermille": 70,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 25,
+      "startOffset": 41699,
+      "endSegId": 54,
+      "endOffset": 5944,
+      "gradientPermille": 25,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 54,
+      "startOffset": 5945,
+      "endSegId": 56,
+      "endOffset": 4589,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 56,
+      "startOffset": 4590,
+      "endSegId": 56,
+      "endOffset": 24789,
+      "gradientPermille": 200,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 56,
+      "startOffset": 24790,
+      "endSegId": 56,
+      "endOffset": 58589,
+      "gradientPermille": 40,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 56,
+      "startOffset": 58590,
+      "endSegId": 57,
+      "endOffset": 5673,
+      "gradientPermille": 80,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 57,
+      "startOffset": 5674,
+      "endSegId": 59,
+      "endOffset": 3818,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 59,
+      "startOffset": 3819,
+      "endSegId": 59,
+      "endOffset": 28818,
+      "gradientPermille": 250,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 59,
+      "startOffset": 28819,
+      "endSegId": 60,
+      "endOffset": 15184,
+      "gradientPermille": 40,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 60,
+      "startOffset": 15185,
+      "endSegId": 60,
+      "endOffset": 46038,
+      "gradientPermille": 55,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 60,
+      "startOffset": 46039,
+      "endSegId": 61,
+      "endOffset": 5450,
+      "gradientPermille": 250,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 61,
+      "startOffset": 5451,
+      "endSegId": 63,
+      "endOffset": 13088,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 64,
+      "startOffset": 0,
+      "endSegId": 66,
+      "endOffset": 4416,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 66,
+      "startOffset": 4417,
+      "endSegId": 82,
+      "endOffset": 28416,
+      "gradientPermille": 50,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 82,
+      "startOffset": 28417,
+      "endSegId": 83,
+      "endOffset": 5560,
+      "gradientPermille": 49,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 83,
+      "startOffset": 5561,
+      "endSegId": 85,
+      "endOffset": 2660,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 85,
+      "startOffset": 2661,
+      "endSegId": 85,
+      "endOffset": 26560,
+      "gradientPermille": 180,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 85,
+      "startOffset": 26561,
+      "endSegId": 86,
+      "endOffset": 24900,
+      "gradientPermille": 51,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 86,
+      "startOffset": 24901,
+      "endSegId": 86,
+      "endOffset": 66100,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 86,
+      "startOffset": 66101,
+      "endSegId": 86,
+      "endOffset": 98800,
+      "gradientPermille": 57,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 86,
+      "startOffset": 98801,
+      "endSegId": 87,
+      "endOffset": 6968,
+      "gradientPermille": 16,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 87,
+      "startOffset": 6969,
+      "endSegId": 89,
+      "endOffset": 8248,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 90,
+      "startOffset": 0,
+      "endSegId": 93,
+      "endOffset": 5800,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 94,
+      "startOffset": 0,
+      "endSegId": 96,
+      "endOffset": 8158,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 96,
+      "startOffset": 8159,
+      "endSegId": 96,
+      "endOffset": 33114,
+      "gradientPermille": 120,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 96,
+      "startOffset": 33115,
+      "endSegId": 96,
+      "endOffset": 51914,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 96,
+      "startOffset": 51915,
+      "endSegId": 125,
+      "endOffset": 7353,
+      "gradientPermille": 22,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 125,
+      "startOffset": 7354,
+      "endSegId": 127,
+      "endOffset": 8753,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 127,
+      "startOffset": 8754,
+      "endSegId": 127,
+      "endOffset": 37514,
+      "gradientPermille": 60,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 127,
+      "startOffset": 37515,
+      "endSegId": 127,
+      "endOffset": 57264,
+      "gradientPermille": 69,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 127,
+      "startOffset": 57265,
+      "endSegId": 127,
+      "endOffset": 67264,
+      "gradientPermille": 85,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 127,
+      "startOffset": 67265,
+      "endSegId": 127,
+      "endOffset": 79453,
+      "gradientPermille": 70,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 127,
+      "startOffset": 79454,
+      "endSegId": 128,
+      "endOffset": 2726,
+      "gradientPermille": 80,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 128,
+      "startOffset": 2727,
+      "endSegId": 130,
+      "endOffset": 2496,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 130,
+      "startOffset": 2497,
+      "endSegId": 130,
+      "endOffset": 15800,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 131,
+      "startOffset": 0,
+      "endSegId": 134,
+      "endOffset": 9883,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 134,
+      "startOffset": 9884,
+      "endSegId": 169,
+      "endOffset": 18400,
+      "gradientPermille": 28,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 169,
+      "startOffset": 18401,
+      "endSegId": 169,
+      "endOffset": 61747,
+      "gradientPermille": 61,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 169,
+      "startOffset": 61748,
+      "endSegId": 171,
+      "endOffset": 2253,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 171,
+      "startOffset": 2254,
+      "endSegId": 171,
+      "endOffset": 46253,
+      "gradientPermille": 163,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 171,
+      "startOffset": 46254,
+      "endSegId": 172,
+      "endOffset": 51900,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 172,
+      "startOffset": 51901,
+      "endSegId": 172,
+      "endOffset": 78571,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 172,
+      "startOffset": 78572,
+      "endSegId": 173,
+      "endOffset": 6433,
+      "gradientPermille": 222,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 173,
+      "startOffset": 6434,
+      "endSegId": 175,
+      "endOffset": 731,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 176,
+      "startOffset": 0,
+      "endSegId": 178,
+      "endOffset": 46237,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 178,
+      "startOffset": 46238,
+      "endSegId": 178,
+      "endOffset": 62237,
+      "gradientPermille": 150,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 178,
+      "startOffset": 62238,
+      "endSegId": 203,
+      "endOffset": 6069,
+      "gradientPermille": 280,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 203,
+      "startOffset": 6070,
+      "endSegId": 205,
+      "endOffset": 2469,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 205,
+      "startOffset": 2470,
+      "endSegId": 205,
+      "endOffset": 29903,
+      "gradientPermille": 189,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 205,
+      "startOffset": 29904,
+      "endSegId": 205,
+      "endOffset": 65502,
+      "gradientPermille": 100,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 205,
+      "startOffset": 65503,
+      "endSegId": 206,
+      "endOffset": 6092,
+      "gradientPermille": 300,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 206,
+      "startOffset": 6093,
+      "endSegId": 208,
+      "endOffset": 3541,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 209,
+      "startOffset": 0,
+      "endSegId": 209,
+      "endOffset": 6738,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 211,
+      "startOffset": 0,
+      "endSegId": 214,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 215,
+      "startOffset": 0,
+      "endSegId": 215,
+      "endOffset": 3600,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 234,
+      "startOffset": 0,
+      "endSegId": 53,
+      "endOffset": 4326,
+      "gradientPermille": 43,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 53,
+      "startOffset": 4327,
+      "endSegId": 26,
+      "endOffset": 15810,
+      "gradientPermille": 36,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 26,
+      "startOffset": 15811,
+      "endSegId": 28,
+      "endOffset": 42690,
+      "gradientPermille": 35,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 28,
+      "startOffset": 42691,
+      "endSegId": 28,
+      "endOffset": 59200,
+      "gradientPermille": 350,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 28,
+      "startOffset": 59201,
+      "endSegId": 29,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 238,
+      "startOffset": 0,
+      "endSegId": 238,
+      "endOffset": 5100,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 31,
+      "startOffset": 0,
+      "endSegId": 31,
+      "endOffset": 4611,
+      "gradientPermille": 260,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 31,
+      "startOffset": 4612,
+      "endSegId": 31,
+      "endOffset": 22068,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 30,
+      "startOffset": 0,
+      "endSegId": 33,
+      "endOffset": 5194,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 32,
+      "startOffset": 0,
+      "endSegId": 34,
+      "endOffset": 600,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 35,
+      "startOffset": 0,
+      "endSegId": 35,
+      "endOffset": 6769,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 37,
+      "startOffset": 0,
+      "endSegId": 40,
+      "endOffset": 731,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 41,
+      "startOffset": 0,
+      "endSegId": 41,
+      "endOffset": 6769,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 43,
+      "startOffset": 0,
+      "endSegId": 45,
+      "endOffset": 5100,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 47,
+      "startOffset": 0,
+      "endSegId": 47,
+      "endOffset": 6284,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 46,
+      "startOffset": 0,
+      "endSegId": 48,
+      "endOffset": 5678,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 200000
+    },
+    {
+      "startSegId": 48,
+      "startOffset": 5679,
+      "endSegId": 50,
+      "endOffset": 3878,
+      "gradientPermille": 240,
+      "verticalCurveRadius": 200000
+    },
+    {
+      "startSegId": 50,
+      "startOffset": 3879,
+      "endSegId": 50,
+      "endOffset": 82678,
+      "gradientPermille": 90,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 50,
+      "startOffset": 82679,
+      "endSegId": 52,
+      "endOffset": 4098,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 200000
+    },
+    {
+      "startSegId": 52,
+      "startOffset": 4099,
+      "endSegId": 68,
+      "endOffset": 14198,
+      "gradientPermille": 250,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 68,
+      "startOffset": 14199,
+      "endSegId": 68,
+      "endOffset": 31698,
+      "gradientPermille": 70,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 68,
+      "startOffset": 31699,
+      "endSegId": 68,
+      "endOffset": 51898,
+      "gradientPermille": 250,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 68,
+      "startOffset": 51899,
+      "endSegId": 70,
+      "endOffset": 4589,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 70,
+      "startOffset": 4590,
+      "endSegId": 71,
+      "endOffset": 14789,
+      "gradientPermille": 200,
+      "verticalCurveRadius": 200000
+    },
+    {
+      "startSegId": 71,
+      "startOffset": 14790,
+      "endSegId": 71,
+      "endOffset": 48589,
+      "gradientPermille": 40,
+      "verticalCurveRadius": 200000
+    },
+    {
+      "startSegId": 71,
+      "startOffset": 48590,
+      "endSegId": 71,
+      "endOffset": 70689,
+      "gradientPermille": 80,
+      "verticalCurveRadius": 200000
+    },
+    {
+      "startSegId": 71,
+      "startOffset": 70690,
+      "endSegId": 73,
+      "endOffset": 3818,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 73,
+      "startOffset": 3819,
+      "endSegId": 74,
+      "endOffset": 18818,
+      "gradientPermille": 250,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 74,
+      "startOffset": 18819,
+      "endSegId": 76,
+      "endOffset": 638,
+      "gradientPermille": 40,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 76,
+      "startOffset": 639,
+      "endSegId": 76,
+      "endOffset": 31375,
+      "gradientPermille": 56,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 76,
+      "startOffset": 31376,
+      "endSegId": 76,
+      "endOffset": 56238,
+      "gradientPermille": 250,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 76,
+      "startOffset": 56239,
+      "endSegId": 78,
+      "endOffset": 731,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 79,
+      "startOffset": 0,
+      "endSegId": 81,
+      "endOffset": 11924,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 81,
+      "startOffset": 11925,
+      "endSegId": 81,
+      "endOffset": 48824,
+      "gradientPermille": 50,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 81,
+      "startOffset": 48825,
+      "endSegId": 97,
+      "endOffset": 40225,
+      "gradientPermille": 49,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 97,
+      "startOffset": 40226,
+      "endSegId": 99,
+      "endOffset": 2660,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 99,
+      "startOffset": 2661,
+      "endSegId": 100,
+      "endOffset": 16560,
+      "gradientPermille": 180,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 100,
+      "startOffset": 16561,
+      "endSegId": 100,
+      "endOffset": 53560,
+      "gradientPermille": 51,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 100,
+      "startOffset": 53561,
+      "endSegId": 102,
+      "endOffset": 25000,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 102,
+      "startOffset": 25001,
+      "endSegId": 102,
+      "endOffset": 57700,
+      "gradientPermille": 60,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 102,
+      "startOffset": 57701,
+      "endSegId": 102,
+      "endOffset": 82200,
+      "gradientPermille": 160,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 102,
+      "startOffset": 82201,
+      "endSegId": 105,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 106,
+      "startOffset": 0,
+      "endSegId": 108,
+      "endOffset": 3300,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 110,
+      "startOffset": 0,
+      "endSegId": 110,
+      "endOffset": 6348,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 109,
+      "startOffset": 0,
+      "endSegId": 112,
+      "endOffset": 5600,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 113,
+      "startOffset": 0,
+      "endSegId": 115,
+      "endOffset": 11725,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 115,
+      "startOffset": 11726,
+      "endSegId": 135,
+      "endOffset": 1922,
+      "gradientPermille": 120,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 135,
+      "startOffset": 1923,
+      "endSegId": 135,
+      "endOffset": 20722,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 135,
+      "startOffset": 20723,
+      "endSegId": 135,
+      "endOffset": 41022,
+      "gradientPermille": 220,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 135,
+      "startOffset": 41023,
+      "endSegId": 137,
+      "endOffset": 8753,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 137,
+      "startOffset": 8754,
+      "endSegId": 138,
+      "endOffset": 28753,
+      "gradientPermille": 60,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 138,
+      "startOffset": 28754,
+      "endSegId": 138,
+      "endOffset": 67073,
+      "gradientPermille": 120,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 138,
+      "startOffset": 67074,
+      "endSegId": 138,
+      "endOffset": 75873,
+      "gradientPermille": 149,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 138,
+      "startOffset": 75874,
+      "endSegId": 138,
+      "endOffset": 86873,
+      "gradientPermille": 155,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 138,
+      "startOffset": 86874,
+      "endSegId": 140,
+      "endOffset": 2496,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 140,
+      "startOffset": 2497,
+      "endSegId": 141,
+      "endOffset": 5628,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 142,
+      "startOffset": 0,
+      "endSegId": 145,
+      "endOffset": 9883,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 145,
+      "startOffset": 9884,
+      "endSegId": 146,
+      "endOffset": 33083,
+      "gradientPermille": 280,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 146,
+      "startOffset": 33084,
+      "endSegId": 179,
+      "endOffset": 7773,
+      "gradientPermille": 61,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 179,
+      "startOffset": 7774,
+      "endSegId": 181,
+      "endOffset": 2253,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 181,
+      "startOffset": 2254,
+      "endSegId": 182,
+      "endOffset": 36253,
+      "gradientPermille": 160,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 182,
+      "startOffset": 36254,
+      "endSegId": 184,
+      "endOffset": 20800,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 184,
+      "startOffset": 20801,
+      "endSegId": 184,
+      "endOffset": 47500,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 184,
+      "startOffset": 47501,
+      "endSegId": 184,
+      "endOffset": 73800,
+      "gradientPermille": 220,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 184,
+      "startOffset": 73801,
+      "endSegId": 187,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 188,
+      "startOffset": 0,
+      "endSegId": 191,
+      "endOffset": 5843,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 192,
+      "startOffset": 0,
+      "endSegId": 194,
+      "endOffset": 15296,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 194,
+      "startOffset": 15297,
+      "endSegId": 195,
+      "endOffset": 6537,
+      "gradientPermille": 150,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 195,
+      "startOffset": 6538,
+      "endSegId": 195,
+      "endOffset": 25537,
+      "gradientPermille": 282,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 195,
+      "startOffset": 25538,
+      "endSegId": 218,
+      "endOffset": 2469,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 218,
+      "startOffset": 2470,
+      "endSegId": 219,
+      "endOffset": 19903,
+      "gradientPermille": 190,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 219,
+      "startOffset": 19904,
+      "endSegId": 219,
+      "endOffset": 55288,
+      "gradientPermille": 100,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 219,
+      "startOffset": 55289,
+      "endSegId": 219,
+      "endOffset": 82288,
+      "gradientPermille": 294,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 219,
+      "startOffset": 82289,
+      "endSegId": 222,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 223,
+      "startOffset": 0,
+      "endSegId": 223,
+      "endOffset": 6738,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 225,
+      "startOffset": 0,
+      "endSegId": 228,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 229,
+      "startOffset": 0,
+      "endSegId": 229,
+      "endOffset": 3600,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 230,
+      "startOffset": 0,
+      "endSegId": 230,
+      "endOffset": 6249,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 216,
+      "startOffset": 0,
+      "endSegId": 216,
+      "endOffset": 6250,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 9,
+      "startOffset": 0,
+      "endSegId": 38,
+      "endOffset": 5369,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 36,
+      "startOffset": 0,
+      "endSegId": 12,
+      "endOffset": 2831,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 17,
+      "startOffset": 0,
+      "endSegId": 44,
+      "endOffset": 5338,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 42,
+      "startOffset": 0,
+      "endSegId": 18,
+      "endOffset": 2800,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 80,
+      "startOffset": 0,
+      "endSegId": 65,
+      "endOffset": 6179,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 91,
+      "startOffset": 0,
+      "endSegId": 119,
+      "endOffset": 3975,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 107,
+      "startOffset": 0,
+      "endSegId": 117,
+      "endOffset": 4069,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 118,
+      "startOffset": 0,
+      "endSegId": 121,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 122,
+      "startOffset": 0,
+      "endSegId": 122,
+      "endOffset": 3559,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 124,
+      "startOffset": 0,
+      "endSegId": 95,
+      "endOffset": 4073,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 237,
+      "startOffset": 0,
+      "endSegId": 237,
+      "endOffset": 500,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 123,
+      "startOffset": 0,
+      "endSegId": 114,
+      "endOffset": 4069,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 147,
+      "startOffset": 0,
+      "endSegId": 149,
+      "endOffset": 700,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 158,
+      "startOffset": 0,
+      "endSegId": 160,
+      "endOffset": 700,
+      "gradientPermille": 30,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 150,
+      "startOffset": 0,
+      "endSegId": 152,
+      "endOffset": 400,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 161,
+      "startOffset": 0,
+      "endSegId": 163,
+      "endOffset": 7300,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 151,
+      "startOffset": 0,
+      "endSegId": 132,
+      "endOffset": 6328,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 162,
+      "startOffset": 0,
+      "endSegId": 143,
+      "endOffset": 6328,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 153,
+      "startOffset": 0,
+      "endSegId": 153,
+      "endOffset": 7300,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 164,
+      "startOffset": 0,
+      "endSegId": 164,
+      "endOffset": 7300,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 155,
+      "startOffset": 0,
+      "endSegId": 157,
+      "endOffset": 22100,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 166,
+      "startOffset": 0,
+      "endSegId": 168,
+      "endOffset": 22100,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 300000
+    },
+    {
+      "startSegId": 154,
+      "startOffset": 0,
+      "endSegId": 167,
+      "endOffset": 5500,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 165,
+      "startOffset": 0,
+      "endSegId": 156,
+      "endOffset": 2800,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 177,
+      "startOffset": 0,
+      "endSegId": 198,
+      "endOffset": 7946,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 189,
+      "startOffset": 0,
+      "endSegId": 196,
+      "endOffset": 4069,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 197,
+      "startOffset": 0,
+      "endSegId": 200,
+      "endOffset": 700,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 201,
+      "startOffset": 0,
+      "endSegId": 201,
+      "endOffset": 4100,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 500000
+    },
+    {
+      "startSegId": 202,
+      "startOffset": 0,
+      "endSegId": 193,
+      "endOffset": 4069,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 210,
+      "startOffset": 0,
+      "endSegId": 226,
+      "endOffset": 5338,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    },
+    {
+      "startSegId": 224,
+      "startOffset": 0,
+      "endSegId": 212,
+      "endOffset": 2800,
+      "gradientPermille": 20,
+      "verticalCurveRadius": 0
+    }
+  ]
+}
