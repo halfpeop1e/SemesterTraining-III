@@ -10,11 +10,21 @@ public class CommandBus {
     private static final Set<String> HIGH_RISK = Set.of(
         "SKIP_STATION", "SHORT_TURN", "CLEAR_PASSENGERS", "FORCE_HOLD",
         "DEGRADED_MODE", "EMERGENCY_RECOVERY");
+    private static final Set<String> TERMINAL = Set.of("COMPLETED", "REJECTED", "SUPERSEDED");
     private final Map<String, TrainCommand> commands = new LinkedHashMap<>();
     private final AtomicLong sequence = new AtomicLong();
 
     public synchronized TrainCommand issue(String trainId, String type, double target, String reason,
                                            int priority, String source, double now) {
+        // 去重：将同一列车同类指令的旧活跃指令标记为 SUPERSEDED
+        for (TrainCommand existing : commands.values()) {
+            if (trainId.equals(existing.getTrainId())
+                    && type.equals(existing.getCommandType())
+                    && !TERMINAL.contains(existing.getStatus())) {
+                existing.setStatus("SUPERSEDED");
+            }
+        }
+
         TrainCommand c = new TrainCommand();
         c.setCommandId("CMD-" + sequence.incrementAndGet());
         c.setTrainId(trainId); c.setCommandType(type); c.setTargetValue(target);
@@ -54,7 +64,7 @@ public class CommandBus {
 
     public synchronized List<TrainCommand> forTrain(String trainId) {
         return commands.values().stream().filter(c -> trainId.equals(c.getTrainId()))
-            .filter(c -> !Set.of("COMPLETED", "REJECTED").contains(c.getStatus())).toList();
+            .filter(c -> !TERMINAL.contains(c.getStatus())).toList();
     }
     public synchronized List<TrainCommand> all() { return new ArrayList<>(commands.values()); }
     public synchronized List<TrainCommand> pendingConfirmations() {
