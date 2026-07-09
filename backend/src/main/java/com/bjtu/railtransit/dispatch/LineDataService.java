@@ -29,6 +29,8 @@ public class LineDataService {
     private List<SpeedLimitZone> speedLimitIndex;
     // Gradient lookup index: sorted list keyed by km position
     private List<GradientZone> gradientIndex;
+    // Tunnel lookup index
+    private List<TunnelZone> tunnelIndex;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -150,6 +152,7 @@ public class LineDataService {
             // 构建快速查询索引
             buildSpeedLimitIndex();
             buildGradientIndex();
+            buildTunnelIndex();
         } catch (Exception e) {
             throw new RuntimeException("Failed to load line data JSON files", e);
         }
@@ -208,8 +211,6 @@ public class LineDataService {
     }
 
     private double getSegStartKm(TrackGeometry.TrackSegment seg, List<TrackGeometry.TrackWaypoint> wps) {
-        Map<Integer, TrackGeometry.TrackWaypoint> wpMap = wps.stream()
-            .collect(Collectors.toMap(w -> (int)(w.getKm() * 1000), w -> w, (a, b) -> a));
         TrackGeometry.TrackWaypoint wp = wps.stream()
             .filter(w -> w.getName() != null)
             .findFirst().orElse(null);
@@ -281,5 +282,53 @@ public class LineDataService {
             }
         }
         return 0;
+    }
+
+    // ---- Tunnel Index ----
+
+    public static class TunnelZone {
+        public double startKm;
+        public double endKm;
+
+        public TunnelZone(double s, double e) {
+            this.startKm = s;
+            this.endKm = e;
+        }
+    }
+
+    private void buildTunnelIndex() {
+        tunnelIndex = new ArrayList<>();
+        LineData ld = getLineData();
+        TrackGeometry tg = getTrackGeometry();
+        if (ld.getTunnels() == null || tg.getSegments() == null) return;
+
+        Map<Integer, TrackGeometry.TrackSegment> segMap = tg.getSegments().stream()
+            .collect(Collectors.toMap(TrackGeometry.TrackSegment::getId, s -> s));
+
+        for (LineData.Tunnel t : ld.getTunnels()) {
+            try {
+                TrackGeometry.TrackSegment seg = segMap.get(t.get隧道所处Seg编号());
+                if (seg == null) continue;
+                double segStartKm = getSegStartKm(seg, tg.getTrackWaypoints());
+                double startKm = segStartKm + t.get起点所处Seg偏移量() / 100000.0;
+                double endKm = segStartKm + t.get终点所处Seg偏移量() / 100000.0;
+                if (startKm < 0) startKm = 0;
+                if (endKm > 20) endKm = 20;
+                tunnelIndex.add(new TunnelZone(startKm, endKm));
+            } catch (Exception ignored) {}
+        }
+        tunnelIndex.sort(Comparator.comparingDouble(z -> z.startKm));
+    }
+
+    /** 判断指定公里标是否在隧道内 */
+    public boolean isTunnelAtKm(double km) {
+        if (tunnelIndex == null) getLineData();
+        if (tunnelIndex == null) return false;
+        for (TunnelZone zone : tunnelIndex) {
+            if (km >= zone.startKm && km <= zone.endKm) {
+                return true;
+            }
+        }
+        return false;
     }
 }

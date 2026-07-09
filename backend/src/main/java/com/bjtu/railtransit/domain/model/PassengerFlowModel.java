@@ -168,7 +168,7 @@ public class PassengerFlowModel {
      */
     public double getPeakSectionFlow(double simTimeSeconds) {
         Map<Integer, Double> loads = calculateSectionLoads(simTimeSeconds);
-        return loads.values().stream().max(Double::compare).orElse(500.0);
+        return loads.values().stream().mapToDouble(Double::doubleValue).max().orElse(500.0);
     }
 
     /**
