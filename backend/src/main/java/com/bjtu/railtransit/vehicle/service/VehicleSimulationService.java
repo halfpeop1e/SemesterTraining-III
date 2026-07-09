@@ -232,8 +232,8 @@ public class VehicleSimulationService {
      * 返回预测的停车位置。这是预测式制动触发的核心：每一步都基于当前真实动力学重新
      * 计算一次，而不是像阶段1那样依赖"惰行匀速、制动匀减速"下才成立的解析公式。</p>
      *
-     * <p>TODO(阶段3技术债)：预测式制动触发在每个子步调用 predictStopPosition，复杂度
-     * O(步数²)。当前 1.2km 演示配置无性能问题。若线路拉长到 16km+ 需考虑优化。</p>
+     * <p>预测式制动触发在每个子步调用 predictStopPosition，复杂度
+     * O(步数²)。当前 1.2km 演示配置无性能问题。</p>
      */
     private double predictStopPosition(double pos, double v, TrainModel train, LineProfile line, double dtPredict) {
         double p = pos;

@@ -1,6 +1,5 @@
 package com.bjtu.railtransit.vehicle.service;
 
-import com.bjtu.railtransit.vehicle.model.GradeSegment;
 import com.bjtu.railtransit.vehicle.model.LineProfile;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

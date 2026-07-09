@@ -2,7 +2,6 @@ package com.bjtu.railtransit.signal.web;
 
 import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
-import com.bjtu.railtransit.signal.domain.TrainState;
 import com.bjtu.railtransit.signal.model.LineProfile;
 import com.bjtu.railtransit.signal.service.LineProfileLoader;
 import com.bjtu.railtransit.signal.service.MovingAuthorityService;
@@ -13,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 
 /**
