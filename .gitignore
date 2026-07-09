@@ -36,3 +36,4 @@ backend/body.json
 backend/**/body.json
 
 .fake
+frontend-control-center/test-results/
