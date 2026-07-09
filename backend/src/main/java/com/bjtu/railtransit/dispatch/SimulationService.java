@@ -1417,6 +1417,11 @@ public class SimulationService {
         stationArrivalMap.clear();
         positionHistory.clear();
         totalEnergyKwh = 0;
+        totalTractionEnergyKwh = 0;
+        totalRegenEnergyKwh = 0;
+        totalAuxEnergyKwh = 0;
+        totalCruisingEnergyKwh = 0;
+        simulationLogs.clear();
         lastSampleTime = -10;
         lastEnergyResult = null;
         dispatchEngine.clearLogs();
