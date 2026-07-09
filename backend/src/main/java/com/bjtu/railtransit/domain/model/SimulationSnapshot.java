@@ -5,8 +5,11 @@ import java.util.List;
 
 public class SimulationSnapshot {
 
+    private String simulationId = "BJ-L9-LAB";
+    private String lineId = "BJ-L9";
     private double simulationTime;
     private String simTimeFormatted;
+    private boolean running;
     private int totalTrains;
     private int activeTrains;
     private List<TrainState> trains;
@@ -28,9 +31,26 @@ public class SimulationSnapshot {
     private List<StationArrival> planDeviations;
     /** 能源优化信息 */
     private EnergyOptimizationInfo energyOptimization;
+    /** 供电分区状态列表 */
+    private List<PowerSectionStatus> powerSections;
+    /** 移动授权列表 */
+    private List<MovementAuthorityInfo> movementAuthorities;
+    private Object dispatchPlan;
+    private List<com.bjtu.railtransit.domain.model.TrainCommand> integrationCommands = new ArrayList<>();
+    private List<com.bjtu.railtransit.domain.model.TrainCommand> pendingManualConfirmations = new ArrayList<>();
+    private List<StatusReport> onboardReports = new ArrayList<>();
+    private List<OnboardEvent> onboardEvents = new ArrayList<>();
+    private Object energySummary;
+    private Object evaluationSummary;
+    private Object protocolAdapterStatus;
 
     public SimulationSnapshot() {
     }
+    public String getSimulationId() { return simulationId; }
+    public void setSimulationId(String v) { simulationId=v; }
+    public String getLineId() { return lineId; }
+    public void setLineId(String v) { lineId=v; }
+    public double getCurrentTimeSeconds() { return simulationTime; }
 
     public double getSimulationTime() {
         return simulationTime;
@@ -47,6 +67,9 @@ public class SimulationSnapshot {
     public void setSimTimeFormatted(String simTimeFormatted) {
         this.simTimeFormatted = simTimeFormatted;
     }
+
+    public boolean isRunning() { return running; }
+    public void setRunning(boolean v) { this.running = v; }
 
     public int getTotalTrains() {
         return totalTrains;
@@ -137,6 +160,42 @@ public class SimulationSnapshot {
 
     public EnergyOptimizationInfo getEnergyOptimization() { return energyOptimization; }
     public void setEnergyOptimization(EnergyOptimizationInfo v) { this.energyOptimization = v; }
+
+    public List<PowerSectionStatus> getPowerSections() { return powerSections; }
+    public void setPowerSections(List<PowerSectionStatus> v) { this.powerSections = v; }
+
+    public List<MovementAuthorityInfo> getMovementAuthorities() { return movementAuthorities; }
+    public void setMovementAuthorities(List<MovementAuthorityInfo> v) { this.movementAuthorities = v; }
+    public Object getDispatchPlan() { return dispatchPlan; } public void setDispatchPlan(Object v) { dispatchPlan=v; }
+    public List<com.bjtu.railtransit.domain.model.TrainCommand> getIntegrationCommands() { return integrationCommands; }
+    public void setIntegrationCommands(List<com.bjtu.railtransit.domain.model.TrainCommand> v) { integrationCommands=v; }
+    public List<com.bjtu.railtransit.domain.model.TrainCommand> getPendingManualConfirmations() { return pendingManualConfirmations; }
+    public void setPendingManualConfirmations(List<com.bjtu.railtransit.domain.model.TrainCommand> v) { pendingManualConfirmations=v; }
+    public List<StatusReport> getOnboardReports() { return onboardReports; } public void setOnboardReports(List<StatusReport> v) { onboardReports=v; }
+    public List<OnboardEvent> getOnboardEvents() { return onboardEvents; } public void setOnboardEvents(List<OnboardEvent> v) { onboardEvents=v; }
+    public Object getEnergySummary() { return energySummary; } public void setEnergySummary(Object v) { energySummary=v; }
+    public Object getEvaluationSummary() { return evaluationSummary; } public void setEvaluationSummary(Object v) { evaluationSummary=v; }
+    public Object getProtocolAdapterStatus() { return protocolAdapterStatus; } public void setProtocolAdapterStatus(Object v) { protocolAdapterStatus=v; }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 内嵌类
+    // ═══════════════════════════════════════════════════════════════
+
+    public static class MovementAuthorityInfo {
+        private String trainId;
+        private String direction;
+        private double authorityEndMeters;
+        private double permittedSpeedKmh;
+
+        public String getTrainId() { return trainId; }
+        public void setTrainId(String v) { this.trainId = v; }
+        public String getDirection() { return direction; }
+        public void setDirection(String v) { this.direction = v; }
+        public double getAuthorityEndMeters() { return authorityEndMeters; }
+        public void setAuthorityEndMeters(double v) { this.authorityEndMeters = v; }
+        public double getPermittedSpeedKmh() { return permittedSpeedKmh; }
+        public void setPermittedSpeedKmh(double v) { this.permittedSpeedKmh = v; }
+    }
 
     public static class HeadwayInfo {
         private String fromTrainId;
