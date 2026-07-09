@@ -42,6 +42,12 @@ public class DispatchController {
         return ApiResponse.ok("step executed", "Simulation advanced by " + steps + " second(s)");
     }
 
+    @PostMapping("/simulations/reset")
+    public ApiResponse<String> resetSimulation() {
+        simulationService.resetSimulation();
+        return ApiResponse.ok("simulation reset", "All simulation state cleared");
+    }
+
     @GetMapping("/simulations/snapshot")
     public ApiResponse<SimulationSnapshot> getSnapshot() {
         if (!simulationService.isRunning()) {

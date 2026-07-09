@@ -38,6 +38,7 @@ public class DispatchEngine {
     public static final double TRAIN_LENGTH         = 6 * 19.0; // 6B编组长度 米
     public static final double MAX_SPEED            = 80.0;  // 线路最高限速 km/h
     public static final double STATION_APPROACH_DIST = 300.0; // 进站制动起点距站台 米
+    public static final double TIMETABLE_SPEED       = 70.0;  // 时刻表计算用巡航速度 km/h (匹配仿真CRUISE_SPEED)
 
     // ═══════════════════════════════════════════════════════════════
     // 站停参数 (基于北京地铁实际数据调参)
@@ -57,6 +58,25 @@ public class DispatchEngine {
     public static final double DELAY_THRESHOLD     = 60.0;  // 晚点判定阈值 秒
     public static final double RECOVERY_THRESHOLD  = 15.0;  // 恢复判定阈值 秒
     public static final double RECOVERY_MARGIN     = 0.05;  // 区间运行可压缩比例 (赶点)
+
+    /**
+     * 多级赶点恢复模型。targetValue 编码恢复等级:
+     *   0 = RECOVERY_LIGHT   (15–60s 轻度晚点) 缩停站 -15s, 不加速
+     *   1 = RECOVERY_MODERATE (60–180s 中度晚点) 缩停站 -20s, 提速至 75 km/h
+     *   2 = RECOVERY_AGGRESSIVE(180–360s 重度晚点) 缩停站 -25s, 提速至 78 km/h, 非枢纽站允许甩站
+     *   3 = RECOVERY_CRITICAL (>360s 严重晚点) 缩停站 -30s, 提速至 80 km/h, 自动甩站
+     */
+    public static final int RECOVERY_LIGHT      = 0;
+    public static final int RECOVERY_MODERATE   = 1;
+    public static final int RECOVERY_AGGRESSIVE = 2;
+    public static final int RECOVERY_CRITICAL   = 3;
+
+    /** 各恢复等级的站停缩短量 */
+    public static final double[] RECOVERY_DWELL_CUTS = {15.0, 20.0, 25.0, 30.0};
+    /** 各恢复等级的巡航速度增量 km/h (叠加在 TIMETABLE_SPEED=70 上) */
+    public static final double[] RECOVERY_SPEED_BOOST = {0.0, 5.0, 8.0, 10.0};
+    /** 各恢复等级的晚点时间窗上界 */
+    public static final double[] RECOVERY_UPPER_BOUND = {60.0, 180.0, 360.0, Double.MAX_VALUE};
 
     // ═══════════════════════════════════════════════════════════════
     // 时刻表缓存
@@ -129,15 +149,15 @@ public class DispatchEngine {
             double distKm = stations.get(i + 1).getKm() - stations.get(i).getKm();
             double distMeters = distKm * 1000.0;
             // 简化的运行时间计算: 加速 + 巡航 + 制动
-            double accelTime = (MAX_SPEED / 3.6) / ACCELERATION_RATE;       // 加速到最高速时间
+            double accelTime = (TIMETABLE_SPEED / 3.6) / ACCELERATION_RATE;       // 加速到巡航速度时间
             double accelDist = 0.5 * ACCELERATION_RATE * accelTime * accelTime; // 加速距离
-            double brakeTime = (MAX_SPEED / 3.6) / SERVICE_BRAKE_DECEL;
+            double brakeTime = (TIMETABLE_SPEED / 3.6) / SERVICE_BRAKE_DECEL;
             double brakeDist = 0.5 * SERVICE_BRAKE_DECEL * brakeTime * brakeTime;
             double cruiseDist = distMeters - accelDist - brakeDist;
 
             double runTime;
             if (cruiseDist > 0) {
-                runTime = accelTime + (cruiseDist / (MAX_SPEED / 3.6)) + brakeTime;
+                runTime = accelTime + (cruiseDist / (TIMETABLE_SPEED / 3.6)) + brakeTime;
             } else {
                 // 短区间: 纯加减速
                 double peakSpeed = Math.sqrt(distMeters * ACCELERATION_RATE * SERVICE_BRAKE_DECEL
@@ -337,7 +357,7 @@ public class DispatchEngine {
     }
 
     // ================================================================
-    // 第5步: 晚点检测与传播模型 (6.4)
+    // 第5步: 晚点检测、多级赶点恢复、协同传播模型 (6.4)
     // ================================================================
 
     /**
@@ -345,16 +365,12 @@ public class DispatchEngine {
      */
     public double computeDelay(TrainState train) {
         if (timetable == null) return 0;
-
         int stationIdx = train.getCurrentStationIndex();
         if (stationIdx < 0) return 0;
-
         TimetableEntry entry = getTimetableEntry(train.getTrainId(), stationIdx);
         if (entry == null) return 0;
-
         double planned = entry.plannedArrival;
         double actual = train.getActualArrivalAtStation();
-
         if (actual > 0 && planned > 0) {
             return Math.max(0, actual - planned);
         }
@@ -362,59 +378,60 @@ public class DispatchEngine {
     }
 
     /**
-     * 晚点传播评估: 前车晚点 + 后车间距不足 → 生成HOLD/SLOW指令
+     * 计算列车赶点恢复潜力 (秒)。
+     * 恢复潜力 = Σ(后续各站可缩短停站时间) + Σ(后续各区间可通过提速节省的时间)
+     *
+     * @param recoveryLevel 恢复等级 (0-3)
+     * @param remainingStops 剩余停站数
+     * @param remainingDistanceKm 剩余运行距离
      */
-    public DelayResult evaluateDelayPropagation(List<TrainState> sortedTrains, double simTimeSeconds) {
-        DelayResult dr = new DelayResult();
-        dr.commands = new ArrayList<>();
-        dr.events = new ArrayList<>();
+    public double calcRecoveryPotential(int recoveryLevel, int remainingStops, double remainingDistanceKm) {
+        if (recoveryLevel < 0 || remainingStops <= 0) return 0;
+        int level = Math.min(recoveryLevel, RECOVERY_CRITICAL);
 
-        for (int i = 0; i < sortedTrains.size() - 1; i++) {
-            TrainState following = sortedTrains.get(i);
-            TrainState leading = sortedTrains.get(i + 1);
+        // 停站缩短的恢复量
+        double dwellRecovery = remainingStops * RECOVERY_DWELL_CUTS[level];
 
-            if ("FINISHED".equals(leading.getStatus()) || "FINISHED".equals(following.getStatus())) continue;
-
-            // 前车晚点 > 阈值
-            if (leading.getDelaySeconds() > DELAY_THRESHOLD) {
-                double gap = leading.getPositionMeters() - following.getPositionMeters();
-                double safeDist = calcSafeDistance(following.getSpeed() / 3.6);
-
-                if (gap < safeDist) {
-                    SimulationSnapshot.TrainCommand cmd = new SimulationSnapshot.TrainCommand();
-                    cmd.setTrainId(following.getTrainId());
-
-                    if (gap < safeDist * 0.4) {
-                        cmd.setCommandType("HOLD");
-                        cmd.setReason(String.format("前车%s晚点%.0fs，强制扣车防止追尾(间距%.0f/安全%.0f)",
-                                leading.getTrainId(), leading.getDelaySeconds(), gap, safeDist));
-                    } else {
-                        cmd.setCommandType("SLOW");
-                        double limitSpeed = Math.max(25, following.getSpeed() * 0.5);
-                        cmd.setTargetValue(limitSpeed);
-                        cmd.setReason(String.format("前车%s晚点%.0fs，限速%.0fkm/h(间距%.0f/安全%.0f)",
-                                leading.getTrainId(), leading.getDelaySeconds(), limitSpeed, gap, safeDist));
-                    }
-                    dr.commands.add(cmd);
-
-                    // 记录传播事件
-                    SimulationSnapshot.DelayEvent event = new SimulationSnapshot.DelayEvent();
-                    event.setTimeSeconds(simTimeSeconds);
-                    event.setTrainId(following.getTrainId());
-                    event.setDelaySeconds(following.getDelaySeconds());
-                    event.setCause("前车" + leading.getTrainId() + "晚点(" + String.format("%.0f", leading.getDelaySeconds()) + "s)传播");
-                    event.setAffectedTrainId(leading.getTrainId());
-                    event.setPositionKm(following.getPositionMeters() / 1000.0);
-                    event.setEventType("PROPAGATED");
-                    dr.events.add(event);
-                }
-            }
+        // 提速节省的区间运行时间
+        // 原运行时间 ≈ distance / (TIMETABLE_SPEED/3.6)
+        // 新运行时间 ≈ distance / ((TIMETABLE_SPEED+boost)/3.6)
+        // 节省 = 原时间 - 新时间
+        double boost = RECOVERY_SPEED_BOOST[level];
+        double speedRecovery = 0;
+        if (boost > 0 && remainingDistanceKm > 0) {
+            double origTime = (remainingDistanceKm * 1000.0) / (TIMETABLE_SPEED / 3.6);
+            double newTime = (remainingDistanceKm * 1000.0) / ((TIMETABLE_SPEED + boost) / 3.6);
+            speedRecovery = Math.max(0, origTime - newTime);
         }
-        return dr;
+
+        // 甩站节省 (AGGRESSIVE和CRITICAL级别, 假设跳过30%-60%非枢纽站)
+        double skipRecovery = 0;
+        if (level >= RECOVERY_AGGRESSIVE) {
+            int skipCount = level == RECOVERY_CRITICAL ? Math.max(1, remainingStops / 2) : Math.max(1, remainingStops / 3);
+            double avgDwell = DWELL_BASE + DWELL_PEAK_EXTRA * 0.3; // 平均停站时间
+            double avgRunTime = remainingDistanceKm > 0 && remainingStops > 0
+                    ? (remainingDistanceKm * 1000.0 / remainingStops) / (TIMETABLE_SPEED / 3.6) : 100;
+            skipRecovery = skipCount * (avgDwell + avgRunTime * 0.3);
+        }
+
+        return dwellRecovery + speedRecovery + skipRecovery;
     }
 
     /**
-     * 全量晚点评估 (所有列车 vs 时刻表)
+     * 根据晚点秒数判定恢复等级。
+     */
+    public int getRecoveryLevel(double delaySeconds) {
+        if (delaySeconds <= 0) return -1;
+        for (int i = 0; i < RECOVERY_UPPER_BOUND.length; i++) {
+            if (delaySeconds <= RECOVERY_UPPER_BOUND[i]) return i;
+        }
+        return RECOVERY_CRITICAL;
+    }
+
+    /**
+     * 全量晚点评估 (所有列车 vs 时刻表) —— 多级赶点版本。
+     * 根据晚点程度自动分配合适的恢复策略:
+     *   LIGHT→仅缩停站, MODERATE→缩停站+提速, AGGRESSIVE→缩停站+提速+甩站, CRITICAL→全力恢复
      */
     public DelayResult evaluateAllDelays(List<TrainState> trains, double simTimeSeconds) {
         DelayResult dr = new DelayResult();
@@ -428,12 +445,15 @@ public class DispatchEngine {
             train.setDelaySeconds(delay);
 
             if (delay > DELAY_THRESHOLD) {
-                // 较大晚点: 记录 + 赶点建议
+                int level = getRecoveryLevel(delay);
+                String levelLabel = level == RECOVERY_LIGHT ? "轻度" : level == RECOVERY_MODERATE ? "中度"
+                        : level == RECOVERY_AGGRESSIVE ? "重度" : "严重";
+
                 SimulationSnapshot.DelayEvent event = new SimulationSnapshot.DelayEvent();
                 event.setTimeSeconds(simTimeSeconds);
                 event.setTrainId(train.getTrainId());
                 event.setDelaySeconds(delay);
-                event.setCause("运行晚点");
+                event.setCause("运行晚点(" + levelLabel + ")");
                 event.setPositionKm(train.getPositionMeters() / 1000.0);
                 event.setEventType("PRIMARY_DELAY");
                 dr.events.add(event);
@@ -441,11 +461,16 @@ public class DispatchEngine {
                 SimulationSnapshot.TrainCommand cmd = new SimulationSnapshot.TrainCommand();
                 cmd.setTrainId(train.getTrainId());
                 cmd.setCommandType("SPEED_UP");
-                cmd.setReason(String.format("本车晚点%.0fs，建议缩短停站+压缩区间运行赶点", delay));
+                cmd.setTargetValue(level); // 编码恢复等级
+                cmd.setReason(String.format("%s晚点%.0fs → %s赶点: 缩停站-%.0fs%s%s",
+                        levelLabel, delay,
+                        level == RECOVERY_LIGHT ? "L1" : level == RECOVERY_MODERATE ? "L2" : level == RECOVERY_AGGRESSIVE ? "L3" : "L4",
+                        RECOVERY_DWELL_CUTS[level],
+                        RECOVERY_SPEED_BOOST[level] > 0 ? String.format(", 区间提速+%.0fkm/h", RECOVERY_SPEED_BOOST[level]) : "",
+                        level >= RECOVERY_AGGRESSIVE ? ", 允许甩站" : ""));
                 dr.commands.add(cmd);
 
             } else if (delay > 0 && delay < RECOVERY_THRESHOLD) {
-                // 已基本恢复
                 SimulationSnapshot.DelayEvent event = new SimulationSnapshot.DelayEvent();
                 event.setTimeSeconds(simTimeSeconds);
                 event.setTrainId(train.getTrainId());
@@ -454,6 +479,90 @@ public class DispatchEngine {
                 event.setPositionKm(train.getPositionMeters() / 1000.0);
                 event.setEventType("RECOVERED");
                 dr.events.add(event);
+            }
+        }
+        return dr;
+    }
+
+    /**
+     * 晚点传播评估 —— 协同优化版本。
+     *
+     * 传统做法: 前车晚点 → 无条件给后车 SLOW/HOLD。
+     * 协同优化: 先判断前车的恢复潜力。若前车能在剩余区间内自行恢复，则后车仅用轻度限速；
+     * 若前车恢复无望，则后车用更强力的减速/扣车以避免追尾和晚点传播链。
+     *
+     * 前车恢复潜力 = calcRecoveryPotential(level, remainingStops, remainingDist)
+     * - 潜力 ≥ 当前晚点 → 前车可自愈, 后车仅 SLOW_LIGHT (限速到 80% 当前速度)
+     * - 潜力 < 当前晚点 → 前车无法自愈, 后车按传统逻辑 SLOW/HOLD
+     */
+    public DelayResult evaluateDelayPropagation(List<TrainState> sortedTrains, double simTimeSeconds) {
+        DelayResult dr = new DelayResult();
+        dr.commands = new ArrayList<>();
+        dr.events = new ArrayList<>();
+
+        for (int i = 0; i < sortedTrains.size() - 1; i++) {
+            TrainState following = sortedTrains.get(i);
+            TrainState leading = sortedTrains.get(i + 1);
+
+            if ("FINISHED".equals(leading.getStatus()) || "FINISHED".equals(following.getStatus())) continue;
+
+            if (leading.getDelaySeconds() > DELAY_THRESHOLD) {
+                double gap = leading.getPositionMeters() - following.getPositionMeters();
+                // 方向感知: 若两车方向不同，不触发常规传播
+                if (gap < 0) continue;
+                double safeDist = calcSafeDistance(following.getSpeed() / 3.6);
+
+                if (gap < safeDist * 0.9) {
+                    // ── 评估前车恢复潜力 ──
+                    int leadLevel = getRecoveryLevel(leading.getDelaySeconds());
+                    int totalStations = 13; // 北京地铁9号线
+                    int remainingStops;
+                    double remainingDistKm;
+                    if (leading.isUpDirection()) {
+                        remainingStops = Math.max(1, totalStations - leading.getCurrentStationIndex() - 1);
+                        remainingDistKm = 16.05 - (leading.getPositionMeters() / 1000.0);
+                    } else {
+                        remainingStops = Math.max(1, leading.getCurrentStationIndex());
+                        remainingDistKm = leading.getPositionMeters() / 1000.0;
+                    }
+                    double recoveryPotential = calcRecoveryPotential(leadLevel, remainingStops, remainingDistKm);
+
+                    SimulationSnapshot.TrainCommand cmd = new SimulationSnapshot.TrainCommand();
+                    cmd.setTrainId(following.getTrainId());
+
+                    if (gap < safeDist * 0.4) {
+                        // 紧急间距: 必须扣车
+                        cmd.setCommandType("HOLD");
+                        cmd.setReason(String.format("前车%s晚点%.0fs, 紧急扣车(间距%.0f/安全%.0f, 预测恢复%.0fs)",
+                                leading.getTrainId(), leading.getDelaySeconds(), gap, safeDist, recoveryPotential));
+                    } else if (recoveryPotential >= leading.getDelaySeconds() * 0.7) {
+                        // 前车可恢复: 轻度限速, 避免误伤后车
+                        cmd.setCommandType("SLOW");
+                        double mildSpeed = Math.max(45, following.getSpeed() * 0.8);
+                        cmd.setTargetValue(mildSpeed);
+                        cmd.setReason(String.format("前车%s晚点%.0fs但可自愈(潜力%.0fs), 后车轻度限速%.0fkm/h",
+                                leading.getTrainId(), leading.getDelaySeconds(), recoveryPotential, mildSpeed));
+                    } else {
+                        // 前车无法恢复: 强力减速
+                        cmd.setCommandType("SLOW");
+                        double limitSpeed = Math.max(25, following.getSpeed() * 0.5);
+                        cmd.setTargetValue(limitSpeed);
+                        cmd.setReason(String.format("前车%s晚点%.0fs且恢复潜力不足(潜力%.0fs), 后车限速%.0fkm/h",
+                                leading.getTrainId(), leading.getDelaySeconds(), recoveryPotential, limitSpeed));
+                    }
+                    dr.commands.add(cmd);
+
+                    SimulationSnapshot.DelayEvent event = new SimulationSnapshot.DelayEvent();
+                    event.setTimeSeconds(simTimeSeconds);
+                    event.setTrainId(following.getTrainId());
+                    event.setDelaySeconds(following.getDelaySeconds());
+                    event.setCause("前车" + leading.getTrainId() + "晚点(" + String.format("%.0f", leading.getDelaySeconds()) + "s)传播"
+                            + (recoveryPotential >= leading.getDelaySeconds() * 0.7 ? " [协同优化: 后车仅轻度限速]" : ""));
+                    event.setAffectedTrainId(leading.getTrainId());
+                    event.setPositionKm(following.getPositionMeters() / 1000.0);
+                    event.setEventType("PROPAGATED");
+                    dr.events.add(event);
+                }
             }
         }
         return dr;

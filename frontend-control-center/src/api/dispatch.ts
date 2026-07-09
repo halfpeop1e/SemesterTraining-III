@@ -33,6 +33,10 @@ export async function stepSimulation(steps: number = 1): Promise<string> {
   });
 }
 
+export async function resetSimulation(): Promise<string> {
+  return request<string>('/simulations/reset', { method: 'POST' });
+}
+
 export async function getSnapshot(): Promise<SimulationSnapshot> {
   return request<SimulationSnapshot>('/simulations/snapshot');
 }

@@ -7,7 +7,7 @@ import {
   useCallback,
   type ReactNode,
 } from 'react';
-import { startSimulation, stepSimulation, getSnapshot } from '../api/dispatch';
+import { startSimulation, stepSimulation, resetSimulation, getSnapshot } from '../api/dispatch';
 import type { SimulationSnapshot } from '../types/dispatch';
 
 export const SPEED_OPTIONS = [
@@ -26,6 +26,7 @@ interface SimulationContextValue {
   start: () => Promise<void>;
   stop: () => void;
   step: () => Promise<void>;
+  reset: () => Promise<void>;
   setSpeed: (i: number) => void;
   setError: (msg: string) => void;
 }
@@ -121,6 +122,20 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
 
   const setSpeed = useCallback((i: number) => setSpeedIndex(i), []);
 
+  const reset = useCallback(async () => {
+    stop();
+    setLoading(true);
+    try {
+      await resetSimulation();
+      setSnapshot(null);
+      setError('');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [stop]);
+
   const value: SimulationContextValue = {
     snapshot,
     isRunning,
@@ -130,6 +145,7 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
     start,
     stop,
     step,
+    reset,
     setSpeed,
     setError,
   };

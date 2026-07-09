@@ -383,7 +383,7 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
    ================================================================ */
 
 export default function Dispatch() {
-  const { snapshot, isRunning, loading, error, speedIndex, start, stop, step, setSpeed, setError } = useSimulation();
+  const { snapshot, isRunning, loading, error, speedIndex, start, stop, step, reset, setSpeed, setError } = useSimulation();
   const [stations, setStations] = useState<StationGeo[]>([]);
   const [tileMode, setTileMode] = useState<TileMode>('dark');
   const [rightTab, setRightTab] = useState<'trains'|'arrivals'|'commands'|'flow'|'deviation'>('trains');
@@ -407,6 +407,16 @@ export default function Dispatch() {
   const plannedHistory = snapshot?.plannedDiagramPoints ?? [];
   const planDeviations = snapshot?.planDeviations ?? [];
   const energy = snapshot?.totalEnergyKwh ?? 0;
+
+  // Recovery level mapping from active SPEED_UP commands
+  const RECOVERY_LABEL: Record<number, string> = { 0: 'L1 赶点', 1: 'L2 赶点', 2: 'L3 赶点', 3: 'L4 赶点' };
+  const RECOVERY_COLOR: Record<number, string> = { 0: '#f7b731', 1: '#ff9f43', 2: '#fc5c65', 3: '#e55058' };
+  const recoveryMap = new Map<string, number>();
+  commands.forEach(c => {
+    if (c.commandType === 'SPEED_UP' && c.targetValue !== undefined) {
+      recoveryMap.set(c.trainId, Math.min(c.targetValue, 3));
+    }
+  });
 
   if (stations.length === 0 && !error) {
     return (
@@ -444,9 +454,10 @@ export default function Dispatch() {
             {error && <span className="d-tb-err">{error}</span>}
             <div className="d-speed-group">{SPEED_OPTIONS.map((o,i)=><button key={o.label} className={`d-speed-btn${i===speedIndex?' active':''}`} onClick={()=>setSpeed(i)} disabled={loading&&!isRunning}>{o.label}</button>)}</div>
             <div className="d-map-mode">{(Object.keys(TILE_LAYERS) as TileMode[]).map(m=><button key={m} className={`d-mode-btn${tileMode===m?' active':''}`} onClick={()=>setTileMode(m)}>{TILE_LAYERS[m].label}</button>)}</div>
-            <button className="d-btn d-btn-start" onClick={start} disabled={loading||isRunning}><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>启动</button>
+            <button className="d-btn d-btn-start" onClick={start} disabled={loading||isRunning}><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>{snapshot?'继续':'启动'}</button>
             <button className="d-btn d-btn-step" onClick={step} disabled={loading||isRunning}>推进</button>
             {isRunning&&<button className="d-btn d-btn-stop" onClick={stop}><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>停止</button>}
+            {!isRunning&&snapshot&&<button className="d-btn d-btn-reset" onClick={reset} disabled={loading}>↺ 重置</button>}
           </div>
         </header>
 
@@ -528,7 +539,7 @@ export default function Dispatch() {
                     <table className="d-tbl">
                       <thead><tr><th>车次</th><th>方向</th><th>位置</th><th>速度</th><th>状态</th><th>交路</th><th>折返</th><th>策略</th></tr></thead>
                       <tbody>
-                        {trains.length===0?<tr><td colSpan={8} className="d-empty">点击「启动」</td></tr>:trains.map(t=><tr key={t.trainId}><td><span className="d-train-id">{t.trainNumber||t.trainName}</span></td><td><span style={{color:t.direction==='DOWN'?'#f7b731':'#06d6a0',fontWeight:600,fontSize:10}}>{t.direction==='DOWN'?'↓下行':'↑上行'}</span></td><td className="d-mono">{fmtNum(t.positionMeters)}</td><td className="d-mono">{t.speed>0?t.speed.toFixed(0)+' km/h':'—'}</td><td><span className="d-status-dot" style={{background:STATUS_COLOR[t.status]}}/>{STATUS_LABEL[t.status]}{t.status==='DWELLING'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='TURNING_BACK'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='DEPOT_WAITING'&&t.plannedDepartureFromDepot>0?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{(t.plannedDepartureFromDepot-snapshot!.simulationTime).toFixed(0)}s</span>:null}</td><td style={{fontSize:10,color:'#94a3b8'}}>{t.routePattern==='SHORT_S'?'南段小交路':t.routePattern==='SHORT_N'?'北段小交路':'全程'}{t.skipNextStation?<span style={{color:'#fc5c65',marginLeft:4}}>甩站中</span>:null}{t.operationLevel!=='NORMAL'&&t.operationLevel?<span style={{color:'#ff9f43',marginLeft:4}}>{t.operationLevel==='EXPRESS'?'快车':t.operationLevel==='ENERGY_SAVE'?'节能':'慢行'}</span>:null}</td><td className="d-mono" style={{color:t.turnbackCount>0?'#f7b731':'#374151'}}>{t.turnbackCount>0?t.turnbackCount:'—'}</td><td style={{display:'flex',gap:2}}>{t.status!=='FINISHED'&&t.status!=='DEPOT_WAITING'&&<><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'SKIP_STATION')} title="甩站">⊘</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',1)} title="快车">⚡</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',0)} title="节能">♻</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'RESUME_NORMAL')} title="恢复">↺</button></>}</td></tr>)}</tbody>
+                        {trains.length===0?<tr><td colSpan={8} className="d-empty">点击「启动」</td></tr>:trains.map(t=><tr key={t.trainId}><td><span className="d-train-id">{t.trainNumber||t.trainName}</span></td><td><span style={{color:t.direction==='DOWN'?'#f7b731':'#06d6a0',fontWeight:600,fontSize:10}}>{t.direction==='DOWN'?'↓下行':'↑上行'}</span></td><td className="d-mono">{fmtNum(t.positionMeters)}</td><td className="d-mono">{t.speed>0?t.speed.toFixed(0)+' km/h':'—'}</td><td><span className="d-status-dot" style={{background:STATUS_COLOR[t.status]}}/>{STATUS_LABEL[t.status]}{t.status==='DWELLING'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='TURNING_BACK'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='DEPOT_WAITING'&&t.plannedDepartureFromDepot>0?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{(t.plannedDepartureFromDepot-snapshot!.simulationTime).toFixed(0)}s</span>:null}{recoveryMap.has(t.trainId)&&<span style={{fontSize:8,padding:'0 3px',borderRadius:2,background:RECOVERY_COLOR[recoveryMap.get(t.trainId)!]+'20',color:RECOVERY_COLOR[recoveryMap.get(t.trainId)!],marginLeft:4,fontWeight:700}}>{RECOVERY_LABEL[recoveryMap.get(t.trainId)!]}</span>}</td><td style={{fontSize:10,color:'#94a3b8'}}>{t.routePattern==='SHORT_S'?'南段小交路':t.routePattern==='SHORT_N'?'北段小交路':'全程'}{t.skipNextStation?<span style={{color:'#fc5c65',marginLeft:4}}>甩站中</span>:null}{t.operationLevel!=='NORMAL'&&t.operationLevel?<span style={{color:'#ff9f43',marginLeft:4}}>{t.operationLevel==='EXPRESS'?'快车':t.operationLevel==='ENERGY_SAVE'?'节能':'慢行'}</span>:null}</td><td className="d-mono" style={{color:t.turnbackCount>0?'#f7b731':'#374151'}}>{t.turnbackCount>0?t.turnbackCount:'—'}</td><td style={{display:'flex',gap:2}}>{t.status!=='FINISHED'&&t.status!=='DEPOT_WAITING'&&<><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'SKIP_STATION')} title="甩站">⊘</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',1)} title="快车">⚡</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',0)} title="节能">♻</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'RESUME_NORMAL')} title="恢复">↺</button></>}</td></tr>)}</tbody>
                     </table>
                   </div>
                 </div>
@@ -751,6 +762,9 @@ const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+
 .d-btn-step:hover:not(:disabled){background:#253448;color:#cbd5e1}
 .d-btn-stop{background:#fc5c65;color:#fff}
 .d-btn-stop:hover{background:#e55058}
+
+.d-btn-reset{background:#4a5568;color:#e2e8f0;border:1px solid #617088}
+.d-btn-reset:hover{background:#718096;border-color:#94a3b8}
 
 /* ── Body ── */
 .d-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:auto minmax(0,1fr);flex:1;padding:6px 12px 8px;overflow:hidden;min-height:0;gap:6px 10px;align-items:stretch}

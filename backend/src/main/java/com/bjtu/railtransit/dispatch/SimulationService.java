@@ -70,6 +70,12 @@ public class SimulationService {
     // ================================================================
 
     public void startSimulation(int durationSec) {
+        // ── 如果已有数据且暂停中: 直接恢复运行 ──
+        if (!trains.isEmpty()) {
+            simulationRunning = true;
+            return;
+        }
+
         simulationTimeSeconds = 0;
         simulationRunning = true;
         trains.clear();
@@ -549,6 +555,14 @@ public class SimulationService {
         double accelKmhPerS = opLevel.getAccelMs2() * 3.6;  // 转换为 km/h/s
         double decelMs2 = opLevel.getDecelMs2();
 
+        // ── 赶点区间加速: 检查活跃SPEED_UP指令的恢复等级 ──
+        SimulationSnapshot.TrainCommand speedCmd = activeCommands.get(train.getTrainId());
+        if (speedCmd != null && "SPEED_UP".equals(speedCmd.getCommandType()) && speedCmd.getTargetValue() > 0) {
+            int recoverLevel = Math.min((int) speedCmd.getTargetValue(), DispatchEngine.RECOVERY_CRITICAL);
+            double boost = DispatchEngine.RECOVERY_SPEED_BOOST[recoverLevel];
+            if (boost > 0) cruiseSpeed += boost;
+        }
+
         // 紧急制动优先
         if (train.isEmergencyBraking()) {
             double newSpeed = Math.max(0, speed - EBRAKE_KMH_PER_S);
@@ -668,12 +682,18 @@ public class SimulationService {
         int stationId = stations.get(stationIndex).getId();
         double plannedDwell = dispatchEngine.calcDwellTime(stationId, simulationTimeSeconds);
 
-        // SPEED_UP 指令: 缩短停站
+        // SPEED_UP 指令: 多级缩停站 (基于targetValue编码的恢复等级)
         String tid = train.getTrainId();
         SimulationSnapshot.TrainCommand speedUpCmd = activeCommands.get(tid);
         if (speedUpCmd != null && "SPEED_UP".equals(speedUpCmd.getCommandType())) {
-            plannedDwell = Math.max(DispatchEngine.DWELL_MIN, plannedDwell - 15);
-            activeCommands.remove(tid);
+            int recoverLevel = Math.min(Math.max((int) speedUpCmd.getTargetValue(), 0), DispatchEngine.RECOVERY_CRITICAL);
+            double dwellCut = DispatchEngine.RECOVERY_DWELL_CUTS[recoverLevel];
+            plannedDwell = Math.max(DispatchEngine.DWELL_MIN, plannedDwell - dwellCut);
+            // 指令保持活跃 让区间加速继续在运动学中生效
+            // AGGRESSIVE/CRITICAL 级别: 自动甩站下一站
+            if (recoverLevel >= DispatchEngine.RECOVERY_AGGRESSIVE) {
+                train.setSkipNextStation(true);
+            }
         }
 
         train.setPlannedDwellSeconds(plannedDwell);
@@ -887,17 +907,27 @@ public class SimulationService {
         if (simulationTimeSeconds % 30 == 0) {
             DispatchEngine.DelayResult delayResult = dispatchEngine.evaluateAllDelays(
                     new ArrayList<>(trains.values()), simulationTimeSeconds);
+
+            // ── 追踪本轮评估中收到SPEED_UP的列车──
+            Set<String> speedUpTrains = new java.util.HashSet<>();
+
             for (SimulationSnapshot.TrainCommand cmd : delayResult.commands) {
                 if ("SPEED_UP".equals(cmd.getCommandType())) {
-                    // 避免重复SPEED_UP：仅当该列车没有活跃SPEED_UP时才应用
-                    SimulationSnapshot.TrainCommand existing = activeCommands.get(cmd.getTrainId());
-                    if (existing == null || !"SPEED_UP".equals(existing.getCommandType())) {
-                        applyCommand(cmd);
-                    }
+                    speedUpTrains.add(cmd.getTrainId());
+                    // 直接覆盖旧指令 (恢复等级可能变化)
+                    applyCommand(cmd);
                 }
             }
+
+            // ── 清理已恢复列车的SPEED_UP (本轮未收到新SPEED_UP的列车) ──
+            for (Map.Entry<String, SimulationSnapshot.TrainCommand> entry : activeCommands.entrySet()) {
+                if ("SPEED_UP".equals(entry.getValue().getCommandType())
+                        && !speedUpTrains.contains(entry.getKey())) {
+                    activeCommands.remove(entry.getKey());
+                }
+            }
+
             for (SimulationSnapshot.DelayEvent evt : delayResult.events) {
-                // 去重：同一列车同一类型的事件只保留最新的
                 delayEventLog.removeIf(e ->
                     e.getTrainId().equals(evt.getTrainId()) && e.getEventType().equals(evt.getEventType()));
                 delayEventLog.add(evt);
@@ -1247,5 +1277,21 @@ public class SimulationService {
 
     public boolean isRunning() {
         return simulationRunning;
+    }
+
+    /** 重置仿真 (停止并清空所有状态) */
+    public void resetSimulation() {
+        simulationRunning = false;
+        simulationTimeSeconds = 0;
+        trains.clear();
+        activeCommands.clear();
+        commandLog.clear();
+        delayEventLog.clear();
+        stationArrivalMap.clear();
+        positionHistory.clear();
+        totalEnergyKwh = 0;
+        lastSampleTime = -10;
+        lastEnergyResult = null;
+        dispatchEngine.clearLogs();
     }
 }
