@@ -5,14 +5,17 @@ import com.bjtu.railtransit.signal.domain.MovingAuthority;
 import com.bjtu.railtransit.signal.model.LineProfile;
 import com.bjtu.railtransit.signal.service.LineProfileLoader;
 import com.bjtu.railtransit.signal.service.MovingAuthorityService;
+import com.bjtu.railtransit.signal.service.MovementAuthorityRegistry;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Collections;
 import java.util.Map;
+import java.util.LinkedHashMap;
 
 /**
  * 移动授权 REST 接口。
@@ -27,10 +30,39 @@ public class SignalController {
 
     private final MovingAuthorityService maService;
     private final LineProfileLoader lineProfileLoader;
+    private final MovementAuthorityRegistry registry;
 
-    public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader) {
+    @Autowired
+    public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader,
+                            MovementAuthorityRegistry registry) {
         this.maService = maService;
         this.lineProfileLoader = lineProfileLoader;
+        this.registry = registry;
+    }
+
+    /** Backward-compatible constructor for the existing standalone verification harnesses. */
+    public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader) {
+        this(maService, lineProfileLoader, new MovementAuthorityRegistry());
+    }
+
+    @GetMapping("/ma/latest")
+    public ApiResponse<Map<String, MovingAuthority>> latestMa() {
+        return ApiResponse.ok("authoritative MA", registry.snapshot());
+    }
+
+    @GetMapping("/status")
+    public ApiResponse<Map<String, Object>> status() {
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("onlineTrains", registry.snapshot().size());
+        status.put("alertCount", registry.snapshot().values().stream()
+                .filter(ma -> ma.getEvent() != null
+                        && ma.getEvent() != com.bjtu.railtransit.signal.domain.SignalEvent.NONE)
+                .count());
+        status.put("health", registry.getGeneration() == 0 ? "OFFLINE" : "HEALTHY");
+        status.put("simulationTime", registry.getLastCycleTimeSeconds());
+        status.put("generation", registry.getGeneration());
+        status.put("source", registry.getSource());
+        return ApiResponse.ok("signal runtime", status);
     }
 
     @GetMapping("/line")

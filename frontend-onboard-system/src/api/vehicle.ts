@@ -9,6 +9,40 @@ import type {
 
 const API_BASE = '/api';
 
+export interface DispatchCommand {
+  commandId: string; trainId: string; commandType: string; targetValue: number;
+  reason: string; status: string; source: string;
+}
+export interface OnboardSnapshot {
+  currentTimeSeconds: number;
+  train: { trainId: string; speedKmh: number; positionMeters: number; status: string } | null;
+  commands: DispatchCommand[];
+  movementAuthorityMeters: number;
+  speedLimitKmh: number;
+  communicationStatus: string;
+  safetyStatus: string;
+}
+
+async function integrationRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json' }, ...init,
+  });
+  const body = await response.json();
+  if (!response.ok || !body.success) throw new Error(body.message || `HTTP ${response.status}`);
+  return body.data as T;
+}
+
+export const getOnboardSnapshot = (trainId: string) =>
+  integrationRequest<OnboardSnapshot>(`/onboard/${trainId}/snapshot`);
+export const ackDispatchCommand = (commandId: string, executionStatus = 'EXECUTING') =>
+  integrationRequest<DispatchCommand>('/dispatch/commands/ack', {
+    method: 'POST', body: JSON.stringify({ commandId, accepted: true, executionStatus }),
+  });
+export const reportOnboardStatus = (payload: object) =>
+  integrationRequest<string>('/dispatch/report/status', { method: 'POST', body: JSON.stringify(payload) });
+export const reportOnboardEvent = (payload: object) =>
+  integrationRequest<string>('/dispatch/report/event', { method: 'POST', body: JSON.stringify(payload) });
+
 export async function runVehicleSimulation(
   request?: SimulationRunRequest,
 ): Promise<SimulationResult> {

@@ -36,12 +36,13 @@ public class DispatchController {
 
     @PostMapping("/simulations/step")
     public ApiResponse<String> stepSimulation(@RequestBody(required = false) SimulationRequest request) {
-        if (!simulationService.isRunning()) {
-            return ApiResponse.ok("simulation not running", "Please start the simulation first");
-        }
-        int steps = (request != null && request.getSteps() > 0) ? request.getSteps() : 1;
-        simulationService.stepSimulation(steps);
-        return ApiResponse.ok("step executed", "Simulation advanced by " + steps + " second(s)");
+        return ApiResponse.error("Simulation clock is backend-owned; use start/pause/reset");
+    }
+
+    @PostMapping("/simulations/pause")
+    public ApiResponse<String> pauseSimulation() {
+        simulationService.pauseSimulation();
+        return ApiResponse.ok("simulation paused", "Authoritative clock paused");
     }
 
     @PostMapping("/simulations/reset")

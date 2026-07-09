@@ -16,7 +16,7 @@ export interface TrainState {
   turnbackCount: number;    // 已完成折返次数
   positionMeters: number;
   speed: number; // km/h
-  status: 'DEPOT_WAITING' | 'DEPARTING' | 'ACCELERATING' | 'CRUISING' | 'BRAKING' | 'DWELLING' | 'TURNING_BACK' | 'FINISHED';
+  status: 'DEPOT_WAITING' | 'DEPARTING' | 'ACCELERATING' | 'CRUISING' | 'BRAKING' | 'ARRIVING' | 'DWELLING' | 'TURNING_BACK' | 'FINISHED';
   currentStationIndex: number;
   nextStationIndex: number;
   departureTime: string;
@@ -188,3 +188,12 @@ export interface ApiResponse<T> {
   message: string;
   data: T;
 }
+
+// Legacy schematic consumes laboratory raw-data shapes that are intentionally
+// kept opaque at the dispatch boundary.
+export type Signal = Record<string, any>;
+export type SwitchGeo = Record<string, any>;
+export type TrackSegment = Record<string, any>;
+export type TrackWaypoint = Record<string, any>;
+export type SpeedLimitZone = Record<string, any>;
+export type GradientInfo = Record<string, any>;

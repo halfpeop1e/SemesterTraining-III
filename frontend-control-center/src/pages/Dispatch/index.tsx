@@ -28,6 +28,7 @@ import type {
   TrainPositionPoint,
   TrainCommand,
 } from "../../types/dispatch";
+import DispatcherWorkstationPanel from "./DispatcherWorkstation";
 
 /* ================================================================
    Fix Leaflet icons
@@ -75,7 +76,7 @@ const SPEED_OPTIONS = [
    Data Helpers
    ================================================================ */
 
-const STATUS_LABEL: Record<TrainState["status"], string> = {
+const STATUS_LABEL: Partial<Record<TrainState["status"], string>> = {
   DEPOT_WAITING: "待发",
   DEPARTING: "起动",
   ACCELERATING: "加速",
@@ -85,7 +86,7 @@ const STATUS_LABEL: Record<TrainState["status"], string> = {
   TURNING_BACK: "折返",
   FINISHED: "终到",
 };
-const STATUS_COLOR: Record<TrainState["status"], string> = {
+const STATUS_COLOR: Partial<Record<TrainState["status"], string>> = {
   DEPOT_WAITING: "#617088",
   DEPARTING: "#45aaf2",
   ACCELERATING: "#00a8e8",
@@ -569,6 +570,7 @@ export default function Dispatch() {
       .catch((e) => setError("Line load: " + (e?.message || "network")));
   }, []);
 
+
   const doStrategy = useCallback(
     async (trainId: string, type: string, val: number = 0) => {
       try {
@@ -579,6 +581,8 @@ export default function Dispatch() {
     },
     [],
   );
+  // T1-T8 are owned exclusively by the multi-train simulation. Independent
+  // onboard endpoints are displayed in DispatcherWorkstationPanel only.
   const trains = snapshot?.trains ?? [];
   const headways = snapshot?.headways ?? [];
   const commands = snapshot?.commands ?? [];
@@ -618,8 +622,8 @@ export default function Dispatch() {
                 </svg>
               </div>
               <div>
-                <span className="d-tb-title">总控调度中心</span>
-                <span className="d-tb-sub">DISPATCH</span>
+                <span className="d-tb-title">多车仿真调度中心</span>
+                <span className="d-tb-sub">T1-T8 SIMULATION</span>
               </div>
             </div>
           </div>
@@ -636,6 +640,7 @@ export default function Dispatch() {
   return (
     <>
       <style>{STYLES}</style>
+      <DispatcherWorkstationPanel />
       <div className="d-root">
         {/* ════ Top Bar ════ */}
         <header className="d-topbar">
@@ -669,8 +674,8 @@ export default function Dispatch() {
                 </svg>
               </div>
               <div>
-                <span className="d-tb-title">总控调度中心</span>
-                <span className="d-tb-sub">DISPATCH &middot; LINE 9</span>
+                <span className="d-tb-title">多车仿真调度中心</span>
+                <span className="d-tb-sub">T1-T8 SIMULATION &middot; LINE 9</span>
               </div>
             </div>
           </div>
@@ -1751,6 +1756,22 @@ export default function Dispatch() {
    ================================================================ */
 
 const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+.dispatcher-workstation{position:fixed;right:18px;bottom:18px;width:360px;max-height:42vh;overflow:auto;z-index:1000;background:#0b1622;border:1px solid #227c88;border-radius:10px;padding:12px;color:#dcebf0;box-shadow:0 12px 35px #0009;font-size:11px}
+.dispatcher-workstation header{display:flex;justify-content:space-between;margin-bottom:8px}.dispatcher-workstation .online{color:#06d6a0}.dispatcher-workstation .paused{color:#f7b731}
+.workstation-metrics{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px}.workstation-metrics span{background:#101f2d;padding:5px;border-radius:4px}
+.dispatcher-workstation button{background:#087f8c;color:white;border:0;border-radius:4px;padding:5px 8px;cursor:pointer}
+.pending-command{display:grid;gap:5px;margin-top:8px;padding:8px;border-left:3px solid #f7b731;background:#111f2b}.pending-command span{color:#91a4b7}
+.onboard-event{margin-top:6px;padding:6px;background:#351a20;color:#ffb7bf;border-radius:4px}
+.onboard-monitor-title{margin:8px 0 5px;color:#77dbe5;font-weight:700}
+.onboard-monitor-empty{padding:9px;margin-bottom:8px;color:#7f93a5;background:#0f1d29;border:1px dashed #294052;border-radius:5px}
+.onboard-monitor-card{display:grid;gap:3px;margin-bottom:7px;padding:8px;background:#101f2d;border-left:3px solid #586979;border-radius:4px;color:#c7d6e2}
+.onboard-monitor-card.is-online{border-left-color:#06d6a0}.onboard-monitor-card.is-offline{opacity:.62}
+.onboard-monitor-head{display:flex;align-items:center;gap:8px}.onboard-monitor-head span{color:#06d6a0}.onboard-monitor-card.is-offline .onboard-monitor-head span{color:#fc5c65}.onboard-monitor-head small{margin-left:auto;color:#8ca0b2}
+.onboard-monitor-meta{color:#71879a;font-size:10px}
+.onboard-monitor-conflict{color:#ffbe55;font-weight:700}
+.onboard-depart-actions{display:flex;gap:6px;margin-top:5px}.onboard-depart-actions button{flex:1;background:#087f8c}.onboard-depart-actions button+button{background:#35546b}
+.onboard-emergency-actions{margin-top:5px;padding:6px;background:#351a20;color:#ffb7bf;border-radius:4px}.onboard-emergency-actions button{width:100%;background:#b43a45}
 
 .d-root{height:100%;min-height:100%;display:flex;flex-direction:column;background:#060b11;overflow:hidden}
 .d-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:48px;flex-shrink:0;gap:10px;background:rgba(13,21,32,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #152433;z-index:20}

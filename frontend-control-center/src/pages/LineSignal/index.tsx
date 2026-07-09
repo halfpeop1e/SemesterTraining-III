@@ -4,6 +4,7 @@ import { ReloadOutlined, GlobalOutlined, AimOutlined } from '@ant-design/icons';
 import {
   getLine,
   computeMa,
+  getLatestMa,
   getEvents,
   operateSwitch,
   buildRoute,
@@ -36,7 +37,7 @@ function mapDispatchTrains(src: DispatchTrainState[], simTime: number): TrainSta
       speedKmh: t.speed,
       accelerationMps2: 0,
       lengthM: t.carCount && t.carLength ? t.carCount * t.carLength : 140,
-      direction: 'UP',
+      direction: t.direction,
       timestamp: simTime,
     }));
 }
@@ -106,7 +107,14 @@ function LineSignal() {
       setTrains(contextTrains);
       setSimTime(snapshot?.simulationTime ?? 0);
       setSimNotStarted(contextTrains.length === 0);
-      const result = await computeMa({ lineProfile, trains: contextTrains });
+      const authoritative = showDegraded ? {} : await getLatestMa();
+      const result = Object.keys(authoritative).length > 0
+        ? authoritative
+        : await computeMa({
+            lineProfile,
+            trains: contextTrains,
+            nowSec: snapshot?.simulationTime,
+          });
       setMaMap(result);
       await loadEvents();
     } catch (e: any) {

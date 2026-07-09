@@ -6,11 +6,12 @@
 // 4. SafetyEvent 在现有 summary 区域内紧凑展示，不新增大块表格撑坏布局
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { callVehicleControl, runVehicleSimulation } from '../../api/vehicle';
+import { callVehicleControl, reportOnboardEvent, runVehicleSimulation } from '../../api/vehicle';
 import type { DrivingMode, SafetyEvent, SimulationResult, TrainState } from '../../types/vehicle';
 import { STATIONS } from './data/lineMap';
 import DriverCabView from './components/DriverCabView';
 import LineRunView from './components/LineRunView';
+import IntegrationPanel from './components/IntegrationPanel';
 import './vehicle.css';
 
 const DEMO_SPEED_LIMIT_FALLBACK_MS = 20;
@@ -20,11 +21,13 @@ type SpeedMultiplier = (typeof SPEED_MULTIPLIER_OPTIONS)[number];
 type PageStatus = 'idle' | 'loading' | 'playing' | 'finished' | 'error';
 
 function Vehicle() {
+  const onboardTrainId = new URLSearchParams(window.location.search).get('trainId') || 'OB1';
   const [status, setStatus] = useState<PageStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [frameIndex, setFrameIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [departureAuthorized, setDepartureAuthorized] = useState(false);
   const [speedMultiplier, setSpeedMultiplier] = useState<SpeedMultiplier>(1);
   const [fromStationId, setFromStationId] = useState(1);
   const [toStationId, setToStationId] = useState(2);
@@ -51,6 +54,7 @@ function Vehicle() {
   drivingModeRef.current = drivingMode;
 
   useEffect(() => {
+    document.title = `${onboardTrainId} · 车载系统`;
     const existingIcon = document.querySelector<HTMLLinkElement>(
       'link[rel="icon"], link[rel="shortcut icon"]',
     );
@@ -87,7 +91,8 @@ function Vehicle() {
     setErrorMessage(null);
     setResult(null);
     setFrameIndex(0);
-    setIsPaused(false);
+    setIsPaused(true);
+    setDepartureAuthorized(false);
     setSpeedMultiplier(1);
     setDrivingMode('ato');
     setAllSafetyEvents([]);
@@ -99,7 +104,10 @@ function Vehicle() {
       if (!simulationResult.states || simulationResult.states.length === 0) {
         throw new Error('后端返回的仿真结果不包含任何 states 数据');
       }
-      setResult(simulationResult);
+      setResult({
+        ...simulationResult,
+        states: simulationResult.states.map((state) => ({ ...state, trainId: onboardTrainId })),
+      });
       setAllSafetyEvents(simulationResult.safetyEvents ?? []);
       setStatus('playing');
       setFrameIndex(0);
@@ -143,7 +151,10 @@ function Vehicle() {
         const before = prev.states.slice(0, fi + 1);
         return {
           ...prev,
-          states: [...before, ...controlResult.states],
+          states: [
+            ...before,
+            ...controlResult.states.map((state) => ({ ...state, trainId: onboardTrainId })),
+          ],
           stopResult: controlResult.stopResult,
           safetyEvents: [...(prev.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
           // EB 中断多站任务，清空旧 stationStops
@@ -167,7 +178,7 @@ function Vehicle() {
       // 控制续算失败不中断播放，console 记录
       console.warn('控制续算失败:', err);
     }
-  }, []); // useRef 读值，闭包不需要依赖
+  }, [onboardTrainId]); // useRef 读取运行状态；trainId 保持独立车载实例身份
 
   const handleReset = () => {
     setStatus('idle');
@@ -175,14 +186,31 @@ function Vehicle() {
     setResult(null);
     setFrameIndex(0);
     setIsPaused(false);
+    setDepartureAuthorized(false);
     setSpeedMultiplier(1);
     setDrivingMode('ato');
     setAllSafetyEvents([]);
   };
 
   const handleTogglePause = () => {
-    if (status === 'playing') setIsPaused((v) => !v);
+    if (status === 'playing' && departureAuthorized) setIsPaused((v) => !v);
   };
+
+  const handleDepartAuthorized = useCallback(() => {
+    setDepartureAuthorized(true);
+    setIsPaused(false);
+  }, []);
+
+  const handleDispatchHold = useCallback(() => {
+    setIsPaused(true);
+  }, []);
+
+  const handleDispatchRecovery = useCallback(() => {
+    setDrivingMode('ato');
+    setIsPaused(false);
+    setStatus('playing');
+    void handleControl('traction', 0, 'ato');
+  }, [handleControl]);
 
   // ---- 驾驶员控制回调 ----
   const handleRequestManual = useCallback(() => {
@@ -198,9 +226,22 @@ function Vehicle() {
 
   const handleEmergencyBrake = useCallback(() => {
     const prevMode = drivingModeRef.current;
+    const state = currentStateRef.current;
     setDrivingMode('emergency');
     handleControl('emergency_brake', 0, prevMode);
-  }, [handleControl]);
+    if (state) {
+      const lineStart = resultRef.current?.summary.lineStartPosition ?? 0;
+      void reportOnboardEvent({
+        trainId: onboardTrainId,
+        eventType: 'ATP_EB_TRIGGERED',
+        timestampSeconds: state.time,
+        positionMeters: state.absolutePosition ?? lineStart + state.position,
+        speedKmh: state.velocity * 3.6,
+        severity: 'CRITICAL',
+        details: '车载端触发紧急制动，请求总控保持停车并重新评估运行策略',
+      });
+    }
+  }, [handleControl, onboardTrainId]);
 
   // ---- 派生值 ----
   const targetStopPosition = result?.stopResult?.targetStopPosition ?? 1200;
@@ -221,7 +262,7 @@ function Vehicle() {
       <header className="vehicle-page__header">
         <div>
           <p className="vehicle-page__eyebrow">Onboard cab HMI</p>
-          <h2>车载驾驶台系统</h2>
+          <h2>车载驾驶台系统 · {onboardTrainId}</h2>
         </div>
         <div className="vehicle-page__actions">
           {/* 起止站选择器 */}
@@ -268,11 +309,11 @@ function Vehicle() {
 
           <button className="vehicle-start-btn" onClick={handleStart}
             disabled={isLoading || isPlaying} type="button">
-            {isLoading ? '计算中...' : status === 'finished' || status === 'error' ? '重新仿真' : '开始仿真'}
+            {isLoading ? '准备中...' : status === 'finished' || status === 'error' ? '重新上线' : '上线并等待发车'}
           </button>
           <button className="vehicle-secondary-btn" onClick={handleTogglePause}
-            disabled={!isPlaying} type="button">
-            {isPaused ? '继续' : '暂停'}
+            disabled={!isPlaying || !departureAuthorized} type="button">
+            {!departureAuthorized && isPlaying ? '等待调度发车' : isPaused ? '继续' : '暂停'}
           </button>
           <button className="vehicle-ghost-btn" onClick={handleReset}
             disabled={!canReset || isLoading} type="button">
@@ -317,6 +358,22 @@ function Vehicle() {
           {status === 'finished' && <span className="vehicle-status-text">仿真完成</span>}
         </div>
       </header>
+      <IntegrationPanel
+        trainId={onboardTrainId}
+        localState={currentState}
+        pageStatus={status}
+        paused={isPaused}
+        fromStationId={fromStationId}
+        toStationId={toStationId}
+        fromStationName={fromStationName ?? STATIONS.find((s) => s.stationId === fromStationId)?.displayName ?? String(fromStationId)}
+        toStationName={toStationName ?? STATIONS.find((s) => s.stationId === toStationId)?.displayName ?? String(toStationId)}
+        lineStartPosition={lineStartPosition}
+        drivingMode={drivingMode}
+        departureAuthorized={departureAuthorized}
+        onDepartAuthorized={handleDepartAuthorized}
+        onDispatchHold={handleDispatchHold}
+        onDispatchRecovery={handleDispatchRecovery}
+      />
 
       {status === 'error' && (
         <div className="vehicle-error">

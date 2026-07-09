@@ -62,3 +62,73 @@ export async function applyStrategy(trainId: string, strategyType: string, targe
 export async function getSimulationLogs(): Promise<SimulationLog[]> {
   return request<SimulationLog[]>('/simulations/logs');
 }
+
+export interface IntegrationCommand {
+  commandId: string; trainId: string; commandType: string; reason: string;
+  status: string; source: string; targetValue: number;
+}
+export interface OnboardStatusReport {
+  trainId: string;
+  deviceId?: string;
+  sourceType?: string;
+  timestampSeconds: number;
+  positionMeters: number;
+  speedKmh: number;
+  accelerationMps2: number;
+  direction: string;
+  currentStationId?: string;
+  nextStationId?: string;
+  phase: string;
+  health: string;
+  lineId?: string;
+  routeId?: string;
+  fromStationId?: string;
+  toStationId?: string;
+  fromStationName?: string;
+  toStationName?: string;
+  operatingMode?: string;
+  paused: boolean;
+  authoritative?: boolean;
+}
+export interface OnboardMonitoringItem {
+  trainId: string;
+  deviceId?: string;
+  sourceType: string;
+  online: boolean;
+  ageSeconds: number;
+  receivedAtEpochMillis: number;
+  report: OnboardStatusReport;
+}
+export interface DispatcherWorkstation {
+  automaticOperation: boolean;
+  commands: IntegrationCommand[];
+  pendingManualConfirmations: IntegrationCommand[];
+  onboardReports: unknown[];
+  onboardMonitoring: OnboardMonitoringItem[];
+  onboardEvents: Array<{ eventId: string; trainId: string; eventType: string; severity: string; details: string }>;
+  communicationStatus: { mode: string; healthy: boolean };
+  protocolAdapterStatus: Record<string,string>;
+}
+export const getDispatcherWorkstation = () => request<DispatcherWorkstation>('/dispatch/workstation');
+export const getOnboardMonitoring = () => request<OnboardMonitoringItem[]>('/onboard/monitoring');
+export const issueIntegrationCommand = (
+  trainId: string,
+  commandType: string,
+  reason: string,
+  targetValue = 0,
+) =>
+  request<IntegrationCommand>('/dispatch/commands', {
+    method: 'POST',
+    body: JSON.stringify({
+      trainId,
+      commandType,
+      reason,
+      targetValue,
+      source: 'DISPATCHER',
+      priority: 80,
+    }),
+  });
+export const confirmIntegrationCommand = (commandId: string, approved = true) =>
+  request<IntegrationCommand>('/dispatch/commands/confirm', {
+    method: 'POST', body: JSON.stringify({ commandId, approved }),
+  });
