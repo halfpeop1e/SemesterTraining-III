@@ -737,30 +737,94 @@ export default function Dispatch() {
   const [stationDailyFlow, setStationDailyFlow] = useState<
     Record<number, number>
   >({});
+  const [showPopulationHeatmap, setShowPopulationHeatmap] = useState(false);
+  const [popDensityPoints, setPopDensityPoints] = useState<
+    PopulationDensityPoint[]
+  >([]);
   const [rawEntryFlowData, setRawEntryFlowData] = useState<
     StationEntryFlowItem[]
   >([]);
   const currentHourRef = useRef(new Date().getHours());
   const lastMinuteBinRef = useRef(Math.floor(new Date().getMinutes() / 2));
+  const residentialRef = useRef<Record<number, number>>({});
 
-  // Derive hourly station entry flow from raw data, on hour or 2-min change
+  // Compute residential index per station from population density data
+  const residentialIndex = useMemo(() => {
+    if (popDensityPoints.length === 0 || stations.length === 0)
+      return {} as Record<number, number>;
+    // Aggregate density per station (nearest grid point → station)
+    const stationDensity: Record<number, number> = {};
+    const stationCounts: Record<number, number> = {};
+    popDensityPoints.forEach((p) => {
+      let nearestId = -1;
+      let minDist = Infinity;
+      stations.forEach((s) => {
+        const d = Math.sqrt(
+          (p.lat - s.latitude) ** 2 + (p.lng - s.longitude) ** 2,
+        );
+        if (d < minDist) {
+          minDist = d;
+          nearestId = s.id;
+        }
+      });
+      if (nearestId > 0) {
+        stationDensity[nearestId] =
+          (stationDensity[nearestId] ?? 0) + p.density;
+        stationCounts[nearestId] = (stationCounts[nearestId] ?? 0) + 1;
+      }
+    });
+    const meanDensity: Record<number, number> = {};
+    stations.forEach((s) => {
+      meanDensity[s.id] =
+        (stationDensity[s.id] ?? 5000) / (stationCounts[s.id] ?? 1);
+    });
+    const maxDensity = Math.max(...Object.values(meanDensity), 1);
+    const index: Record<number, number> = {};
+    stations.forEach((s) => {
+      index[s.id] = Math.max(
+        0,
+        Math.min(1, 1 - meanDensity[s.id] / maxDensity),
+      );
+    });
+    residentialRef.current = index;
+    return index;
+  }, [popDensityPoints, stations]);
+
+  // Derive modulated hourly station entry flow from raw data, on hour or 2-min change
   const updateHourlyFlow = useCallback(
     (data: StationEntryFlowItem[], hour: number) => {
+      const now = new Date();
+      const minute = now.getMinutes();
       const hourSlot = `${hour}-${hour + 1}`;
+      const resIdx = residentialRef.current;
+      const keys = Object.keys(resIdx);
+      const peakDir =
+        hour >= 7 && hour <= 9 ? 1 : hour >= 17 && hour <= 19 ? -1 : 0;
+      const intraSin =
+        0.85 + 0.15 * Math.pow(Math.sin((Math.PI * minute) / 60), 2);
+
       const flow: Record<number, number> = {};
       data.forEach((item) => {
         if (item.hourSlot === hourSlot) {
-          flow[item.stationId] = (flow[item.stationId] ?? 0) + item.entryCount;
+          const idx = resIdx[item.stationId] ?? 0.5;
+          const resMod = 1 + (idx - 0.5) * peakDir * 0.4;
+          flow[item.stationId] =
+            (flow[item.stationId] ?? 0) + item.entryCount * resMod * intraSin;
         }
       });
+      // Fallback: no density data loaded yet, apply only intra-hour smoothing
+      if (keys.length === 0) {
+        data.forEach((item) => {
+          if (item.hourSlot === hourSlot) {
+            flow[item.stationId] =
+              (flow[item.stationId] ?? 0) + item.entryCount * intraSin;
+          }
+        });
+      }
       setStationEntryFlow(flow);
     },
     [],
   );
-  const [showPopulationHeatmap, setShowPopulationHeatmap] = useState(false);
-  const [popDensityPoints, setPopDensityPoints] = useState<
-    PopulationDensityPoint[]
-  >([]);
 
   useEffect(() => {
     getLineMap()
@@ -788,7 +852,7 @@ export default function Dispatch() {
       .catch(() => {
         // CSV data not available
       });
-  }, [updateHourlyFlow]);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
