@@ -604,6 +604,34 @@ class VehicleSimulationServiceTest {
                 result.getSummary().getCurrentMode());
     }
 
+    /** ATP 间隔防护触发的紧急制动应输出完整制动轨迹，而非冻结当前状态。 */
+    @org.junit.jupiter.api.Test
+    void control_atpEmergencyBrake_generatesBrakingCurveAndStops() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+        midState.setAbsolutePosition(313.0 + midState.getPosition());
+
+        com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
+                new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
+        req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("atp_emergency_brake", 0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertTrue(result.getStates().stream().anyMatch(s -> s.getPhase() == SimulationPhase.BRAKING),
+                "ATP 紧急制动应产生 BRAKING 过程");
+        assertEquals(SimulationPhase.STOPPED,
+                result.getStates().get(result.getStates().size() - 1).getPhase());
+        assertEquals("ATP_EMERGENCY_BRAKE", result.getSafetyEvents().get(0).getReason());
+        assertEquals(com.bjtu.railtransit.vehicle.enums.DrivingMode.EMERGENCY,
+                result.getSummary().getCurrentMode());
+    }
+
     /** 超速场景：SafetyGuard 能生成 OVERSPEED SafetyEvent（用小目标强制高速续算）。 */
     @org.junit.jupiter.api.Test
     void safetyGuard_overspeed_generatesSafetyEvent() {

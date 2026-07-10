@@ -182,6 +182,32 @@ public class TractionPhysics {
 
     // ── 查询方法 ──
 
+    /**
+     * 牵引能力曲线 (中车株洲所异步电机特性, 6B编组参考值).
+     *
+     * 恒转矩区 (0~36km/h):  F_max = 310 kN
+     * 恒功率区 (36~72km/h): F = 310 × 36 / v
+     * 自然特性区 (>72km/h): F = 310 × 36 × 72 / v²
+     *
+     * @param speedKmh 当前速度 (km/h)
+     * @param availableMotors 可用电机数
+     * @param totalMotors 总电机数 (用于计算能力比例)
+     * @return 当前最大可用牵引力 (N)
+     */
+    public double maxTractiveForceAtSpeed(double speedKmh, int availableMotors, int totalMotors) {
+        double ratio = (double) availableMotors / Math.max(1, totalMotors);
+        double baseForceKN = 310.0 * ratio; // 6B编组恒转矩 310kN
+        double v = Math.max(1, speedKmh);
+
+        if (v <= 36.0) {
+            return baseForceKN * 1000.0;
+        } else if (v <= 72.0) {
+            return baseForceKN * 36.0 / v * 1000.0;
+        } else {
+            return baseForceKN * 36.0 * 72.0 / (v * v) * 1000.0;
+        }
+    }
+
     /** 获取位置处坡度(‰) */
     public int getGradePermilleAtMeters(double positionMeters) {
         return lineDataService.getGradientAtKm(positionMeters / 1000.0);

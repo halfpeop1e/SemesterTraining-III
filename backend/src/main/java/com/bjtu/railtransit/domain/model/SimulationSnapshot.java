@@ -2,6 +2,7 @@ package com.bjtu.railtransit.domain.model;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class SimulationSnapshot {
 
@@ -20,6 +21,14 @@ public class SimulationSnapshot {
     private double totalEnergyKwh;
     private double totalTractionKwh;
     private double totalRegenKwh;
+    private double totalAuxKwh;
+    private double totalCruisingKwh;
+    /** 惰行节省能耗 kWh */
+    private double coastingSavedKwh;
+    /** 能耗历史趋势数据 (每5秒一条) */
+    private List<EnergyDataPoint> energyHistory = new ArrayList<>();
+    /** 供电状态: 每列车电压/电流/功率 */
+    private List<PowerSupplyData> powerSupplyStatus = new ArrayList<>();
     private double peakPowerKw;
     private int maxSpeedLimit;
     private List<DelayEvent> delayEvents;
@@ -43,6 +52,8 @@ public class SimulationSnapshot {
     private Object energySummary;
     private Object evaluationSummary;
     private Object protocolAdapterStatus;
+    /** MPC预测优化结果列表 */
+    private List<Map<String, Object>> mpcOptimizations;
 
     public SimulationSnapshot() {
     }
@@ -140,6 +151,16 @@ public class SimulationSnapshot {
 
     public double getTotalRegenKwh() { return totalRegenKwh; }
     public void setTotalRegenKwh(double v) { this.totalRegenKwh = v; }
+    public double getTotalAuxKwh() { return totalAuxKwh; }
+    public void setTotalAuxKwh(double v) { this.totalAuxKwh = v; }
+    public double getTotalCruisingKwh() { return totalCruisingKwh; }
+    public void setTotalCruisingKwh(double v) { this.totalCruisingKwh = v; }
+    public double getCoastingSavedKwh() { return coastingSavedKwh; }
+    public void setCoastingSavedKwh(double v) { this.coastingSavedKwh = v; }
+    public List<EnergyDataPoint> getEnergyHistory() { return energyHistory; }
+    public void setEnergyHistory(List<EnergyDataPoint> v) { this.energyHistory = v; }
+    public List<PowerSupplyData> getPowerSupplyStatus() { return powerSupplyStatus; }
+    public void setPowerSupplyStatus(List<PowerSupplyData> v) { this.powerSupplyStatus = v; }
 
     public double getPeakPowerKw() { return peakPowerKw; }
     public void setPeakPowerKw(double v) { this.peakPowerKw = v; }
@@ -176,6 +197,8 @@ public class SimulationSnapshot {
     public Object getEnergySummary() { return energySummary; } public void setEnergySummary(Object v) { energySummary=v; }
     public Object getEvaluationSummary() { return evaluationSummary; } public void setEvaluationSummary(Object v) { evaluationSummary=v; }
     public Object getProtocolAdapterStatus() { return protocolAdapterStatus; } public void setProtocolAdapterStatus(Object v) { protocolAdapterStatus=v; }
+    public List<Map<String, Object>> getMpcOptimizations() { return mpcOptimizations; }
+    public void setMpcOptimizations(List<Map<String, Object>> v) { this.mpcOptimizations = v; }
 
     // ═══════════════════════════════════════════════════════════════
     // 内嵌类
@@ -471,5 +494,54 @@ public class SimulationSnapshot {
         public void setAuxiliaryEnergyKwh(double v) { this.auxiliaryEnergyKwh = v; }
         public double getCruisingEnergyKwh() { return cruisingEnergyKwh; }
         public void setCruisingEnergyKwh(double v) { this.cruisingEnergyKwh = v; }
+    }
+
+    /** 能耗趋势数据点 */
+    public static class EnergyDataPoint {
+        private double timeSeconds;
+        private double totalKwh;
+        private double tractionKwh;
+        private double regenKwh;
+        private double auxKwh;
+        public EnergyDataPoint() {}
+        public EnergyDataPoint(double t, double total, double trac, double reg, double aux) {
+            this.timeSeconds = t; this.totalKwh = total; this.tractionKwh = trac; this.regenKwh = reg; this.auxKwh = aux;
+        }
+        public double getTimeSeconds() { return timeSeconds; }
+        public void setTimeSeconds(double v) { this.timeSeconds = v; }
+        public double getTotalKwh() { return totalKwh; }
+        public void setTotalKwh(double v) { this.totalKwh = v; }
+        public double getTractionKwh() { return tractionKwh; }
+        public void setTractionKwh(double v) { this.tractionKwh = v; }
+        public double getRegenKwh() { return regenKwh; }
+        public void setRegenKwh(double v) { this.regenKwh = v; }
+        public double getAuxKwh() { return auxKwh; }
+        public void setAuxKwh(double v) { this.auxKwh = v; }
+    }
+
+    /** 供电状态数据 */
+    public static class PowerSupplyData {
+        private String trainId;
+        private double voltage;
+        private double current;
+        private double powerKw;
+        private String nearestSubstation;
+        private boolean voltageOK;
+        public PowerSupplyData() {}
+        public PowerSupplyData(String tid, double v, double c, double p, String ns, boolean ok) {
+            this.trainId = tid; this.voltage = v; this.current = c; this.powerKw = p; this.nearestSubstation = ns; this.voltageOK = ok;
+        }
+        public String getTrainId() { return trainId; }
+        public void setTrainId(String v) { this.trainId = v; }
+        public double getVoltage() { return voltage; }
+        public void setVoltage(double v) { this.voltage = v; }
+        public double getCurrent() { return current; }
+        public void setCurrent(double v) { this.current = v; }
+        public double getPowerKw() { return powerKw; }
+        public void setPowerKw(double v) { this.powerKw = v; }
+        public String getNearestSubstation() { return nearestSubstation; }
+        public void setNearestSubstation(String v) { this.nearestSubstation = v; }
+        public boolean isVoltageOK() { return voltageOK; }
+        public void setVoltageOK(boolean v) { this.voltageOK = v; }
     }
 }

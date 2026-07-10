@@ -13,7 +13,7 @@ export default function Legend() {
   ];
 
   return (
-    <Card size="small" style={{ position: 'absolute', right: 12, bottom: 12, width: 150, zIndex: 10, opacity: 0.95 }} bodyStyle={{ padding: '10px 12px' }}>
+    <Card size="small" style={{ position: 'absolute', right: 12, bottom: 12, width: 150, zIndex: 10, opacity: 0.95 }} styles={{ body: { padding: '10px 12px' } }}>
       <div className="text-xs font-semibold text-slate-300 mb-2">图例</div>
       <div className="space-y-1.5">
         {items.map((it) => (

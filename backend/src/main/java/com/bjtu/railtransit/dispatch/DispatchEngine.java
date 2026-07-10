@@ -23,6 +23,7 @@ import java.util.*;
 public class DispatchEngine {
 
     private final PassengerFlowModel flowModel;
+    private final LineDataService lineDataService;
     private final List<SimulationSnapshot.DelayEvent> delayEventLog = new ArrayList<>();
 
     // ═══════════════════════════════════════════════════════════════
@@ -96,7 +97,8 @@ public class DispatchEngine {
     /** 区间计划运行时间: fromStationIndex → 运行秒数 */
     private Map<Integer, Double> sectionRunTimes;
 
-    public DispatchEngine() {
+    public DispatchEngine(LineDataService lineDataService) {
+        this.lineDataService = lineDataService;
         this.flowModel = new PassengerFlowModel();
     }
 
@@ -209,6 +211,109 @@ public class DispatchEngine {
             }
             timetable.put(trainId, trainSchedule);
         }
+    }
+
+    /**
+     * 为单列车生成完整时刻表（动态创建列车时调用）。
+     * 从当前仿真时刻出发，计算后续各站计划到发时刻。
+     */
+    public void generateSingleTrainTimetable(LineProfile lineProfile, String trainId,
+                                              int startStationIndex, boolean isUp, double simTimeSeconds) {
+        if (timetable == null)
+            timetable = new LinkedHashMap<>();
+
+        List<LineProfile.Station> stations = lineProfile.getStations();
+        int stationCount = stations.size();
+
+        // 确保区间运行时间已计算（基于真实逐段限速）
+        if (sectionRunTimes == null || sectionRunTimes.isEmpty()) {
+            sectionRunTimes = new LinkedHashMap<>();
+            for (int i = 0; i < stationCount - 1; i++) {
+                double distKm = stations.get(i + 1).getKm() - stations.get(i).getKm();
+                double distMeters = distKm * 1000.0;
+                // 使用该区间的实际限速（取站间起点站的限速作为参考）
+                double startKm = stations.get(i).getKm();
+                int speedLimitKmh = lineDataService.getSpeedLimitAtKm(startKm);
+                double speedMs = Math.max(10, speedLimitKmh) / 3.6; // 至少10km/h
+                double accelTime = speedMs / ACCELERATION_RATE;
+                double accelDist = 0.5 * ACCELERATION_RATE * accelTime * accelTime;
+                double brakeTime = speedMs / SERVICE_BRAKE_DECEL;
+                double brakeDist = 0.5 * SERVICE_BRAKE_DECEL * brakeTime * brakeTime;
+                double cruiseDist = distMeters - accelDist - brakeDist;
+                double runTime;
+                if (cruiseDist > 0) {
+                    runTime = accelTime + (cruiseDist / speedMs) + brakeTime;
+                } else {
+                    double peakSpeed = Math.sqrt(distMeters * ACCELERATION_RATE * SERVICE_BRAKE_DECEL
+                            / (ACCELERATION_RATE + SERVICE_BRAKE_DECEL));
+                    runTime = peakSpeed / ACCELERATION_RATE + peakSpeed / SERVICE_BRAKE_DECEL;
+                }
+                sectionRunTimes.put(i, runTime);
+            }
+        }
+
+        Map<Integer, TimetableEntry> trainSchedule = new LinkedHashMap<>();
+
+        if (isUp) {
+            // 上行: startStationIndex → stationCount-1
+            double currentTime = simTimeSeconds;
+            for (int s = startStationIndex; s < stationCount; s++) {
+                TimetableEntry entry = new TimetableEntry();
+                entry.stationId = stations.get(s).getId();
+                entry.stationName = stations.get(s).getName();
+                entry.stationIndex = s;
+                entry.stationKm = stations.get(s).getKm();
+
+                if (s == startStationIndex) {
+                    // 当前站: 计划到达=当前时刻，计划发车=当前时刻+停站时间
+                    entry.plannedArrival = currentTime;
+                    double dwell = (s == stationCount - 1) ? TERMINAL_DWELL_SEC
+                            : calcDwellTime(stations.get(s).getId(), currentTime);
+                    entry.plannedDwell = dwell;
+                    entry.plannedDeparture = currentTime + dwell;
+                } else {
+                    double runTime = sectionRunTimes.getOrDefault(s - 1, 120.0);
+                    currentTime += runTime;
+                    entry.plannedArrival = currentTime;
+                    double dwell = (s == stationCount - 1) ? TERMINAL_DWELL_SEC
+                            : calcDwellTime(stations.get(s).getId(), currentTime);
+                    entry.plannedDwell = dwell;
+                    entry.plannedDeparture = currentTime + dwell;
+                }
+                currentTime = entry.plannedDeparture;
+                trainSchedule.put(s, entry);
+            }
+        } else {
+            // 下行: startStationIndex → 0
+            double currentTime = simTimeSeconds;
+            for (int s = startStationIndex; s >= 0; s--) {
+                TimetableEntry entry = new TimetableEntry();
+                entry.stationId = stations.get(s).getId();
+                entry.stationName = stations.get(s).getName();
+                entry.stationIndex = s;
+                entry.stationKm = stations.get(s).getKm();
+
+                if (s == startStationIndex) {
+                    entry.plannedArrival = currentTime;
+                    double dwell = (s == 0) ? TERMINAL_DWELL_SEC
+                            : calcDwellTime(stations.get(s).getId(), currentTime);
+                    entry.plannedDwell = dwell;
+                    entry.plannedDeparture = currentTime + dwell;
+                } else {
+                    double runTime = sectionRunTimes.getOrDefault(s - 1, 120.0);
+                    currentTime += runTime;
+                    entry.plannedArrival = currentTime;
+                    double dwell = (s == 0) ? TERMINAL_DWELL_SEC
+                            : calcDwellTime(stations.get(s).getId(), currentTime);
+                    entry.plannedDwell = dwell;
+                    entry.plannedDeparture = currentTime + dwell;
+                }
+                currentTime = entry.plannedDeparture;
+                trainSchedule.put(s, entry);
+            }
+        }
+
+        timetable.put(trainId, trainSchedule);
     }
 
     /**

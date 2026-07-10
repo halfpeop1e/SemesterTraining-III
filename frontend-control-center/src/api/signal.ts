@@ -92,6 +92,11 @@ export async function computeMa(req: MaRequest): Promise<Record<string, MovingAu
   }
 }
 
+/** Read the backend-owned MA registry used by ATP/ATO; this is the normal operations path. */
+export async function getLatestMa(): Promise<Record<string, MovingAuthority>> {
+  return request<Record<string, MovingAuthority>>('/signal/ma/latest');
+}
+
 // ===== 系统状态与事件 =====
 
 export async function getStatus(): Promise<SignalStatus> {
