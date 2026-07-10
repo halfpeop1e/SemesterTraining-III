@@ -1,0 +1,1433 @@
+{
+  "lineId": "line-9",
+  "speedLimits": [
+    {
+      "segId": 1,
+      "startOffset": 0,
+      "endOffset": 75800,
+      "speedKmh": 48.0
+    },
+    {
+      "segId": 2,
+      "startOffset": 0,
+      "endOffset": 85000,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 3,
+      "startOffset": 0,
+      "endOffset": 4000,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 4,
+      "startOffset": 0,
+      "endOffset": 6793,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 5,
+      "startOffset": 0,
+      "endOffset": 22068,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 6,
+      "startOffset": 0,
+      "endOffset": 1132,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 7,
+      "startOffset": 0,
+      "endOffset": 600,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 8,
+      "startOffset": 0,
+      "endOffset": 3400,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 9,
+      "startOffset": 0,
+      "endOffset": 2700,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 10,
+      "startOffset": 0,
+      "endOffset": 3369,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 11,
+      "startOffset": 0,
+      "endOffset": 631,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 12,
+      "startOffset": 0,
+      "endOffset": 2831,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 13,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 14,
+      "startOffset": 0,
+      "endOffset": 731,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 15,
+      "startOffset": 0,
+      "endOffset": 6769,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 16,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 17,
+      "startOffset": 0,
+      "endOffset": 2831,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 18,
+      "startOffset": 0,
+      "endOffset": 2800,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 19,
+      "startOffset": 0,
+      "endOffset": 5100,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 20,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 21,
+      "startOffset": 0,
+      "endOffset": 6261,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 22,
+      "startOffset": 0,
+      "endOffset": 19000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 23,
+      "startOffset": 0,
+      "endOffset": 85400,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 24,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 25,
+      "startOffset": 0,
+      "endOffset": 56000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 26,
+      "startOffset": 0,
+      "endOffset": 70600,
+      "speedKmh": 48.0
+    },
+    {
+      "segId": 27,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 28,
+      "startOffset": 0,
+      "endOffset": 74100,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 29,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 30,
+      "startOffset": 0,
+      "endOffset": 4762,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 31,
+      "startOffset": 0,
+      "endOffset": 22068,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 32,
+      "startOffset": 0,
+      "endOffset": 1132,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 33,
+      "startOffset": 0,
+      "endOffset": 5194,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 34,
+      "startOffset": 0,
+      "endOffset": 600,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 35,
+      "startOffset": 0,
+      "endOffset": 6769,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 36,
+      "startOffset": 0,
+      "endOffset": 5238,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 37,
+      "startOffset": 0,
+      "endOffset": 731,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 38,
+      "startOffset": 0,
+      "endOffset": 5369,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 39,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 40,
+      "startOffset": 0,
+      "endOffset": 731,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 41,
+      "startOffset": 0,
+      "endOffset": 6769,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 42,
+      "startOffset": 0,
+      "endOffset": 5369,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 43,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 44,
+      "startOffset": 0,
+      "endOffset": 5338,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 45,
+      "startOffset": 0,
+      "endOffset": 5100,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 46,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 47,
+      "startOffset": 0,
+      "endOffset": 6284,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 48,
+      "startOffset": 0,
+      "endOffset": 19000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 49,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 50,
+      "startOffset": 0,
+      "endOffset": 85000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 51,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 52,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 53,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 54,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 55,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 56,
+      "startOffset": 0,
+      "endOffset": 75000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 57,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 58,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 59,
+      "startOffset": 0,
+      "endOffset": 70500,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 60,
+      "startOffset": 0,
+      "endOffset": 65300,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 61,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 62,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 63,
+      "startOffset": 0,
+      "endOffset": 13088,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 64,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 65,
+      "startOffset": 0,
+      "endOffset": 6179,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 66,
+      "startOffset": 0,
+      "endOffset": 16900,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 67,
+      "startOffset": 0,
+      "endOffset": 17900,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 68,
+      "startOffset": 0,
+      "endOffset": 55909,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 69,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 70,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 71,
+      "startOffset": 0,
+      "endOffset": 75200,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 72,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 73,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 74,
+      "startOffset": 0,
+      "endOffset": 65100,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 75,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 76,
+      "startOffset": 0,
+      "endOffset": 60500,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 77,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 78,
+      "startOffset": 0,
+      "endOffset": 731,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 79,
+      "startOffset": 0,
+      "endOffset": 5549,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 80,
+      "startOffset": 0,
+      "endOffset": 6910,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 81,
+      "startOffset": 0,
+      "endOffset": 68700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 82,
+      "startOffset": 0,
+      "endOffset": 65100,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 83,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 84,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 85,
+      "startOffset": 0,
+      "endOffset": 38700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 86,
+      "startOffset": 0,
+      "endOffset": 117800,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 87,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 88,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 89,
+      "startOffset": 0,
+      "endOffset": 8248,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 90,
+      "startOffset": 0,
+      "endOffset": 6052,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 91,
+      "startOffset": 0,
+      "endOffset": 14312,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 92,
+      "startOffset": 0,
+      "endOffset": 22300,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 93,
+      "startOffset": 0,
+      "endOffset": 5800,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 94,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 95,
+      "startOffset": 0,
+      "endOffset": 4073,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 96,
+      "startOffset": 0,
+      "endOffset": 65000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 97,
+      "startOffset": 0,
+      "endOffset": 44700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 98,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 99,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 100,
+      "startOffset": 0,
+      "endOffset": 59800,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 101,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 102,
+      "startOffset": 0,
+      "endOffset": 85200,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 103,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 104,
+      "startOffset": 0,
+      "endOffset": 10100,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 105,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 106,
+      "startOffset": 0,
+      "endOffset": 5800,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 107,
+      "startOffset": 0,
+      "endOffset": 4068,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 108,
+      "startOffset": 0,
+      "endOffset": 3300,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 109,
+      "startOffset": 0,
+      "endOffset": 400,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 110,
+      "startOffset": 0,
+      "endOffset": 6348,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 111,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 112,
+      "startOffset": 0,
+      "endOffset": 5600,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 113,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 114,
+      "startOffset": 0,
+      "endOffset": 4069,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 115,
+      "startOffset": 0,
+      "endOffset": 24800,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 116,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 117,
+      "startOffset": 0,
+      "endOffset": 4069,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 118,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 119,
+      "startOffset": 0,
+      "endOffset": 3975,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 120,
+      "startOffset": 0,
+      "endOffset": 19000,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 121,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 122,
+      "startOffset": 0,
+      "endOffset": 3559,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 123,
+      "startOffset": 0,
+      "endOffset": 4069,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 124,
+      "startOffset": 0,
+      "endOffset": 6632,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 125,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 126,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 127,
+      "startOffset": 0,
+      "endOffset": 91900,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 128,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 129,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 130,
+      "startOffset": 0,
+      "endOffset": 15800,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 131,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 132,
+      "startOffset": 0,
+      "endOffset": 6328,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 133,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 134,
+      "startOffset": 0,
+      "endOffset": 24700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 135,
+      "startOffset": 0,
+      "endOffset": 43700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 136,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 137,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 138,
+      "startOffset": 0,
+      "endOffset": 94200,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 139,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 140,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 141,
+      "startOffset": 0,
+      "endOffset": 5628,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 142,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 143,
+      "startOffset": 0,
+      "endOffset": 6328,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 144,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 145,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 146,
+      "startOffset": 0,
+      "endOffset": 68400,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 147,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 148,
+      "startOffset": 0,
+      "endOffset": 16200,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 149,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 150,
+      "startOffset": 0,
+      "endOffset": 2700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 151,
+      "startOffset": 0,
+      "endOffset": 6796,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 152,
+      "startOffset": 0,
+      "endOffset": 400,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 153,
+      "startOffset": 0,
+      "endOffset": 7300,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 154,
+      "startOffset": 0,
+      "endOffset": 2800,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 155,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 156,
+      "startOffset": 0,
+      "endOffset": 2800,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 157,
+      "startOffset": 0,
+      "endOffset": 22100,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 158,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 159,
+      "startOffset": 0,
+      "endOffset": 16200,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 160,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 161,
+      "startOffset": 0,
+      "endOffset": 2700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 162,
+      "startOffset": 0,
+      "endOffset": 6796,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 163,
+      "startOffset": 0,
+      "endOffset": 7300,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 164,
+      "startOffset": 0,
+      "endOffset": 7300,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 165,
+      "startOffset": 0,
+      "endOffset": 5500,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 166,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 167,
+      "startOffset": 0,
+      "endOffset": 5500,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 168,
+      "startOffset": 0,
+      "endOffset": 22100,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 169,
+      "startOffset": 0,
+      "endOffset": 63200,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 170,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 171,
+      "startOffset": 0,
+      "endOffset": 69900,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 172,
+      "startOffset": 0,
+      "endOffset": 98200,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 173,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 174,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 175,
+      "startOffset": 0,
+      "endOffset": 731,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 176,
+      "startOffset": 0,
+      "endOffset": 5564,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 177,
+      "startOffset": 0,
+      "endOffset": 9778,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 178,
+      "startOffset": 0,
+      "endOffset": 75300,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 179,
+      "startOffset": 0,
+      "endOffset": 19200,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 180,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 181,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 182,
+      "startOffset": 0,
+      "endOffset": 81000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 183,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 184,
+      "startOffset": 0,
+      "endOffset": 77400,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 185,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 186,
+      "startOffset": 0,
+      "endOffset": 7800,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 187,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 188,
+      "startOffset": 0,
+      "endOffset": 5843,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 189,
+      "startOffset": 0,
+      "endOffset": 4069,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 190,
+      "startOffset": 0,
+      "endOffset": 16400,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 191,
+      "startOffset": 0,
+      "endOffset": 5843,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 192,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 193,
+      "startOffset": 0,
+      "endOffset": 4069,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 194,
+      "startOffset": 0,
+      "endOffset": 24700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 195,
+      "startOffset": 0,
+      "endOffset": 29500,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 196,
+      "startOffset": 0,
+      "endOffset": 4069,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 197,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 198,
+      "startOffset": 0,
+      "endOffset": 7946,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 199,
+      "startOffset": 0,
+      "endOffset": 13200,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 200,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 201,
+      "startOffset": 0,
+      "endOffset": 4100,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 202,
+      "startOffset": 0,
+      "endOffset": 4069,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 203,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 204,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 205,
+      "startOffset": 0,
+      "endOffset": 86200,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 206,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 207,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 208,
+      "startOffset": 0,
+      "endOffset": 3541,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 209,
+      "startOffset": 0,
+      "endOffset": 6738,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 210,
+      "startOffset": 0,
+      "endOffset": 5641,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 211,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 212,
+      "startOffset": 0,
+      "endOffset": 2800,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 213,
+      "startOffset": 0,
+      "endOffset": 18000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 214,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 215,
+      "startOffset": 0,
+      "endOffset": 3600,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 216,
+      "startOffset": 0,
+      "endOffset": 6250,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 217,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 218,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 219,
+      "startOffset": 0,
+      "endOffset": 86700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 220,
+      "startOffset": 0,
+      "endOffset": 12900,
+      "speedKmh": 60.0
+    },
+    {
+      "segId": 221,
+      "startOffset": 0,
+      "endOffset": 2600,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 222,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 223,
+      "startOffset": 0,
+      "endOffset": 6738,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 224,
+      "startOffset": 0,
+      "endOffset": 5338,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 225,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 226,
+      "startOffset": 0,
+      "endOffset": 5338,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 227,
+      "startOffset": 0,
+      "endOffset": 18000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 228,
+      "startOffset": 0,
+      "endOffset": 700,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 229,
+      "startOffset": 0,
+      "endOffset": 3600,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 230,
+      "startOffset": 0,
+      "endOffset": 6249,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 231,
+      "startOffset": 0,
+      "endOffset": 17000,
+      "speedKmh": 48.0
+    },
+    {
+      "segId": 232,
+      "startOffset": 0,
+      "endOffset": 17000,
+      "speedKmh": 48.0
+    },
+    {
+      "segId": 233,
+      "startOffset": 0,
+      "endOffset": 14000,
+      "speedKmh": 28.0
+    },
+    {
+      "segId": 234,
+      "startOffset": 0,
+      "endOffset": 14000,
+      "speedKmh": 28.0
+    },
+    {
+      "segId": 235,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 236,
+      "startOffset": 0,
+      "endOffset": 10000,
+      "speedKmh": 100.0
+    },
+    {
+      "segId": 237,
+      "startOffset": 0,
+      "endOffset": 500,
+      "speedKmh": 35.0
+    },
+    {
+      "segId": 238,
+      "startOffset": 0,
+      "endOffset": 5100,
+      "speedKmh": 60.0
+    }
+  ]
+}

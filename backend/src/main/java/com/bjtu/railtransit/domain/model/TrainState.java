@@ -60,6 +60,60 @@ public class TrainState {
     private boolean emergencyBraking;   // 紧急制动标志
     private double movementAuthority;   // 移动授权终点(前车尾部-安全余量)
 
+    // ── 统一数据结构扩展字段 (TrainRuntimeState) ──
+    private String tripId;              // 车次行程ID (区分同一列车不同趟次)
+    private String lineId = "BJ-L9";
+    private String routeId = "L9-FULL";
+    private String currentSegmentId;    // 当前所在轨道区段ID
+    private double trainLengthMeters;   // 列车总长度 m (6B=114m)
+    private double loadFactor;          // 满载率 0.0~1.0
+    private String activeCommand;       // 当前活跃指令类型 (HOLD/SLOW/SPEED_UP等)
+    private double lastReportTimeSeconds; // 最后一次状态上报时刻
+    private String stateSource;         // 状态来源: DISPATCH_ESTIMATED / ONBOARD_REPORTED
+    private double minDwellSeconds;     // 本站最小停站时间 (站点类型决定)
+
+    // ── CBTC 执行层: 牵引/制动系统实时状态 ──
+    private TractionSystemState tractionState;
+    private BrakingSystemState brakeState;
+
+    /** 判断当前状态是否占用线路 (影响安全间隔和轨道占用计算) */
+    public boolean occupiesTrack() {
+        if (status == null) return false;
+        switch (status) {
+            case "DEPOT_WAITING":
+            case "READY_TO_DEPART":
+            case "FINISHED":
+                return false;
+            default:
+                return true; // DWELLING/TERMINAL_DWELL/TURNING_BACK/EMERGENCY_STOPPED/HOLDING等全部占用
+        }
+    }
+
+    /** 方向符号: UP=+1, DOWN=-1, 用于位置/MA计算 */
+    public int getDirectionSign() {
+        return "DOWN".equals(direction) ? -1 : 1;
+    }
+
+    /** 速度 m/s (SI) */
+    public double getSpeedMps() { return speed / 3.6; }
+
+    /** 加速度 m/s² (SI) */
+    public double getAccelerationMps2() { return acceleration / 3.6; }
+
+    /** 列车尾部位置 (方向感知) */
+    public double getTailPositionMeters() {
+        int dirSign = getDirectionSign();
+        double len = (trainLengthMeters > 0) ? trainLengthMeters : (carCount * carLength);
+        return positionMeters - dirSign * len;
+    }
+
+    /** 紧急制动距离 (SI, m/s²) */
+    public double getEmergencyBrakeDistanceMeters(double ebDecelMs2) {
+        double v = getSpeedMps();
+        if (v <= 0 || ebDecelMs2 <= 0) return 0;
+        return (v * v) / (2 * ebDecelMs2);
+    }
+
     public TrainState() {
         this.maxSpeedLimit = 60;
         this.targetSpeed = 60;
@@ -162,6 +216,44 @@ public class TrainState {
 
     public double getMovementAuthority() { return movementAuthority; }
     public void setMovementAuthority(double v) { this.movementAuthority = v; }
+
+    public String getTripId() { return tripId; }
+    public void setTripId(String v) { this.tripId = v; }
+    public String getLineId() { return lineId; }
+    public void setLineId(String v) { this.lineId = v; }
+    public String getRouteId() { return routeId; }
+    public void setRouteId(String v) { this.routeId = v; }
+    public String getCurrentStationId() { return String.valueOf(currentStationIndex + 1); }
+    public String getNextStationId() { return String.valueOf(nextStationIndex + 1); }
+    public double getSpeedKmh() { return speed; }
+
+    public String getCurrentSegmentId() { return currentSegmentId; }
+    public void setCurrentSegmentId(String v) { this.currentSegmentId = v; }
+
+    public double getTrainLengthMeters() { return trainLengthMeters > 0 ? trainLengthMeters : carCount * carLength; }
+    public void setTrainLengthMeters(double v) { this.trainLengthMeters = v; }
+
+    public double getLoadFactor() { return loadFactor; }
+    public void setLoadFactor(double v) { this.loadFactor = v; }
+
+    public String getActiveCommand() { return activeCommand; }
+    public void setActiveCommand(String v) { this.activeCommand = v; }
+
+    public double getLastReportTimeSeconds() { return lastReportTimeSeconds; }
+    public void setLastReportTimeSeconds(double v) { this.lastReportTimeSeconds = v; }
+
+    public String getStateSource() { return stateSource; }
+    public void setStateSource(String v) { this.stateSource = v; }
+
+    public double getMinDwellSeconds() { return minDwellSeconds; }
+    public void setMinDwellSeconds(double v) { this.minDwellSeconds = v; }
+
+    // ── CBTC 执行层状态 ──
+    public TractionSystemState getTractionState() { return tractionState; }
+    public void setTractionState(TractionSystemState v) { this.tractionState = v; }
+
+    public BrakingSystemState getBrakeState() { return brakeState; }
+    public void setBrakeState(BrakingSystemState v) { this.brakeState = v; }
 
     // ── 遗留兼容字段: departureTime (前端可能用到) ──
     public String getDepartureTime() {

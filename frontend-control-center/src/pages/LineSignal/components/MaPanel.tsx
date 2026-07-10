@@ -136,7 +136,7 @@ export default function MaPanel({ entity, lineProfile, maMap, trains, onClose }:
       placement="right"
       open={open}
       onClose={onClose}
-      width={360}
+      size="default"
     >
       {renderContent()}
     </Drawer>
