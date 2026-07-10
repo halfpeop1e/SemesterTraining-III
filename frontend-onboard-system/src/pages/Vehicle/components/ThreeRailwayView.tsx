@@ -173,6 +173,151 @@ export default function ThreeRailwayView({
             emissive: emissive ?? '#000000',
             emissiveIntensity: emissive ? emissiveIntensity : 0,
           });
+
+        // ========== 3D Tunnel ==========
+        const TUNNEL_WALL_X = 4.5;
+        const TUNNEL_WALL_TOP_Y = 4.2;
+        const TUNNEL_CROWN_Y = 5.0;
+        const TUNNEL_HAUNCH_OUTER_X = 2.0;
+        const TUNNEL_CONTINUOUS_LEN = 400;
+        const RIB_SPACING_M = 12;
+        const LIGHT_SPACING_M = 6;
+        const SLEEPER_SPACING_M = 2;
+        const RIB_COUNT = Math.floor(WORLD_LOOP_LENGTH_M / RIB_SPACING_M);
+        const LIGHT_COUNT = Math.floor(WORLD_LOOP_LENGTH_M / LIGHT_SPACING_M);
+        const SLEEPER_COUNT = Math.floor(WORLD_LOOP_LENGTH_M / SLEEPER_SPACING_M);
+
+        const tunnelWallMat = new THREE.MeshStandardMaterial({ color: '#2c3238', roughness: 0.93, metalness: 0.04 });
+        const tunnelRibMat = new THREE.MeshStandardMaterial({ color: '#353b42', roughness: 0.9, metalness: 0.06 });
+        const tunnelSleeperMat = new THREE.MeshStandardMaterial({ color: '#1c2026', roughness: 0.95 });
+        const tunnelLightMat = new THREE.MeshStandardMaterial({
+          color: '#fff6e2', roughness: 0.35, metalness: 0.1,
+          emissive: '#ffe4a8', emissiveIntensity: 1.1,
+        });
+
+        // Haunch geometry (shared by ribs and continuous ceiling slopes)
+        const haunchDx = TUNNEL_WALL_X - TUNNEL_HAUNCH_OUTER_X;
+        const haunchDy = TUNNEL_CROWN_Y - TUNNEL_WALL_TOP_Y;
+        const haunchLen = Math.sqrt(haunchDx * haunchDx + haunchDy * haunchDy);
+        const haunchAngle = Math.atan2(haunchDy, haunchDx);
+
+        // Continuous walls
+        const wallGeo = new THREE.BoxGeometry(0.18, TUNNEL_WALL_TOP_Y, TUNNEL_CONTINUOUS_LEN);
+        const leftWall = new THREE.Mesh(wallGeo, tunnelWallMat);
+        leftWall.position.set(-TUNNEL_WALL_X, TUNNEL_WALL_TOP_Y / 2, 0);
+        scene.add(leftWall);
+        registerScrollingObject(leftWall);
+
+        const rightWall = new THREE.Mesh(wallGeo, tunnelWallMat);
+        rightWall.position.set(TUNNEL_WALL_X, TUNNEL_WALL_TOP_Y / 2, 0);
+        scene.add(rightWall);
+        registerScrollingObject(rightWall);
+
+        // Continuous ceiling: two angled slopes + flat crown
+        const ceilingSlopeGeo = new THREE.BoxGeometry(haunchLen, 0.12, TUNNEL_CONTINUOUS_LEN);
+        const leftCeiling = new THREE.Mesh(ceilingSlopeGeo, tunnelWallMat);
+        leftCeiling.rotation.z = haunchAngle;
+        leftCeiling.position.set(
+          -(TUNNEL_WALL_X + TUNNEL_HAUNCH_OUTER_X) / 2,
+          (TUNNEL_WALL_TOP_Y + TUNNEL_CROWN_Y) / 2,
+          0,
+        );
+        scene.add(leftCeiling);
+        registerScrollingObject(leftCeiling);
+
+        const rightCeiling = new THREE.Mesh(ceilingSlopeGeo, tunnelWallMat);
+        rightCeiling.rotation.z = -haunchAngle;
+        rightCeiling.position.set(
+          (TUNNEL_WALL_X + TUNNEL_HAUNCH_OUTER_X) / 2,
+          (TUNNEL_WALL_TOP_Y + TUNNEL_CROWN_Y) / 2,
+          0,
+        );
+        scene.add(rightCeiling);
+        registerScrollingObject(rightCeiling);
+
+        const ceilingCrownGeo = new THREE.BoxGeometry(TUNNEL_HAUNCH_OUTER_X * 2, 0.12, TUNNEL_CONTINUOUS_LEN);
+        const ceilingCrown = new THREE.Mesh(ceilingCrownGeo, tunnelWallMat);
+        ceilingCrown.position.set(0, TUNNEL_CROWN_Y, 0);
+        scene.add(ceilingCrown);
+        registerScrollingObject(ceilingCrown);
+
+        // Shared geometries for ribs / lights / sleepers
+        const ribLegGeo = new THREE.BoxGeometry(0.14, TUNNEL_WALL_TOP_Y, 0.14);
+        const ribHaunchGeo = new THREE.BoxGeometry(haunchLen, 0.14, 0.14);
+        const ribCrownGeo = new THREE.BoxGeometry(TUNNEL_HAUNCH_OUTER_X * 2, 0.14, 0.14);
+
+        const sleeperGeo = new THREE.BoxGeometry(2.6, 0.05, 0.18);
+        const lightGeo = new THREE.BoxGeometry(1.6, 0.05, 0.12);
+
+        const createTunnelRib = (zPos: number) => {
+          const rib = new THREE.Group();
+          const leftLeg = new THREE.Mesh(ribLegGeo, tunnelRibMat);
+          leftLeg.position.set(-TUNNEL_WALL_X, TUNNEL_WALL_TOP_Y / 2, 0);
+          rib.add(leftLeg);
+          const rightLeg = new THREE.Mesh(ribLegGeo, tunnelRibMat);
+          rightLeg.position.set(TUNNEL_WALL_X, TUNNEL_WALL_TOP_Y / 2, 0);
+          rib.add(rightLeg);
+          const leftHaunch = new THREE.Mesh(ribHaunchGeo, tunnelRibMat);
+          leftHaunch.rotation.z = haunchAngle;
+          leftHaunch.position.set(
+            -(TUNNEL_WALL_X + TUNNEL_HAUNCH_OUTER_X) / 2,
+            (TUNNEL_WALL_TOP_Y + TUNNEL_CROWN_Y) / 2,
+            0,
+          );
+          rib.add(leftHaunch);
+          const rightHaunch = new THREE.Mesh(ribHaunchGeo, tunnelRibMat);
+          rightHaunch.rotation.z = -haunchAngle;
+          rightHaunch.position.set(
+            (TUNNEL_WALL_X + TUNNEL_HAUNCH_OUTER_X) / 2,
+            (TUNNEL_WALL_TOP_Y + TUNNEL_CROWN_Y) / 2,
+            0,
+          );
+          rib.add(rightHaunch);
+          const crown = new THREE.Mesh(ribCrownGeo, tunnelRibMat);
+          crown.position.set(0, TUNNEL_CROWN_Y, 0);
+          rib.add(crown);
+          rib.position.z = zPos;
+          return rib;
+        };
+
+        const createSleeper = (zPos: number) => {
+          const sleeper = new THREE.Mesh(sleeperGeo, tunnelSleeperMat);
+          sleeper.position.set(0, 0.025, zPos);
+          return sleeper;
+        };
+
+        const createTunnelLight = (zPos: number) => {
+          const light = new THREE.Mesh(lightGeo, tunnelLightMat);
+          light.position.set(0, TUNNEL_CROWN_Y - 0.09, zPos);
+          return light;
+        };
+
+        // Place ribs, lights, sleepers covering one loop length
+        const ribStartZ = WORLD_WRAP_NEAR_Z - RIB_SPACING_M;
+        for (let i = 0; i < RIB_COUNT; i++) {
+          const z = ribStartZ - i * RIB_SPACING_M;
+          const rib = createTunnelRib(z);
+          scene.add(rib);
+          registerScrollingObject(rib, 'track', true, z);
+        }
+
+        const lightStartZ = WORLD_WRAP_NEAR_Z - LIGHT_SPACING_M;
+        for (let i = 0; i < LIGHT_COUNT; i++) {
+          const z = lightStartZ - i * LIGHT_SPACING_M;
+          const light = createTunnelLight(z);
+          scene.add(light);
+          registerScrollingObject(light, 'track', true, z);
+        }
+
+        const sleeperStartZ = WORLD_WRAP_NEAR_Z - SLEEPER_SPACING_M;
+        for (let i = 0; i < SLEEPER_COUNT; i++) {
+          const z = sleeperStartZ - i * SLEEPER_SPACING_M;
+          const sleeper = createSleeper(z);
+          scene.add(sleeper);
+          registerScrollingObject(sleeper, 'track', true, z);
+        }
+        // ========== End 3D Tunnel ==========
+
         const createTextPlane = (
           text: string,
           width: number,

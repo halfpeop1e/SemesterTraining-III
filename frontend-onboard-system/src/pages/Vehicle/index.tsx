@@ -6,17 +6,23 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { callVehicleControl, reportOnboardEvent, runVehicleSimulation } from '../../api/vehicle';
+import { disconnectProtocol704 } from '../../api/protocol704';
 import type { DrivingMode, SafetyEvent, SimulationResult, TrainState } from '../../types/vehicle';
 import { STATIONS } from './data/lineMap';
 import DriverCabView from './components/DriverCabView';
 import LineRunView from './components/LineRunView';
 import IntegrationPanel from './components/IntegrationPanel';
+import Protocol704Panel from './components/Protocol704Panel';
 import './vehicle.css';
 
 const DEMO_SPEED_LIMIT_FALLBACK_MS = 20;
 const SPEED_MULTIPLIER_OPTIONS = [0.5, 1, 2, 4, 8] as const;
 type SpeedMultiplier = (typeof SPEED_MULTIPLIER_OPTIONS)[number];
 type PageStatus = 'idle' | 'loading' | 'playing' | 'finished' | 'error';
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
 
 /** 单个车载实例的全部状态 */
 interface InstanceState {
@@ -37,6 +43,7 @@ interface InstanceState {
   toStationId: number;
   drivingMode: DrivingMode;
   allSafetyEvents: SafetyEvent[];
+  handleResetToken: number;
   /** useRef 等效保持引用 (不触发重渲染) */
   stateRef: TrainState | null;
   frameIndexRef: number;
@@ -76,6 +83,7 @@ function createInstance(trainId: string): InstanceState {
     toStationId: 2,
     drivingMode: 'ato',
     allSafetyEvents: [],
+    handleResetToken: 0,
     stateRef: null,
     frameIndexRef: 0,
     fromStationIdRef: 1,
@@ -113,6 +121,7 @@ function Vehicle() {
     return m;
   });
   const [activeTrainId, setActiveTrainId] = useState<string>(urlTrainId);
+  const [displayState, setDisplayState] = useState<TrainState | null>(null);
 
   // 用 ref 跟踪最新 instances，供 unmount cleanup 使用
   const instancesRef = useRef(instances);
@@ -228,6 +237,7 @@ function Vehicle() {
     if (instances.size <= 1) return;
     const inst = instances.get(trainId);
     if (inst) stopTimer(inst);
+    void disconnectProtocol704(trainId).catch(() => undefined);
     setInstances((prev) => {
       const next = new Map(prev);
       next.delete(trainId);
@@ -298,6 +308,7 @@ function Vehicle() {
       speedMultiplier: 1,
       drivingMode: 'ato',
       allSafetyEvents: [],
+      handleResetToken: cur.handleResetToken + 1,
     }));
 
     try {
@@ -332,6 +343,7 @@ function Vehicle() {
     command: string,
     targetDecel: number,
     mode: DrivingMode,
+    levelPercent = 0,
   ) => {
     const refs = instanceRefs.current.get(trainId);
     if (!refs) return;
@@ -346,7 +358,7 @@ function Vehicle() {
         toStationId: toId,
         currentState: cs,
         currentMode: mode,
-        controlCommand: { command, targetDecel },
+        controlCommand: { command, targetDecel, levelPercent },
         totalTargetPosition: totalTarget,
       });
 
@@ -364,15 +376,27 @@ function Vehicle() {
             stopResult: controlResult.stopResult,
             safetyEvents: [...(cur.result.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
             stationStops: controlResult.stationStops,
+            summary: {
+              ...cur.result.summary,
+              currentMode: controlResult.summary.currentMode ?? cur.result.summary.currentMode,
+              nextMode: controlResult.summary.nextMode ?? cur.result.summary.nextMode,
+            },
           },
           allSafetyEvents: [...cur.allSafetyEvents, ...(controlResult.safetyEvents ?? [])],
           trajectoryVersion: cur.trajectoryVersion + 1,
           drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
+          handleResetToken:
+            command === 'resume_ato' || command === 'reset_emergency'
+              ? cur.handleResetToken + 1
+              : cur.handleResetToken,
           status: 'playing',
         };
       });
     } catch (err) {
-      console.warn('控制续算失败:', err);
+      updateInstance(trainId, (cur) => ({
+        ...cur,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      }));
     }
   }, [updateInstance]);
 
@@ -390,6 +414,7 @@ function Vehicle() {
       speedMultiplier: 1,
       drivingMode: 'ato',
       allSafetyEvents: [],
+      handleResetToken: cur.handleResetToken + 1,
     }));
   }, [updateInstance]);
 
@@ -430,10 +455,32 @@ function Vehicle() {
     updateInstance(trainId, (cur) => ({ ...cur, drivingMode: 'manual' }));
   }, [updateInstance]);
 
-  const handleBrakeLevel = useCallback((trainId: string, level: number, targetDecel: number) => {
-    if (level === 0) return;
+  const handleTractionLevel = useCallback((trainId: string, _level: number, levelPercent: number) => {
     const refs = instanceRefs.current.get(trainId);
-    handleControl(trainId, 'brake', targetDecel, refs?.drivingModeRef ?? 'ato');
+    handleControl(trainId, 'traction', 0, refs?.drivingModeRef ?? 'manual', levelPercent);
+  }, [handleControl]);
+
+  const handleBrakeLevel = useCallback((
+    trainId: string,
+    _level: number,
+    targetDecel: number,
+    levelPercent: number,
+  ) => {
+    const refs = instanceRefs.current.get(trainId);
+    handleControl(trainId, 'brake', targetDecel, refs?.drivingModeRef ?? 'manual', levelPercent);
+  }, [handleControl]);
+
+  const handleCoast = useCallback((trainId: string) => {
+    const refs = instanceRefs.current.get(trainId);
+    handleControl(trainId, 'coast', 0, refs?.drivingModeRef ?? 'manual');
+  }, [handleControl]);
+
+  const handleRequestAto = useCallback((trainId: string) => {
+    handleControl(trainId, 'resume_ato', 0, 'manual');
+  }, [handleControl]);
+
+  const handleResetEmergency = useCallback((trainId: string) => {
+    handleControl(trainId, 'reset_emergency', 0, 'emergency');
   }, [handleControl]);
 
   const handleEmergencyBrake = useCallback((trainId: string) => {
@@ -456,18 +503,13 @@ function Vehicle() {
     }
   }, [updateInstance, handleControl]);
 
-  // ── activeInstance 的派生值（无活跃实例时显示空状态） ──
-  if (!activeInstance) {
-    return (
-      <div className="vehicle-page">
-        <div className="vehicle-empty">暂无车载实例，请点击"＋"添加</div>
-      </div>
-    );
-  }
-
-  const ai = activeInstance;
+  const ai = activeInstance ?? createInstance(activeTrainId);
   const currentState: TrainState | null =
     ai.result && ai.result.states.length > 0 ? ai.result.states[ai.frameIndex] : null;
+  const viewState =
+    displayState?.trainId === activeTrainId ? displayState : currentState;
+  const canResetEmergency =
+    ai.drivingMode === 'emergency' && ai.result?.summary?.nextMode === 'manual';
   const targetStopPosition = ai.result?.stopResult?.targetStopPosition ?? 1200;
   const speedLimitValue = ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
   const lineStartPosition = ai.result?.summary?.lineStartPosition ?? 0;
@@ -481,6 +523,76 @@ function Vehicle() {
   const completedStops = ai.result?.summary?.completedStops;
 
   const trainIds = Array.from(instances.keys());
+
+  useEffect(() => {
+    const states = ai.result?.states;
+    if (!states || states.length === 0) {
+      setDisplayState(null);
+      return undefined;
+    }
+
+    const frame = states[ai.frameIndex];
+    if (
+      ai.status !== 'playing'
+      || ai.isPaused
+      || ai.frameIndex >= states.length - 1
+    ) {
+      setDisplayState(frame);
+      return undefined;
+    }
+
+    const nextFrame = states[ai.frameIndex + 1];
+    const span = nextFrame.time - frame.time;
+    const startedAt = performance.now();
+    let rafId = 0;
+
+    const tick = () => {
+      const elapsedSeconds = (performance.now() - startedAt) / 1000;
+      const fraction = clamp(
+        span > 0 ? (elapsedSeconds * ai.speedMultiplier) / span : 1,
+        0,
+        1,
+      );
+      setDisplayState({
+        time: frame.time + span * fraction,
+        position: frame.position + (nextFrame.position - frame.position) * fraction,
+        velocity: frame.velocity + (nextFrame.velocity - frame.velocity) * fraction,
+        acceleration:
+          frame.acceleration
+          + (nextFrame.acceleration - frame.acceleration) * fraction,
+        phase: frame.phase,
+        trainId: frame.trainId,
+        absolutePosition:
+          frame.absolutePosition !== undefined
+          && nextFrame.absolutePosition !== undefined
+            ? frame.absolutePosition
+              + (nextFrame.absolutePosition - frame.absolutePosition) * fraction
+            : frame.absolutePosition,
+      });
+      if (fraction < 1) {
+        rafId = window.requestAnimationFrame(tick);
+      }
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [
+    activeTrainId,
+    ai.result,
+    ai.frameIndex,
+    ai.status,
+    ai.isPaused,
+    ai.speedMultiplier,
+    ai.trajectoryVersion,
+  ]);
+
+  if (!activeInstance) {
+    return (
+      <div className="vehicle-page">
+        <div className="vehicle-empty">暂无车载实例，请点击"＋"添加</div>
+      </div>
+    );
+  }
 
   return (
     <div className="vehicle-page">
@@ -664,6 +776,17 @@ function Vehicle() {
         );
       })}
 
+      {trainIds.map((tid) => (
+        <div key={`p704-${tid}`} style={{ display: tid === activeTrainId ? undefined : 'none' }}>
+          <Protocol704Panel
+            trainId={tid}
+            onError={(message) => {
+              updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
+            }}
+          />
+        </div>
+      ))}
+
       {ai.status === 'error' && (
         <div className="vehicle-error">
           <span>仿真失败：{ai.errorMessage}</span>
@@ -688,7 +811,7 @@ function Vehicle() {
       <div className="vehicle-main-area">
         <DriverCabView
           status={ai.status}
-          currentState={currentState}
+          currentState={viewState}
           startPosition={0}
           targetStopPosition={targetStopPosition}
           speedLimit={speedLimitValue}
@@ -698,12 +821,19 @@ function Vehicle() {
           stationStops={ai.result?.stationStops}
           externalDriveMode={ai.drivingMode}
           onRequestManual={() => handleRequestManual(activeTrainId)}
-          onBrakeLevel={(level, decel) => handleBrakeLevel(activeTrainId, level, decel)}
+          onTractionLevel={(level, percent) => handleTractionLevel(activeTrainId, level, percent)}
+          onBrakeLevel={(level, decel, percent) => handleBrakeLevel(activeTrainId, level, decel, percent)}
+          onCoast={() => handleCoast(activeTrainId)}
           onEmergencyBrake={() => handleEmergencyBrake(activeTrainId)}
+          onRequestAto={() => handleRequestAto(activeTrainId)}
+          onResetEmergency={() => handleResetEmergency(activeTrainId)}
+          canResetEmergency={canResetEmergency}
+          handleResetToken={ai.handleResetToken}
         />
         <LineRunView
+          trainId={activeTrainId}
           status={ai.status}
-          currentState={currentState}
+          currentState={viewState}
           startPosition={0}
           targetStopPosition={targetStopPosition}
           speedLimit={speedLimitValue}

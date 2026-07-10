@@ -28,10 +28,22 @@ export interface DriverCabViewProps {
   externalDriveMode?: 'ato' | 'manual' | 'emergency' | null;
   /** 司机申请人工接管（ATO → MANUAL）。父组件负责决定是否切换并调用后端。 */
   onRequestManual?: () => void;
-  /** 制动手柄：level 0-7，targetDecel m/s²。父组件决定是否调用后端续算。 */
-  onBrakeLevel?: (level: number, targetDecel: number) => void;
+  /** 牵引手柄：level 1-7，levelPercent 0~100。父组件决定是否调用后端续算。 */
+  onTractionLevel?: (level: number, levelPercent: number) => void;
+  /** 制动手柄：level 1-7，targetDecel m/s²，levelPercent 0~100。父组件决定是否调用后端续算。 */
+  onBrakeLevel?: (level: number, targetDecel: number, levelPercent: number) => void;
+  /** 回零/惰行（手柄归中、牵引0级、制动0级）。父组件发送 coast 指令。 */
+  onCoast?: () => void;
   /** 紧急制动按钮。 */
   onEmergencyBrake?: () => void;
+  /** 恢复 ATO 自动驾驶（MANUAL → ATO）。父组件调用后端 /control resume_ato。 */
+  onRequestAto?: () => void;
+  /** EB 停稳后复位到人工模式（EMERGENCY → MANUAL）。父组件调用后端 /control reset_emergency。 */
+  onResetEmergency?: () => void;
+  /** EMERGENCY 停稳后可复位（drivingMode==='emergency' && summary.nextMode==='manual'）。 */
+  canResetEmergency?: boolean;
+  /** 受控重置 token，变化时清空牵引/制动级位 UI（resume_ato/reset_emergency 成功后递增）。 */
+  handleResetToken?: number;
 }
 
 interface ProjectionPoint {
@@ -332,7 +344,68 @@ function drawStationAndStopTarget(
   distanceToTarget: number,
   status: DriverCabViewProps['status'],
   stopResult: StopResult | null,
+  phase: string | undefined,
+  nextStopName: string | undefined,
 ) {
+  const normalizedPhase = (phase ?? '').toLowerCase();
+  const isStopped = normalizedPhase === 'stopped' || normalizedPhase === 'dwell';
+  const isNearStop = Math.abs(distanceToTarget) <= 3;
+
+  // 停稳 / 极近停车点：固定显示站台牌 + 停车牌（不透视、不随 scale 缩小、不跑远消失）
+  if (isStopped || isNearStop) {
+    const panelW = 188;
+    const panelH = 96;
+    const panelX = Math.max(12, width - panelW - 16);
+    const panelY = 58;
+    ctx.fillStyle = 'rgba(5, 10, 11, 0.86)';
+    fillRoundRect(ctx, panelX, panelY, panelW, panelH, 8);
+
+    // 站名（当前/下一站）
+    const stationLabel = nextStopName ?? '目标站';
+    ctx.fillStyle = '#fde68a';
+    ctx.font = '700 14px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`◎ ${stationLabel}`, panelX + 12, panelY + 10);
+
+    // 固定 STOP 牌（不透视）
+    const stopW = 58;
+    const stopH = 26;
+    const stopX = panelX + 12;
+    const stopY = panelY + 36;
+    ctx.fillStyle = 'rgba(185, 28, 28, 0.96)';
+    fillRoundRect(ctx, stopX, stopY, stopW, stopH, 4);
+    ctx.fillStyle = '#fff7ed';
+    ctx.font = '800 13px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('STOP', stopX + stopW / 2, stopY + stopH / 2);
+
+    // 停准误差 / 停车窗判定（in_window / overshoot / undershoot）
+    const err = stopResult?.stopError;
+    const winState = normalizeStopWindowState(stopResult?.stopWindowState);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#dce8e6';
+    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    if (err !== undefined && err !== null) {
+      ctx.fillText(`误差 ${err.toFixed(2)} m`, stopX + stopW + 10, stopY + 2);
+    } else {
+      ctx.fillText(`距停 ${formatDistance(Math.abs(distanceToTarget))} m`, stopX + stopW + 10, stopY + 2);
+    }
+    const winLabel = stopResult
+      ? describeStopWindowState(stopResult.stopWindowState)
+      : (Math.abs(distanceToTarget) <= 0.5 ? '停准窗内' : '接近停车窗');
+    ctx.fillStyle = winState === 'in_window'
+      ? '#86efac'
+      : (winState === 'overshoot' || winState === 'undershoot' ? '#fde68a' : '#aebdc4');
+    ctx.fillText(winLabel, stopX + stopW + 10, stopY + 18);
+    void status;
+    void height;
+    return;
+  }
+
+  // 接近站台但未停稳（|distanceToTarget|>3m）：保持现有透视绘制（不变）
   if (distanceToTarget > 340 || distanceToTarget < -80) {
     return;
   }
@@ -452,7 +525,9 @@ function drawCanvasHud(
 
   const chipY = height - 40;
   let chipX = 18;
+  const stopped = phase === 'stopped' || phase === 'dwell';
   [
+    stopped ? '停稳' : null,
     inbound ? '入站 < 200m' : null,
     braking ? '制动提示' : null,
     props.isPaused ? '播放暂停' : null,
@@ -461,7 +536,11 @@ function drawCanvasHud(
       return;
     }
     const chipWidth = chip.length * 13 + 22;
-    ctx.fillStyle = chip === '制动提示' ? 'rgba(185, 28, 28, 0.82)' : 'rgba(180, 83, 9, 0.82)';
+    ctx.fillStyle = chip === '制动提示'
+      ? 'rgba(185, 28, 28, 0.82)'
+      : chip === '停稳'
+        ? 'rgba(6, 78, 59, 0.85)'
+        : 'rgba(180, 83, 9, 0.82)';
     fillRoundRect(ctx, chipX, chipY, chipWidth, 26, 6);
     ctx.fillStyle = '#fff7ed';
     ctx.font = '700 12px "Microsoft YaHei", sans-serif';
@@ -559,6 +638,20 @@ function drawCabViewCanvas(
   // Speed / phase / distance HUD chips
   drawCanvasHud(ctx, width, height, props);
 
+  // 停稳 / 极近停车点：固定站台牌 + 停车牌（不透视），叠在最上层
+  const phase = normalizePhase(props.currentState?.phase);
+  const { distance: distanceToTarget, nextStopName } = computeDistanceToNextStop(
+    currentPosition, props.targetStopPosition, props.stationStops,
+  );
+  const isStopped = phase === 'stopped' || phase === 'dwell';
+  const isNearStop = Math.abs(distanceToTarget) <= 3;
+  if (isStopped || isNearStop) {
+    drawStationAndStopTarget(
+      ctx, width, height, distanceToTarget, props.status, props.stopResult,
+      props.currentState?.phase, nextStopName,
+    );
+  }
+
   void velocity; // used by ThreeRailwayView, not needed here
   void now;      // was used by drawTunnel scan lines, not needed in HUD-only mode
 }
@@ -580,13 +673,20 @@ function DriverCabView({
   stationStops,
   externalDriveMode,
   onRequestManual,
+  onTractionLevel,
   onBrakeLevel,
+  onCoast,
   onEmergencyBrake,
+  onRequestAto,
+  onResetEmergency,
+  canResetEmergency = false,
+  handleResetToken,
 }: DriverCabViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // 驾驶员控制面板 UI 状态
   const [driveMode, setDriveMode] = useState<DriveMode>('ato');
+  const [tractionLevelUI, setTractionLevelUI] = useState(0);
   const [brakeLevelUI, setBrakeLevelUI] = useState(0);
   const [emergencyActive, setEmergencyActive] = useState(false);
   const [manualRequestState, setManualRequestState] = useState<'idle' | 'pending'>('idle');
@@ -594,6 +694,7 @@ function DriverCabView({
   const isModeControlled = externalDriveMode === 'ato' || externalDriveMode === 'manual' || isEmergencyMode;
   const effectiveDriveMode: DriveMode =
     externalDriveMode === 'ato' || externalDriveMode === 'manual' ? externalDriveMode : driveMode;
+  const handlesDisabled = isEmergencyMode || effectiveDriveMode !== 'manual';
 
   // 同步外部模式：用 useEffect，不在 render 期间 setState
   useEffect(() => {
@@ -609,6 +710,21 @@ function DriverCabView({
       setEmergencyActive(true);
     }
   }, [externalDriveMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 受控重置 token：变化时清空牵引/制动级位 UI（resume_ato/reset_emergency 成功后由父组件递增）
+  const prevResetTokenRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (handleResetToken === undefined) return;
+    if (prevResetTokenRef.current === undefined) {
+      prevResetTokenRef.current = handleResetToken;
+      return;
+    }
+    if (prevResetTokenRef.current !== handleResetToken) {
+      prevResetTokenRef.current = handleResetToken;
+      setTractionLevelUI(0);
+      setBrakeLevelUI(0);
+    }
+  }, [handleResetToken]);
 
   // 用于 Canvas 渲染的 props 快照（含 stationStops，驾驶台 HUD 用于计算下一站距离）
   const propsRef = useRef<DriverCabViewProps>({
@@ -986,25 +1102,93 @@ function DriverCabView({
               </div>
             </div>
 
-            <div className="dcp-section dcp-section--brake-handle">
-              <span className="dcp-section__label">制动手柄（级位 {brakeLevelUI}）</span>
-              {/* ATO 或 EMERGENCY 模式下 disabled（真实业务状态，非视觉假禁用）*/}
-              <div className={`dcp-brake-levels ${isEmergencyMode || effectiveDriveMode !== 'manual' ? 'is-disabled' : ''}`} role="group">
+            {/* 手柄状态指示条 */}
+            <div className="dcp-handle-status">
+              <div className="dcp-handle-status__row">
+                <span className="dcp-handle-status__label">模式</span>
+                <span className={`dcp-handle-status__value dcp-handle-status__value--${effectiveDriveMode}`}>
+                  {effectiveDriveMode === 'ato' ? 'ATO 自动' : isEmergencyMode ? '紧急' : '人工'}
+                </span>
+              </div>
+              <div className="dcp-handle-status__row">
+                <span className="dcp-handle-status__label">牵引</span>
+                <span className={`dcp-handle-status__value ${tractionLevelUI > 0 ? 'dcp-handle-status__value--traction' : ''}`}>
+                  {tractionLevelUI > 0 ? `${tractionLevelUI} 级` : '—'}
+                </span>
+              </div>
+              <div className="dcp-handle-status__row">
+                <span className="dcp-handle-status__label">制动</span>
+                <span className={`dcp-handle-status__value ${brakeLevelUI > 0 ? 'dcp-handle-status__value--brake' : ''}`}>
+                  {brakeLevelUI > 0 ? `${brakeLevelUI} 级` : '—'}
+                </span>
+              </div>
+              <div className="dcp-handle-status__row">
+                <span className="dcp-handle-status__label">惰行</span>
+                <span className={`dcp-handle-status__value ${tractionLevelUI === 0 && brakeLevelUI === 0 ? 'dcp-handle-status__value--coast' : ''}`}>
+                  {tractionLevelUI === 0 && brakeLevelUI === 0 ? '回零' : '—'}
+                </span>
+              </div>
+            </div>
+            {!isEmergencyMode && effectiveDriveMode === 'manual' && normalizedPhase === 'stopped' && (
+              <div className="dcp-handle-hint dcp-handle-hint--can-traction">● 停稳后可继续牵引</div>
+            )}
+
+            {/* 牵引手柄 0~7：0=回零惰行，1~7=牵引级位 */}
+            <div className="dcp-section dcp-section--traction-handle">
+              <span className="dcp-section__label">牵引手柄（级位 {tractionLevelUI}）{tractionLevelUI === 0 && !handlesDisabled ? ' · 回零' : ''}</span>
+              <div className={`dcp-traction-levels ${handlesDisabled ? 'is-disabled' : ''}`} role="group">
                 {[0,1,2,3,4,5,6,7].map((level) => (
                   <button
                     key={level}
                     type="button"
-                    className={`dcp-brake-level-btn ${brakeLevelUI === level ? 'is-active' : ''}`}
-                    disabled={isEmergencyMode || effectiveDriveMode !== 'manual'}
+                    className={`dcp-traction-level-btn ${tractionLevelUI === level ? 'is-active' : ''} ${level === 0 ? 'is-zero' : ''}`}
+                    disabled={handlesDisabled}
                     onClick={() => {
-                      setBrakeLevelUI(level);
-                      if (level > 0 && onBrakeLevel) {
-                        // 0级=无制动, 7级=最大常用制动(1.2 m/s²)，线性换算
-                        const targetDecel = (level / 7) * 1.2;
-                        onBrakeLevel(level, targetDecel);
+                      if (level === 0) {
+                        setTractionLevelUI(0);
+                        setBrakeLevelUI(0);
+                        if (onCoast) onCoast();
+                      } else {
+                        setTractionLevelUI(level);
+                        setBrakeLevelUI(0);
+                        if (onTractionLevel) {
+                          const lp = (level / 7) * 100;
+                          onTractionLevel(level, lp);
+                        }
                       }
                     }}>
-                    {level}
+                    {level === 0 ? '0' : level}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 制动手柄 0~7：0=回零惰行，1~7=制动级位 */}
+            <div className="dcp-section dcp-section--brake-handle">
+              <span className="dcp-section__label">制动手柄（级位 {brakeLevelUI}）{brakeLevelUI === 0 && !handlesDisabled ? ' · 回零' : ''}</span>
+              <div className={`dcp-brake-levels ${handlesDisabled ? 'is-disabled' : ''}`} role="group">
+                {[0,1,2,3,4,5,6,7].map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    className={`dcp-brake-level-btn ${brakeLevelUI === level ? 'is-active' : ''} ${level === 0 ? 'is-zero' : ''}`}
+                    disabled={handlesDisabled}
+                    onClick={() => {
+                      if (level === 0) {
+                        setBrakeLevelUI(0);
+                        setTractionLevelUI(0);
+                        if (onCoast) onCoast();
+                      } else {
+                        setBrakeLevelUI(level);
+                        setTractionLevelUI(0);
+                        if (onBrakeLevel) {
+                          const targetDecel = (level / 7) * 1.2;
+                          const lp = (level / 7) * 100;
+                          onBrakeLevel(level, targetDecel, lp);
+                        }
+                      }
+                    }}>
+                    {level === 0 ? '0' : level}
                   </button>
                 ))}
               </div>
@@ -1022,19 +1206,50 @@ function DriverCabView({
                   ⚠ {emergencyActive || externalDriveMode === 'emergency' ? '已施加' : '紧急制动'}
                 </button>
               </div>
-              <div className="dcp-section dcp-section--manual-req">
-                <button
-                  type="button"
-                  className={`dcp-manual-req-btn ${manualRequestState === 'pending' ? 'is-pending' : ''}`}
-                  disabled={isEmergencyMode || effectiveDriveMode !== 'ato'}
-                  onClick={() => {
-                    const next: 'idle' | 'pending' = manualRequestState === 'idle' ? 'pending' : 'idle';
-                    setManualRequestState(next);
-                    if (next === 'pending' && onRequestManual) onRequestManual();
-                  }}>
-                  {manualRequestState === 'pending' ? '等待批准…' : '申请人工接管'}
-                </button>
-              </div>
+
+              {/* ATO 模式：申请人工接管（ATO → MANUAL）*/}
+              {!isEmergencyMode && effectiveDriveMode === 'ato' && (
+                <div className="dcp-section dcp-section--manual-req">
+                  <button
+                    type="button"
+                    className={`dcp-manual-req-btn ${manualRequestState === 'pending' ? 'is-pending' : ''}`}
+                    onClick={() => {
+                      const next: 'idle' | 'pending' = manualRequestState === 'idle' ? 'pending' : 'idle';
+                      setManualRequestState(next);
+                      if (next === 'pending' && onRequestManual) onRequestManual();
+                    }}>
+                    {manualRequestState === 'pending' ? '等待批准…' : '申请人工接管'}
+                  </button>
+                </div>
+              )}
+
+              {/* MANUAL 模式：恢复 ATO（MANUAL → ATO，调用后端 resume_ato）*/}
+              {!isEmergencyMode && effectiveDriveMode === 'manual' && onRequestAto && (
+                <div className="dcp-section dcp-section--ato-resume">
+                  <button
+                    type="button"
+                    className="dcp-ato-resume-btn"
+                    onClick={() => {
+                      if (onRequestAto) onRequestAto();
+                    }}>
+                    恢复 ATO
+                  </button>
+                </div>
+              )}
+
+              {/* EMERGENCY 模式：EB 停稳后复位到人工（EMERGENCY → MANUAL，调用后端 reset_emergency）*/}
+              {isEmergencyMode && canResetEmergency && onResetEmergency && (
+                <div className="dcp-section dcp-section--reset-emergency">
+                  <button
+                    type="button"
+                    className="dcp-reset-emergency-btn"
+                    onClick={() => {
+                      if (onResetEmergency) onResetEmergency();
+                    }}>
+                    复位到人工
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

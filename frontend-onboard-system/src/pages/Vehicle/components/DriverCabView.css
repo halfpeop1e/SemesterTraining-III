@@ -52,7 +52,9 @@
   flex-direction: column;
   gap: 6px;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 
 /* ── Viewport (3D + Canvas HUD) ── */
@@ -844,6 +846,10 @@
   gap: 6px;
 }
 
+.dcp-bottom-row .dcp-section {
+  min-width: 0;
+}
+
 /* Emergency brake button */
 .dcp-emergency-btn {
   width: 100%;
@@ -958,6 +964,87 @@
   box-shadow: 0 0 6px rgba(251, 191, 36, 0.7);
 }
 
+/* Traction handle levels */
+.dcp-section--traction-handle,
+.dcp-section--brake-handle {
+  min-width: 0;
+}
+
+.dcp-traction-levels {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.dcp-traction-level-btn {
+  flex: 1;
+  height: 26px;
+  color: #9aaab2;
+  font-size: var(--text-xs);
+  font-weight: 900;
+  background: #182024;
+  border: 1px solid rgba(156, 172, 180, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dcp-traction-level-btn.is-active {
+  color: #fff;
+  background: #14532d;
+  border-color: rgba(134, 239, 172, 0.54);
+}
+
+.dcp-traction-level-btn.is-active.is-zero,
+.dcp-brake-level-btn.is-active.is-zero {
+  color: #fef3c7;
+  background: #78350f;
+  border-color: rgba(251, 191, 36, 0.48);
+}
+
+.dcp-traction-levels.is-disabled .dcp-traction-level-btn {
+  color: #3a4a50;
+  background: #0e1315;
+  border-color: rgba(156, 172, 180, 0.08);
+  cursor: not-allowed;
+}
+
+.dcp-handle-status {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  padding: 5px 6px;
+  background: #0e1315;
+  border: 1px solid rgba(156, 172, 180, 0.12);
+  border-radius: 5px;
+}
+
+.dcp-handle-status__row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.dcp-handle-status__label {
+  color: #6b7f87;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.dcp-handle-status__value {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dcp-handle-status__value--manual,
+.dcp-handle-status__value--coast { color: #fbbf24; }
+.dcp-handle-status__value--ato { color: #2dd4bf; }
+.dcp-handle-status__value--emergency,
+.dcp-handle-status__value--brake { color: #fb7185; }
+.dcp-handle-status__value--traction { color: #86efac; }
+
 /* Brake handle levels */
 .dcp-brake-levels {
   display: flex;
@@ -992,4 +1079,43 @@
   background: #0e1315;
   border-color: rgba(156, 172, 180, 0.08);
   cursor: not-allowed;
+}
+
+.dcp-handle-hint {
+  padding: 3px 8px;
+  color: #9aaab2;
+  font-size: 11px;
+  font-weight: 800;
+  background: #182024;
+  border: 1px solid rgba(156, 172, 180, 0.18);
+  border-radius: 5px;
+}
+
+.dcp-handle-hint--can-traction {
+  color: #bbf7d0;
+  background: rgba(2, 44, 30, 0.5);
+  border-color: rgba(134, 239, 172, 0.3);
+}
+
+.dcp-ato-resume-btn,
+.dcp-reset-emergency-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  font-size: var(--text-xs);
+  font-weight: 900;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.dcp-ato-resume-btn {
+  color: #e8faf7;
+  background: #0c2e2a;
+  border: 1px solid rgba(45, 212, 191, 0.46);
+}
+
+.dcp-reset-emergency-btn {
+  color: #fff7e8;
+  background: #2a1a08;
+  border: 1px solid rgba(251, 191, 36, 0.48);
 }

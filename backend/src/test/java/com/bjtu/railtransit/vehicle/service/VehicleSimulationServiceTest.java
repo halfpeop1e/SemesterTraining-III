@@ -1,8 +1,11 @@
 package com.bjtu.railtransit.vehicle.service;
 
+import com.bjtu.railtransit.vehicle.dto.ControlCommand;
+import com.bjtu.railtransit.vehicle.dto.SimulationControlRequest;
 import com.bjtu.railtransit.vehicle.dto.SimulationResult;
 import com.bjtu.railtransit.vehicle.dto.StopResult;
 import com.bjtu.railtransit.vehicle.dto.TrainState;
+import com.bjtu.railtransit.vehicle.enums.DrivingMode;
 import com.bjtu.railtransit.vehicle.enums.SimulationPhase;
 import com.bjtu.railtransit.vehicle.enums.StopWindowState;
 import com.bjtu.railtransit.vehicle.model.LineProfile;
@@ -14,6 +17,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -674,5 +678,396 @@ class VehicleSimulationServiceTest {
         java.lang.reflect.Field f2 = VehicleSimulationService.class.getDeclaredField("STOP_VELOCITY_TOLERANCE");
         f2.setAccessible(true);
         assertEquals(0.1, f2.getDouble(null), 1e-12);
+    }
+
+    // ========== 本轮新增测试：完整司机手柄输入（牵引/惰行/制动级位） ==========
+
+    private SimulationControlRequest buildManualControlRequest(
+            TrainState currentState, String command, double targetDecel, double levelPercent,
+            double totalTarget) {
+        SimulationControlRequest req = new SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(currentState);
+        req.setCurrentMode(DrivingMode.MANUAL);
+        req.setControlCommand(new ControlCommand(command, targetDecel, levelPercent));
+        req.setTotalTargetPosition(totalTarget);
+        return req;
+    }
+
+    private TrainState makeMovingState(double time, double position, double velocity, String phase) {
+        TrainState s = new TrainState(time, position, velocity, 0.0,
+                SimulationPhase.valueOf(phase.toUpperCase()), "T1");
+        s.setAbsolutePosition(313.0 + position);
+        return s;
+    }
+
+    @Test
+    void control_manualTractionLevel7_producesTractionFramesAndVelocityIncreases() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+
+        TrainState midState = makeMovingState(30.0, 300.0, 5.0, "coast");
+        SimulationControlRequest req = buildManualControlRequest(
+                midState, "traction", 0.0, 100.0, line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+
+        List<TrainState> states = result.getStates();
+        assertFalse(states.isEmpty(), "续算结果 states 不能为空");
+
+        boolean hasTractionFrame = false;
+        for (int i = 0; i < Math.min(10, states.size()); i++) {
+            if (states.get(i).getPhase() == SimulationPhase.TRACTION) {
+                hasTractionFrame = true;
+                assertTrue(states.get(i).getAcceleration() > 0.0,
+                        "TRACTION 帧加速度应为正，实际=" + states.get(i).getAcceleration());
+                break;
+            }
+        }
+        assertTrue(hasTractionFrame, "MANUAL traction level 7 应产生 TRACTION 帧");
+
+        TrainState earlyState = states.get(Math.min(5, states.size() - 1));
+        assertTrue(earlyState.getVelocity() > 5.0,
+                "牵引后速度应上升（初始 5 m/s），第5帧速度=" + earlyState.getVelocity());
+
+        assertEquals(SimulationPhase.STOPPED, states.get(states.size() - 1).getPhase(),
+                "末态应为 STOPPED");
+    }
+
+    @Test
+    void control_manualTractionLevel7_accelerationGreaterThanLevel3() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+
+        TrainState state7 = makeMovingState(30.0, 300.0, 8.0, "coast");
+        SimulationControlRequest req7 = buildManualControlRequest(
+                state7, "traction", 0.0, 100.0, line.getTargetStopPosition());
+        SimulationResult result7 = service.runContinuation(req7, scenario);
+
+        TrainState state3 = makeMovingState(30.0, 300.0, 8.0, "coast");
+        SimulationControlRequest req3 = buildManualControlRequest(
+                state3, "traction", 0.0, 3.0 / 7.0 * 100.0, line.getTargetStopPosition());
+        SimulationResult result3 = service.runContinuation(req3, scenario);
+
+        TrainState firstTraction7 = null;
+        TrainState firstTraction3 = null;
+        for (TrainState s : result7.getStates()) {
+            if (s.getPhase() == SimulationPhase.TRACTION) { firstTraction7 = s; break; }
+        }
+        for (TrainState s : result3.getStates()) {
+            if (s.getPhase() == SimulationPhase.TRACTION) { firstTraction3 = s; break; }
+        }
+
+        assertNotNull(firstTraction7, "level 7 应产生 TRACTION 帧");
+        assertNotNull(firstTraction3, "level 3 应产生 TRACTION 帧");
+        assertTrue(firstTraction7.getAcceleration() > firstTraction3.getAcceleration(),
+                "level 7 加速度 (" + firstTraction7.getAcceleration()
+                + ") 应大于 level 3 加速度 (" + firstTraction3.getAcceleration() + ")");
+    }
+
+    @Test
+    void control_manualCoast_noActiveTraction_velocityDoesNotIncreaseFromTraction() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+
+        TrainState midState = makeMovingState(30.0, 300.0, 10.0, "coast");
+        SimulationControlRequest req = buildManualControlRequest(
+                midState, "coast", 0.0, 0.0, line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        List<TrainState> states = result.getStates();
+        assertFalse(states.isEmpty());
+
+        for (int i = 0; i < Math.min(20, states.size() - 1); i++) {
+            TrainState s = states.get(i);
+            if (s.getPhase() == SimulationPhase.TRACTION) {
+                assertTrue(s.getAcceleration() <= 0.05,
+                        "COAST 指令下不应有明显正牵引加速度，frame " + i
+                        + " accel=" + s.getAcceleration());
+            }
+        }
+
+        TrainState earlyState = states.get(Math.min(5, states.size() - 1));
+        assertTrue(earlyState.getVelocity() <= 10.0 + 0.1,
+                "COAST 下速度不应因牵引上升（初始 10 m/s），第5帧 v=" + earlyState.getVelocity());
+
+        assertEquals(SimulationPhase.STOPPED, states.get(states.size() - 1).getPhase());
+    }
+
+    @Test
+    void control_manualBrakeLevel0_equalsCoast_noBrakingTriggered() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+
+        TrainState midState = makeMovingState(30.0, 300.0, 12.0, "coast");
+
+        SimulationControlRequest reqBrake0 = buildManualControlRequest(
+                midState, "brake", 0.0, 0.0, line.getTargetStopPosition());
+        SimulationResult resultBrake0 = service.runContinuation(reqBrake0, scenario);
+
+        SimulationControlRequest reqCoast = buildManualControlRequest(
+                makeMovingState(30.0, 300.0, 12.0, "coast"),
+                "coast", 0.0, 0.0, line.getTargetStopPosition());
+        SimulationResult resultCoast = service.runContinuation(reqCoast, scenario);
+
+        TrainState firstStateB0 = resultBrake0.getStates().get(0);
+        TrainState firstStateCoast = resultCoast.getStates().get(0);
+
+        assertEquals(SimulationPhase.COAST, firstStateB0.getPhase(),
+                "brake level 0 第一帧应为 COAST（不触发制动）");
+        assertEquals(firstStateCoast.getAcceleration(), firstStateB0.getAcceleration(), 0.01,
+                "brake level 0 加速度应与 coast 一致");
+
+        boolean immediateBraking = false;
+        for (int i = 0; i < Math.min(5, resultBrake0.getStates().size()); i++) {
+            if (resultBrake0.getStates().get(i).getPhase() == SimulationPhase.BRAKING) {
+                immediateBraking = true;
+                break;
+            }
+        }
+        assertFalse(immediateBraking, "brake level 0 不应立即触发 BRAKING（应等价惰行）");
+    }
+
+    @Test
+    void control_atoMode_manualTractionCommand_ignoredAndKeepsAto() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+        midState.setAbsolutePosition(313.0 + midState.getPosition());
+
+        SimulationControlRequest req = new SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(DrivingMode.ATO);
+        req.setControlCommand(new ControlCommand("traction", 0.0, 100.0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertEquals(DrivingMode.ATO, result.getSummary().getCurrentMode(),
+                "ATO 模式下人工牵引指令应被拒绝，保持 ATO 模式");
+    }
+
+    @Test
+    void control_manualEmergencyBrake_entersEmergencyMode() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        TrainState midState = makeMovingState(30.0, 300.0, 15.0, "traction");
+
+        SimulationControlRequest req = new SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(DrivingMode.MANUAL);
+        req.setControlCommand(new ControlCommand("emergency_brake", 0.0, 0.0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+        assertEquals(DrivingMode.EMERGENCY, result.getSummary().getCurrentMode(),
+                "EB 后模式应为 EMERGENCY");
+        assertFalse(result.getSafetyEvents().isEmpty(), "EB 应生成 SafetyEvent");
+
+        TrainState last = result.getStates().get(result.getStates().size() - 1);
+        assertEquals(SimulationPhase.STOPPED, last.getPhase());
+        assertEquals(DrivingMode.MANUAL, result.getSummary().getNextMode(),
+                "EB 停稳后 nextMode 应为 MANUAL");
+    }
+
+    // ========== 本轮新增测试：resume_ato / reset_emergency 指令 ==========
+
+    /**
+     * MANUAL brake 停稳后，取 stopped state 作为 currentState，再发 traction level 5：
+     * 前几帧应出现 TRACTION，速度从 0 上升（>0）。
+     */
+    @Test
+    void manual_brakeStopThenTraction_restartsFromZero() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+
+        // 先用 MANUAL brake 把列车制动到停稳
+        TrainState movingState = makeMovingState(30.0, 300.0, 12.0, "traction");
+        SimulationControlRequest brakeReq = buildManualControlRequest(
+                movingState, "brake", 1.2, 100.0, line.getTargetStopPosition());
+        SimulationResult brakeResult = service.runContinuation(brakeReq, scenario);
+        TrainState stoppedState = brakeResult.getStates().get(brakeResult.getStates().size() - 1);
+        assertEquals(SimulationPhase.STOPPED, stoppedState.getPhase(),
+                "制动续算末态应为 STOPPED");
+        assertEquals(0.0, stoppedState.getVelocity(), 1.0e-9,
+                "制动续算末态速度应为 0");
+
+        // 用 stoppedState 作为 currentState，再发 MANUAL traction level 5（levelPercent=5/7*100）
+        SimulationControlRequest tractionReq = buildManualControlRequest(
+                stoppedState, "traction", 0.0, 5.0 / 7.0 * 100.0, line.getTargetStopPosition());
+        SimulationResult result = service.runContinuation(tractionReq, scenario);
+
+        List<TrainState> states = result.getStates();
+        assertFalse(states.isEmpty(), "停稳后再牵引续算 states 不能为空");
+
+        boolean hasTraction = false;
+        for (int i = 0; i < Math.min(10, states.size()); i++) {
+            if (states.get(i).getPhase() == SimulationPhase.TRACTION) {
+                hasTraction = true;
+                break;
+            }
+        }
+        assertTrue(hasTraction, "停稳后再牵引应出现 TRACTION 帧");
+
+        boolean velocityIncreased = false;
+        for (int i = 0; i < Math.min(10, states.size()); i++) {
+            if (states.get(i).getVelocity() > 0.0) {
+                velocityIncreased = true;
+                break;
+            }
+        }
+        assertTrue(velocityIncreased, "停稳后再牵引速度应从 0 上升（>0）");
+    }
+
+    /**
+     * 若 stopped state 已在 totalTarget 附近（localTarget<=0），再发 traction 不应冲过终点：
+     * 最终 STOPPED，position 不超过 totalTarget + 容差。
+     */
+    @Test
+    void manual_brakeStopNearTarget_tractionRespectsSafety() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        double totalTarget = line.getTargetStopPosition();
+
+        // 构造已停在终点处的 state（localTarget = totalTarget - position = 0 <= 0）
+        TrainState stoppedAtTarget = new TrainState(100.0, totalTarget, 0.0, 0.0,
+                SimulationPhase.STOPPED, "T1");
+        stoppedAtTarget.setAbsolutePosition(313.0 + totalTarget);
+
+        SimulationControlRequest req = buildManualControlRequest(
+                stoppedAtTarget, "traction", 0.0, 5.0 / 7.0 * 100.0, totalTarget);
+        SimulationResult result = service.runContinuation(req, scenario);
+
+        List<TrainState> states = result.getStates();
+        assertFalse(states.isEmpty());
+        TrainState last = states.get(states.size() - 1);
+        assertEquals(SimulationPhase.STOPPED, last.getPhase(),
+                "终点附近再牵引应被安全停车逻辑拦下，最终 STOPPED");
+        assertTrue(last.getPosition() <= totalTarget + 0.5,
+                "已到终点附近再牵引不应冲过终点，最终位置=" + last.getPosition()
+                        + " totalTarget+容差=" + (totalTarget + 0.5));
+    }
+
+    /**
+     * MANUAL + resume_ato 后：summary.currentMode=ato，states 非空，最终能 STOPPED 停车。
+     */
+    @Test
+    void manual_resumeAto_continuesAutoStrategy() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult full = service.run(scenario);
+        TrainState midState = full.getStates().get(full.getStates().size() / 3);
+        midState.setAbsolutePosition(313.0 + midState.getPosition());
+
+        SimulationControlRequest req = new SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(midState);
+        req.setCurrentMode(DrivingMode.MANUAL);
+        req.setControlCommand(new ControlCommand("resume_ato", 0.0, 0.0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        SimulationResult result = service.runContinuation(req, scenario);
+
+        assertEquals(DrivingMode.ATO, result.getSummary().getCurrentMode(),
+                "MANUAL + resume_ato 后 currentMode 应为 ato");
+        assertFalse(result.getStates().isEmpty(), "resume_ato 续算 states 不能为空");
+        assertEquals(SimulationPhase.STOPPED,
+                result.getStates().get(result.getStates().size() - 1).getPhase(),
+                "resume_ato 后应按 ATO 自动策略续算并最终 STOPPED 停车");
+    }
+
+    /**
+     * EMERGENCY + resume_ato 应抛 IllegalArgumentException（紧急模式不能直接恢复 ATO）。
+     */
+    @Test
+    void emergency_resumeAto_rejected() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        TrainState state = makeMovingState(30.0, 300.0, 5.0, "braking");
+
+        SimulationControlRequest req = new SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(state);
+        req.setCurrentMode(DrivingMode.EMERGENCY);
+        req.setControlCommand(new ControlCommand("resume_ato", 0.0, 0.0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.runContinuation(req, scenario));
+        assertTrue(ex.getMessage().contains("紧急模式不能直接恢复 ATO"),
+                "异常消息应说明紧急模式不能直接恢复 ATO，实际：" + ex.getMessage());
+    }
+
+    /**
+     * EMERGENCY 停稳 state（velocity=0, phase=STOPPED）+ reset_emergency：
+     * summary.currentMode=manual，nextMode=null，states 仅一帧，safetyEvents/stationStops 为空。
+     */
+    @Test
+    void emergency_resetEmergency_whenStopped_returnsManual() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        double totalTarget = line.getTargetStopPosition();
+
+        TrainState stoppedState = new TrainState(50.0, 400.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "T1");
+        stoppedState.setAbsolutePosition(313.0 + 400.0);
+
+        SimulationControlRequest req = new SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(stoppedState);
+        req.setCurrentMode(DrivingMode.EMERGENCY);
+        req.setControlCommand(new ControlCommand("reset_emergency", 0.0, 0.0));
+        req.setTotalTargetPosition(totalTarget);
+
+        SimulationResult result = service.runContinuation(req, scenario);
+
+        assertEquals(DrivingMode.MANUAL, result.getSummary().getCurrentMode(),
+                "EMERGENCY 停稳后 reset_emergency 应复位到 MANUAL");
+        assertNull(result.getSummary().getNextMode(),
+                "reset_emergency 后 nextMode 应为 null（已复位）");
+        assertEquals(1, result.getStates().size(), "reset_emergency 应只返回一个停稳帧");
+        TrainState only = result.getStates().get(0);
+        assertEquals(SimulationPhase.STOPPED, only.getPhase());
+        assertEquals(0.0, only.getVelocity(), 1.0e-9);
+        assertEquals(0.0, only.getAcceleration(), 1.0e-9);
+        assertEquals(400.0, only.getPosition(), 1.0e-9, "复位后位置应保持不变");
+        assertTrue(result.getSafetyEvents().isEmpty(), "reset_emergency 不应生成 SafetyEvent");
+        assertTrue(result.getStationStops().isEmpty(), "reset_emergency stationStops 应为空");
+        assertNotNull(result.getStopResult(), "reset_emergency 仍应返回 stopResult");
+        assertEquals(totalTarget, result.getStopResult().getTargetStopPosition(), 1.0e-9);
+    }
+
+    /**
+     * EMERGENCY 未停稳 state（velocity=2.0）+ reset_emergency 应抛 IllegalArgumentException。
+     */
+    @Test
+    void emergency_resetEmergency_whenNotStopped_rejected() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+
+        TrainState movingState = new TrainState(40.0, 300.0, 2.0, -1.2,
+                SimulationPhase.BRAKING, "T1");
+        movingState.setAbsolutePosition(313.0 + 300.0);
+
+        SimulationControlRequest req = new SimulationControlRequest();
+        req.setFromStationId(1);
+        req.setToStationId(2);
+        req.setCurrentState(movingState);
+        req.setCurrentMode(DrivingMode.EMERGENCY);
+        req.setControlCommand(new ControlCommand("reset_emergency", 0.0, 0.0));
+        req.setTotalTargetPosition(line.getTargetStopPosition());
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.runContinuation(req, scenario));
+        assertTrue(ex.getMessage().contains("未停稳"),
+                "异常消息应说明未停稳不能复位，实际：" + ex.getMessage());
     }
 }
