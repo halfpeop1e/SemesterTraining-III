@@ -1,17 +1,26 @@
 package com.bjtu.railtransit.domain.model;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalTime;
 import java.util.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 /**
- * 客流倍率模型 —— 基于时段 + 站点权重 + 断面客流累积的规则模型。
+ * 客流倍率模型 —— 基于真实进站数据 + 上下车比率 + 断面客流累积。
  *
  * 核心公式:
  *   SectionLoad_i = SectionLoad_{i-1} + Boarding_i - Alighting_i
  *   Boarding_i(t) = StationActivity_i(t) × boardingRatio_i
  *   Alighting_i(t) = StationActivity_i(t) × alightingRatio_i
- *   StationActivity_i(t) = BASE_FLOW × PeriodMultiplier(t) × StationWeight_i × EventMultiplier
+ *   StationActivity_i(t) = EntryCount(station_i, hour(t)) × EventMultiplier
  *   P_peak_section(t) = max(SectionLoad_i)
  *   h_demand = (3600 × C × L_target) / P_peak_section(t)
+ *
+ * 数据来源: data/line9-hourly-entry-flow.csv（北京地铁9号线各站分时进站量）
  *
  * 参考:
  *   - 城市轨道交通断面客流预测与运力配置研究 (交通运输系统工程与信息, 2024)
@@ -93,7 +102,6 @@ public class PassengerFlowModel {
     // ================================================================
     // 常量参数
     // ================================================================
-    public static final double BASE_FLOW_PER_STATION = 800.0;   // 平峰基准 人次/h
     public static final int TRAIN_CAPACITY = 1460;              // 6B定员
     public static final double TARGET_LOAD_FACTOR = 0.85;       // 目标满载率
     public static final double MIN_HEADWAY_SEC = 120;            // 最密间隔 (CBTC限制)
@@ -109,21 +117,191 @@ public class PassengerFlowModel {
 
     private double eventMultiplier = EVENT_NONE;
 
+    /**
+     * 真实分时进站数据: stationId → hourOfDay(0-23) → entry_count
+     * 从 data/line9-hourly-entry-flow.csv 加载
+     */
+    private final Map<Integer, Map<Integer, Double>> hourlyEntryFlow;
+
+    /**
+     * 站点周边人口密度 (人/km²): stationId → density
+     * 从 data/line9-population-density.json (WorldPop 2020) 加载
+     */
+    private final Map<Integer, Double> stationDensity;
+
+    /**
+     * 居住指数: 0=就业型(高密度城区), 1=居住型(低密度郊区)
+     */
+    private final Map<Integer, Double> residentialIndex;
+
+    public PassengerFlowModel() {
+        this.hourlyEntryFlow = loadHourlyEntryFlow();
+        this.stationDensity = loadStationDensity();
+        this.residentialIndex = computeResidentialIndex();
+    }
+
+    /**
+     * 从 WorldPop JSON 加载各站周边人口密度
+     */
+    private Map<Integer, Double> loadStationDensity() {
+        Map<Integer, Double> density = new LinkedHashMap<>();
+        try (InputStreamReader reader = new InputStreamReader(
+                getClass().getClassLoader().getResourceAsStream("data/line9-population-density.json"),
+                StandardCharsets.UTF_8)) {
+            if (reader == null) {
+                System.err.println("[PassengerFlowModel] Density JSON not found");
+                return density;
+            }
+            ObjectMapper mapper = new ObjectMapper();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> points = mapper.readValue(reader, List.class);
+
+            // Aggregate density per station by finding nearest station for each grid point
+            Map<Integer, List<Double>> stationPoints = new LinkedHashMap<>();
+            for (Map<String, Object> pt : points) {
+                double lat = ((Number) pt.get("lat")).doubleValue();
+                double lng = ((Number) pt.get("lng")).doubleValue();
+                double d = ((Number) pt.get("density")).doubleValue();
+                // Find nearest station
+                int nearestId = -1;
+                double minDist = Double.MAX_VALUE;
+                for (Map.Entry<Integer, Double> e : STATION_WEIGHTS.entrySet()) {
+                    // Get station coordinates from stationIds order
+                    int idx = getStationIds().indexOf(e.getKey());
+                    if (idx < 0) continue;
+                    double sLat = 39.81338 + idx * (39.94184 - 39.81338) / 12.0; // interpolated lat
+                    double sLng = 116.29606 + idx * (116.31906 - 116.29606) / 12.0;
+                    double dist = Math.sqrt(Math.pow(lat - sLat, 2) + Math.pow(lng - sLng, 2));
+                    if (dist < minDist) {
+                        minDist = dist;
+                        nearestId = e.getKey();
+                    }
+                }
+                if (nearestId > 0) {
+                    stationPoints.computeIfAbsent(nearestId, k -> new ArrayList<>()).add(d);
+                }
+            }
+            // Compute mean density per station
+            for (Map.Entry<Integer, List<Double>> e : stationPoints.entrySet()) {
+                double mean = e.getValue().stream().mapToDouble(v -> v).average().orElse(5000);
+                density.put(e.getKey(), mean);
+            }
+        } catch (IOException e) {
+            System.err.println("[PassengerFlowModel] Failed to load density: " + e.getMessage());
+        }
+        return density;
+    }
+
+    /**
+     * 居住指数 = 1 − 本站密度 / 全线最高密度。
+     * 南部低密度郊区(郭公庄)≈0.85, 北部高密度城区(国图)≈0.15
+     */
+    private Map<Integer, Double> computeResidentialIndex() {
+        Map<Integer, Double> index = new LinkedHashMap<>();
+        if (stationDensity.isEmpty()) {
+            // Fallback: use station weights
+            for (int id : getStationIds()) {
+                double w = STATION_WEIGHTS.getOrDefault(id, 1.0);
+                index.put(id, Math.max(0, Math.min(1, 1.0 - w / 2.0)));
+            }
+            return index;
+        }
+        double maxDensity = stationDensity.values().stream().mapToDouble(v -> v).max().orElse(1);
+        for (int id : getStationIds()) {
+            double d = stationDensity.getOrDefault(id, 5000.0);
+            index.put(id, Math.max(0, Math.min(1, 1.0 - d / maxDensity)));
+        }
+        return index;
+    }
+
+    /**
+     * 从 classpath 加载 CSV 进站客流数据
+     */
+    private Map<Integer, Map<Integer, Double>> loadHourlyEntryFlow() {
+        Map<Integer, Map<Integer, Double>> data = new LinkedHashMap<>();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(
+                        getClass().getClassLoader().getResourceAsStream("data/line9-hourly-entry-flow.csv"),
+                        StandardCharsets.UTF_8))) {
+            if (reader == null) {
+                System.err.println("[PassengerFlowModel] CSV not found on classpath, falling back to formula");
+                return data;
+            }
+            String line;
+            boolean first = true;
+            while ((line = reader.readLine()) != null) {
+                if (first) { first = false; continue; } // skip header
+                String[] cols = line.split(",");
+                if (cols.length < 5) continue;
+                int stationId = Integer.parseInt(cols[0].trim());
+                // hour_slot format: "6-7", parse start hour
+                String[] hourParts = cols[3].trim().split("-");
+                int hour = Integer.parseInt(hourParts[0]);
+                double entryCount = Double.parseDouble(cols[4].trim());
+                data.computeIfAbsent(stationId, k -> new LinkedHashMap<>()).put(hour, entryCount);
+            }
+        } catch (IOException e) {
+            System.err.println("[PassengerFlowModel] Failed to load CSV: " + e.getMessage());
+        }
+        return data;
+    }
+
+    /**
+     * 从 CSV 查找指定站点的进站量（基于真实系统时间），
+     * 叠加居住指数调制 + 小时内平滑波动，模拟真实时变客流。
+     * 每 2 分钟平滑变化一次，避免整点突变。
+     */
+    private double getEntryCount(int stationId, double simTimeSeconds) {
+        LocalTime now = LocalTime.now();
+        int hour = now.getHour();
+        int minute = now.getMinute();
+        Map<Integer, Double> stationData = hourlyEntryFlow.get(stationId);
+
+        // Base: current hour CSV value, or fallback
+        double base;
+        if (stationData != null && stationData.containsKey(hour)) {
+            base = stationData.get(hour);
+        } else {
+            TimePeriod period = TimePeriod.fromSimTime(hour * 3600.0);
+            double weight = STATION_WEIGHTS.getOrDefault(stationId, 0.8);
+            base = 800.0 * period.baseMultiplier * weight;
+        }
+
+        // ── Residential index modulation ──
+        // Morning peak (7-9): residential areas board MORE, commercial areas board LESS
+        // Evening peak (17-19): commercial areas board MORE, residential areas board LESS
+        double resIdx = residentialIndex.getOrDefault(stationId, 0.5);
+        double peakDirection = 0;
+        if (hour >= 7 && hour <= 9) peakDirection = 1.0;   // morning peak
+        else if (hour >= 17 && hour <= 19) peakDirection = -1.0; // evening peak
+
+        // Modulation: residential stations ±40% during peaks
+        double resMod = 1.0 + (resIdx - 0.5) * peakDirection * 0.4;
+
+        // ── Intra-hour smoothing (sine wave, transitions smoothly) ──
+        // Peaks at minute 30 (×1.15), valleys at minute 0/60 (×0.85)
+        double intraHourSin = 0.85 + 0.15 * Math.pow(Math.sin(Math.PI * minute / 60.0), 2);
+
+        return base * resMod * intraHourSin;
+    }
+
     // ================================================================
     // 公开方法
     // ================================================================
 
     public void setEventMultiplier(double v) { this.eventMultiplier = v; }
     public double getEventMultiplier() { return eventMultiplier; }
-    public TimePeriod getCurrentPeriod(double simTimeSeconds) { return TimePeriod.fromSimTime(simTimeSeconds); }
+    public TimePeriod getCurrentPeriod(double simTimeSeconds) {
+        int hour = java.time.LocalTime.now().getHour();
+        return TimePeriod.fromSimTime(hour * 3600.0);
+    }
 
     /**
      * 站点 i 的总活动量（上下车合计，人次/小时）
+     * 优先使用 CSV 真实进站数据，无数据时回退旧公式
      */
     public double getStationActivity(int stationId, double simTimeSeconds) {
-        TimePeriod period = TimePeriod.fromSimTime(simTimeSeconds);
-        double weight = STATION_WEIGHTS.getOrDefault(stationId, 0.8);
-        return BASE_FLOW_PER_STATION * period.baseMultiplier * weight * eventMultiplier;
+        return getEntryCount(stationId, simTimeSeconds) * eventMultiplier;
     }
 
     /**
