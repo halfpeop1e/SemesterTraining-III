@@ -1,26 +1,46 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Link } from 'react-router-dom';
-import { Alert, Spin } from 'antd';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import ReactEChartsCore from 'echarts-for-react/lib/core';
-import * as echarts from 'echarts/core';
-import { LineChart } from 'echarts/charts';
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Link } from "react-router-dom";
+import { Alert, Spin } from "antd";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import "leaflet.heat";
+import ReactEChartsCore from "echarts-for-react/lib/core";
+import * as echarts from "echarts/core";
+import { LineChart } from "echarts/charts";
+import {
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+} from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
-import { getLineMap, applyStrategy } from '../../api/dispatch';
-import { useSimulation } from '../../context/SimulationContext';
+echarts.use([
+  LineChart,
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  CanvasRenderer,
+]);
+import {
+  getLineMap,
+  applyStrategy,
+  injectFault,
+  clearFault,
+  getSystemStates,
+  getStationEntryFlow,
+  getPopulationDensity,
+  type StationEntryFlowItem,
+  type PopulationDensityPoint,
+} from "../../api/dispatch";
+import { useSimulation } from "../../context/SimulationContext";
 import type {
-  SimulationSnapshot,
   StationGeo,
   TrainState,
   TrainPositionPoint,
-  StationArrival,
-  HeadwayInfo,
-  TrainCommand,
-} from '../../types/dispatch';
+  TractionSystemState,
+  BrakingSystemState,
+} from "../../types/dispatch";
+import DispatcherWorkstationPanel from "./DispatcherWorkstation";
 
 /* ================================================================
    Fix Leaflet icons
@@ -28,9 +48,10 @@ import type {
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
 /* ================================================================
@@ -38,40 +59,102 @@ L.Icon.Default.mergeOptions({
    ================================================================ */
 
 const TILE_LAYERS = {
-  dark:     { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', label: 'Dark', attribution: '&copy; CartoDB' },
-  standard: { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', label: 'Standard', attribution: '&copy; OSM' },
-  satellite:{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', label: 'Satellite', attribution: '&copy; Esri' },
+  dark: {
+    url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    label: "Dark",
+    attribution: "&copy; CartoDB",
+  },
+  standard: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    label: "Standard",
+    attribution: "&copy; OSM",
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    label: "Satellite",
+    attribution: "&copy; Esri",
+  },
 } as const;
 type TileMode = keyof typeof TILE_LAYERS;
 
-const SPEED_OPTIONS = [{ label: '1x', steps: 1 }, { label: '2x', steps: 2 }, { label: '5x', steps: 5 }, { label: '10x', steps: 10 }];
+const SPEED_OPTIONS = [
+  { label: "1x", steps: 1 },
+  { label: "2x", steps: 2 },
+  { label: "5x", steps: 5 },
+  { label: "10x", steps: 10 },
+];
 
 /* ================================================================
    Data Helpers
    ================================================================ */
 
-const STATUS_LABEL: Record<TrainState['status'], string> = {
-  DEPOT_WAITING: '待发', DEPARTING: '起动', ACCELERATING: '加速', CRUISING: '巡航', BRAKING: '制动', DWELLING: '站停', TURNING_BACK: '折返', FINISHED: '终到',
+const STATUS_LABEL: Partial<Record<TrainState["status"], string>> = {
+  DEPOT_WAITING: "待发",
+  DEPARTING: "起动",
+  ACCELERATING: "加速",
+  CRUISING: "巡航",
+  BRAKING: "制动",
+  DWELLING: "站停",
+  TURNING_BACK: "折返",
+  FINISHED: "终到",
 };
-const STATUS_COLOR: Record<TrainState['status'], string> = {
-  DEPOT_WAITING: '#617088', DEPARTING: '#45aaf2', ACCELERATING: '#00a8e8', CRUISING: '#06d6a0', BRAKING: '#f7b731', DWELLING: '#9b59b6', TURNING_BACK: '#ff9f43', FINISHED: '#fc5c65',
+const STATUS_COLOR: Partial<Record<TrainState["status"], string>> = {
+  DEPOT_WAITING: "#617088",
+  DEPARTING: "#45aaf2",
+  ACCELERATING: "#00a8e8",
+  CRUISING: "#06d6a0",
+  BRAKING: "#f7b731",
+  DWELLING: "#9b59b6",
+  TURNING_BACK: "#ff9f43",
+  FINISHED: "#fc5c65",
 };
-const TRAIN_COLORS = ['#00a8e8','#06d6a0','#f7b731','#fc5c65','#9b59b6','#45aaf2','#f368e0','#ff9f43'];
+const RECOVERY_LABEL: Record<number, string> = {
+  0: "L1 赶点",
+  1: "L2 赶点",
+  2: "L3 赶点",
+  3: "L4 赶点",
+};
+const RECOVERY_COLOR: Record<number, string> = {
+  0: "#f7b731",
+  1: "#ff9f43",
+  2: "#fc5c65",
+  3: "#e55058",
+};
+const TRAIN_COLORS = [
+  "#00a8e8",
+  "#06d6a0",
+  "#f7b731",
+  "#fc5c65",
+  "#9b59b6",
+  "#45aaf2",
+  "#f368e0",
+  "#ff9f43",
+];
 
 const fmtTime = (s: number) =>
   [Math.floor(s / 3600), Math.floor((s % 3600) / 60), Math.floor(s % 60)]
-    .map((n) => String(n).padStart(2, '0')).join(':');
+    .map((n) => String(n).padStart(2, "0"))
+    .join(":");
 const fmtNum = (n: number) => Math.round(n).toLocaleString();
 
 function interpolatePos(posMeters: number, sorted: StationGeo[]) {
   const km = posMeters / 1000;
-  if (km <= sorted[0].km) return { lat: sorted[0].latitude, lng: sorted[0].longitude };
-  if (km >= sorted[sorted.length - 1].km) return { lat: sorted[sorted.length - 1].latitude, lng: sorted[sorted.length - 1].longitude };
+  if (km <= sorted[0].km)
+    return { lat: sorted[0].latitude, lng: sorted[0].longitude };
+  if (km >= sorted[sorted.length - 1].km)
+    return {
+      lat: sorted[sorted.length - 1].latitude,
+      lng: sorted[sorted.length - 1].longitude,
+    };
   let ni = 1;
   while (ni < sorted.length && sorted[ni].km < km) ni++;
-  const p = sorted[ni - 1], n = sorted[ni];
+  const p = sorted[ni - 1],
+    n = sorted[ni];
   const r = (km - p.km) / (n.km - p.km);
-  return { lat: p.latitude + (n.latitude - p.latitude) * r, lng: p.longitude + (n.longitude - p.longitude) * r };
+  return {
+    lat: p.latitude + (n.latitude - p.latitude) * r,
+    lng: p.longitude + (n.longitude - p.longitude) * r,
+  };
 }
 
 /* ================================================================
@@ -89,7 +172,10 @@ function TrainDiagram({
   simTime: number;
   plannedPoints: TrainPositionPoint[];
 }) {
-  const sortedStations = useMemo(() => [...stations].sort((a, b) => a.id - b.id), [stations]);
+  const sortedStations = useMemo(
+    () => [...stations].sort((a, b) => a.id - b.id),
+    [stations],
+  );
 
   const option = useMemo(() => {
     if (sortedStations.length < 2) return {};
@@ -115,14 +201,18 @@ function TrainDiagram({
       });
       Object.entries(byTrainPlanned).forEach(([tid, pts]) => {
         pts.sort((a, b) => a.timeSeconds - b.timeSeconds);
-        const color = TRAIN_COLORS[(parseInt(tid.slice(1)) - 1) % TRAIN_COLORS.length];
+        const color =
+          TRAIN_COLORS[(parseInt(tid.slice(1)) - 1) % TRAIN_COLORS.length];
         series.push({
-          type: 'line',
-          name: tid + ' 计划',
+          type: "line",
+          name: tid + " 计划",
           data: pts.map((p) => [p.timeSeconds, p.positionKm]),
-          symbol: 'none',
-          lineStyle: { color, type: 'dashed', width: 1, opacity: 0.35 },
-          emphasis: { focus: 'series', lineStyle: { opacity: 0.7, width: 1.5 } },
+          symbol: "none",
+          lineStyle: { color, type: "dashed", width: 1, opacity: 0.35 },
+          emphasis: {
+            focus: "series",
+            lineStyle: { opacity: 0.7, width: 1.5 },
+          },
           silent: true,
         });
       });
@@ -136,116 +226,132 @@ function TrainDiagram({
       const last = pts[pts.length - 1];
 
       // 第一个系列上添加站点 markLine（水平线 + 站名）
-      const markLine = idx === 0 ? {
-        silent: true,
-        symbol: 'none',
-        animation: false,
-        lineStyle: { color: 'rgba(97,112,136,0.25)', type: 'solid', width: 1 },
-        label: {
-          show: true,
-          position: 'insideStartTop' as const,
-          color: '#94a3b8',
-          fontSize: 10,
-          fontWeight: 'bold' as const,
-          fontFamily: '-apple-system,sans-serif',
-          distance: [6, 4],
-          formatter: (p: any) => p.name,
-        },
-        data: sortedStations.map(s => ({ yAxis: s.km, name: s.name })),
-      } : undefined;
+      const markLine =
+        idx === 0
+          ? {
+              silent: true,
+              symbol: "none",
+              animation: false,
+              lineStyle: {
+                color: "rgba(97,112,136,0.25)",
+                type: "solid",
+                width: 1,
+              },
+              label: {
+                show: true,
+                position: "insideStartTop" as const,
+                color: "#94a3b8",
+                fontSize: 10,
+                fontWeight: "bold" as const,
+                fontFamily: "-apple-system,sans-serif",
+                distance: [6, 4],
+                formatter: (p: any) => p.name,
+              },
+              data: sortedStations.map((s) => ({ yAxis: s.km, name: s.name })),
+            }
+          : undefined;
 
       return {
-        type: 'line',
+        type: "line",
         name: tid,
         data,
-        symbol: 'none',
+        symbol: "none",
         lineStyle: { color, width: 2 },
-        emphasis: { lineStyle: { width: 3 }, focus: 'series' },
+        emphasis: { lineStyle: { width: 3 }, focus: "series" },
         markLine,
-        markPoint: pts.length > 0 ? {
-          silent: true,
-          symbol: 'none',
-          data: [{
-            name: tid,
-            coord: [last.timeSeconds, last.positionKm],
-            value: tid,
-            symbolOffset: [5, 0],
-            label: {
-              show: true,
-              color,
-              fontSize: 10,
-              fontWeight: 'bold',
-              fontFamily: 'JetBrains Mono,monospace',
-              position: 'right',
-              distance: 2,
-            },
-          }],
-        } : undefined,
+        markPoint:
+          pts.length > 0
+            ? {
+                silent: true,
+                symbol: "none",
+                data: [
+                  {
+                    name: tid,
+                    coord: [last.timeSeconds, last.positionKm],
+                    value: tid,
+                    symbolOffset: [5, 0],
+                    label: {
+                      show: true,
+                      color,
+                      fontSize: 10,
+                      fontWeight: "bold",
+                      fontFamily: "JetBrains Mono,monospace",
+                      position: "right",
+                      distance: 2,
+                    },
+                  },
+                ],
+              }
+            : undefined,
       };
     });
 
     // Current-time dashed vertical line
     series.push({
-      type: 'line',
-      name: 'NOW',
-      data: [[simTime, 0], [simTime, maxKm]],
-      lineStyle: { color: 'rgba(252,92,101,0.45)', type: 'dashed', width: 1 },
-      symbol: 'none',
+      type: "line",
+      name: "NOW",
+      data: [
+        [simTime, 0],
+        [simTime, maxKm],
+      ],
+      lineStyle: { color: "rgba(252,92,101,0.45)", type: "dashed", width: 1 },
+      symbol: "none",
       silent: true,
     });
 
     return {
-      backgroundColor: 'transparent',
+      backgroundColor: "transparent",
       grid: { left: 28, right: 24, top: 12, bottom: 28 },
       xAxis: {
-        type: 'value',
+        type: "value",
         min: 0,
         max: maxTime,
-        axisLine: { show: true, lineStyle: { color: '#1c2a3e' } },
+        axisLine: { show: true, lineStyle: { color: "#1c2a3e" } },
         axisTick: { show: false },
         axisLabel: {
-          color: '#617088',
+          color: "#617088",
           fontSize: 9,
-          fontFamily: '-apple-system,sans-serif',
+          fontFamily: "-apple-system,sans-serif",
           formatter: (v: number) => fmtTime(v),
         },
         splitLine: { show: false },
       },
       yAxis: {
-        type: 'value',
+        type: "value",
         min: 0,
         max: maxKm,
         inverse: true,
-        axisLine: { show: true, lineStyle: { color: '#1c2a3e' } },
+        axisLine: { show: true, lineStyle: { color: "#1c2a3e" } },
         axisTick: { show: false },
         axisLabel: {
-          color: '#617088',
+          color: "#617088",
           fontSize: 9,
-          fontFamily: 'JetBrains Mono,monospace',
+          fontFamily: "JetBrains Mono,monospace",
           formatter: (v: number) => `${v.toFixed(1)} km`,
         },
         splitLine: {
           show: true,
-          lineStyle: { color: '#152433', type: 'solid', width: 0.5 },
+          lineStyle: { color: "#152433", type: "solid", width: 0.5 },
         },
       },
       tooltip: {
-        trigger: 'item',
-        backgroundColor: 'rgba(13,21,32,0.95)',
-        borderColor: '#1c2a3e',
+        trigger: "item",
+        backgroundColor: "rgba(13,21,32,0.95)",
+        borderColor: "#1c2a3e",
         padding: [8, 12],
-        textStyle: { color: '#e2e8f0', fontSize: 11 },
+        textStyle: { color: "#e2e8f0", fontSize: 11 },
         formatter: (params: any) => {
-          if (params.seriesName === 'NOW') return `<b>当前时刻</b><br/>${fmtTime(simTime)}`;
+          if (params.seriesName === "NOW")
+            return `<b>当前时刻</b><br/>${fmtTime(simTime)}`;
           if (params.seriesName && params.value) {
             return `<b style="color:${params.color}">${params.seriesName}</b><br/>模拟时间: ${fmtTime(params.value[0])}<br/>里程位置: ${Number(params.value[1]).toFixed(2)} km`;
           }
-          return '';
+          return "";
         },
       },
       series,
       animationDuration: 600,
-      animationEasing: 'cubicInOut' as const,
+      animationEasing: "cubicInOut" as const,
     };
   }, [history, sortedStations, simTime]);
 
@@ -258,10 +364,10 @@ function TrainDiagram({
       <ReactEChartsCore
         echarts={echarts}
         option={option}
-        style={{ width: '100%', height: '100%' }}
+        style={{ width: "100%", height: "100%" }}
         notMerge={false}
         lazyUpdate={true}
-        opts={{ renderer: 'canvas' }}
+        opts={{ renderer: "canvas" }}
       />
     </div>
   );
@@ -271,7 +377,35 @@ function TrainDiagram({
    MapView
    ================================================================ */
 
-function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; trains: TrainState[]; tileMode: TileMode }) {
+function MapView({
+  stations,
+  trains,
+  tileMode,
+  showHeatmap,
+  passengerFlow,
+  stationEntryFlow,
+  stationDailyFlow,
+  showPopulationHeatmap,
+  popDensityPoints,
+}: {
+  stations: StationGeo[];
+  trains: TrainState[];
+  tileMode: TileMode;
+  showHeatmap: boolean;
+  passengerFlow: {
+    sectionFlows: {
+      fromStationId: number;
+      toStationId: number;
+      boarding: number;
+      alighting: number;
+      load: number;
+    }[];
+  } | null;
+  stationEntryFlow: Record<number, number>;
+  stationDailyFlow: Record<number, number>;
+  showPopulationHeatmap: boolean;
+  popDensityPoints: { lat: number; lng: number; density: number }[];
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
@@ -280,100 +414,292 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
   const carMrkRef = useRef<L.CircleMarker[]>([]);
   const lineRef = useRef<L.Polyline | null>(null);
   const glowRef = useRef<L.Polyline | null>(null);
+  const heatLayerRef = useRef<L.CircleMarker[]>([]);
+  const popHeatLayerRef = useRef<any>(null);
   const fitDone = useRef(false);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, { center: [39.88, 116.31], zoom: 12, zoomControl: true, attributionControl: true });
-    map.attributionControl.setPrefix('');
+    const map = L.map(containerRef.current, {
+      center: [39.88, 116.31],
+      zoom: 12,
+      zoomControl: true,
+      attributionControl: true,
+    });
+    map.attributionControl.setPrefix("");
     const tile = TILE_LAYERS[tileMode];
-    tileLayerRef.current = L.tileLayer(tile.url, { maxZoom: 19, attribution: tile.attribution }).addTo(map);
+    tileLayerRef.current = L.tileLayer(tile.url, {
+      maxZoom: 19,
+      attribution: tile.attribution,
+    }).addTo(map);
     mapRef.current = map;
-    const fix = () => { map.invalidateSize(); };
-    setTimeout(fix, 100); setTimeout(fix, 400);
-    window.addEventListener('resize', fix);
+    const fix = () => {
+      if (!mapRef.current) return;
+      mapRef.current.invalidateSize();
+    };
+    const t1 = setTimeout(fix, 100);
+    const t2 = setTimeout(fix, 400);
+    window.addEventListener("resize", fix);
     const ro = new ResizeObserver(() => fix());
     if (containerRef.current) ro.observe(containerRef.current);
-    return () => { window.removeEventListener('resize', fix); ro.disconnect(); tileLayerRef.current?.remove(); map.remove(); mapRef.current = null; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener("resize", fix);
+      ro.disconnect();
+      tileLayerRef.current?.remove();
+      map.remove();
+      mapRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const map = mapRef.current; if (!map) return;
+    const map = mapRef.current;
+    if (!map) return;
     if (tileLayerRef.current) map.removeLayer(tileLayerRef.current);
     const t = TILE_LAYERS[tileMode];
-    tileLayerRef.current = L.tileLayer(t.url, { maxZoom: 19, attribution: t.attribution }).addTo(map);
+    tileLayerRef.current = L.tileLayer(t.url, {
+      maxZoom: 19,
+      attribution: t.attribution,
+    }).addTo(map);
   }, [tileMode]);
 
   useEffect(() => {
-    const map = mapRef.current; if (!map || stations.length === 0) return;
-    stationMrkRef.current.forEach((m) => m.remove()); stationMrkRef.current = [];
-    lineRef.current?.remove(); glowRef.current?.remove();
+    const map = mapRef.current;
+    if (!map || stations.length === 0) return;
+    stationMrkRef.current.forEach((m) => m.remove());
+    stationMrkRef.current = [];
+    lineRef.current?.remove();
+    glowRef.current?.remove();
     const sorted = [...stations].sort((a, b) => a.id - b.id);
-    const coords: [number, number][] = sorted.map((s) => [s.latitude, s.longitude]);
-    glowRef.current = L.polyline(coords, { color: '#00a8e8', weight: 8, opacity: 0.15, lineCap: 'round', lineJoin: 'round' }).addTo(map);
-    lineRef.current = L.polyline(coords, { color: '#00a8e8', weight: 3, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    const coords: [number, number][] = sorted.map((s) => [
+      s.latitude,
+      s.longitude,
+    ]);
+    glowRef.current = L.polyline(coords, {
+      color: "#00a8e8",
+      weight: 8,
+      opacity: 0.15,
+      lineCap: "round",
+      lineJoin: "round",
+    }).addTo(map);
+    lineRef.current = L.polyline(coords, {
+      color: "#00a8e8",
+      weight: 3,
+      opacity: 0.9,
+      lineCap: "round",
+      lineJoin: "round",
+    }).addTo(map);
     sorted.forEach((s) => {
       const m = L.circleMarker([s.latitude, s.longitude], {
-        radius: (s.id === 1 || s.id === sorted.length) ? 9 : 7,
-        fillColor: '#060b11', fillOpacity: 1, color: '#00a8e8', weight: 2.5,
+        radius: s.id === 1 || s.id === sorted.length ? 9 : 7,
+        fillColor: "#060b11",
+        fillOpacity: 1,
+        color: "#00a8e8",
+        weight: 2.5,
       }).addTo(map);
-      m.bindTooltip(`<div style="text-align:center;font-weight:700;font-size:12px;color:#e2e8f0;">${s.name}</div><div style="font-size:10px;color:#617088;margin-top:2px;">${s.km.toFixed(1)} km</div>`,{direction:'top',offset:[0,-10],className:'d-tooltip'});
-      m.on('mouseover',()=>m.setStyle({fillColor:'#00a8e8'})); m.on('mouseout',()=>m.setStyle({fillColor:'#060b11'}));
+      m.bindTooltip(
+        `<div style="text-align:center;font-weight:700;font-size:12px;color:#e2e8f0;">${s.name}</div><div style="font-size:10px;color:#617088;margin-top:2px;">${s.km.toFixed(1)} km</div>`,
+        { direction: "top", offset: [0, -10], className: "d-tooltip" },
+      );
+      m.on("mouseover", () => m.setStyle({ fillColor: "#00a8e8" }));
+      m.on("mouseout", () => m.setStyle({ fillColor: "#060b11" }));
       stationMrkRef.current.push(m);
     });
     // Auto-fit map bounds to cover all stations (delay ensures container has size)
     if (!fitDone.current) {
       const doFit = () => {
-        const bounds = L.latLngBounds(sorted.map(s => [s.latitude, s.longitude]));
-        map.fitBounds(bounds, { padding: [30, 30] });
-        fitDone.current = true;
+        const map = mapRef.current;
+        if (!map || !containerRef.current) return;
+        // 确保容器有尺寸再调用 fitBounds，避免 Leaflet _leaflet_pos 错误
+        const container = containerRef.current;
+        if (container.clientWidth === 0 || container.clientHeight === 0) {
+          setTimeout(doFit, 200);
+          return;
+        }
+        const bounds = L.latLngBounds(
+          sorted.map((s) => [s.latitude, s.longitude]),
+        );
+        try {
+          map.fitBounds(bounds, { padding: [30, 30] });
+          fitDone.current = true;
+        } catch {
+          // fitBounds 在容器尺寸变化时可能失败，忽略
+        }
       };
       setTimeout(doFit, 300);
     }
   }, [stations]);
 
   useEffect(() => {
-    const map = mapRef.current; if (!map || stations.length === 0) return;
-    trainMrkRef.current.forEach((m) => m.remove()); trainMrkRef.current = [];
-    carMrkRef.current.forEach((m) => m.remove()); carMrkRef.current = [];
+    const map = mapRef.current;
+    if (!map || stations.length === 0) return;
+    trainMrkRef.current.forEach((m) => m.remove());
+    trainMrkRef.current = [];
+    carMrkRef.current.forEach((m) => m.remove());
+    carMrkRef.current = [];
     const sorted = [...stations].sort((a, b) => a.id - b.id);
-    trains.filter((t) => t.status !== 'FINISHED').forEach((t) => {
-      const hp = interpolatePos(t.positionMeters, sorted); if (!hp) return;
-      const bg = STATUS_COLOR[t.status];
-      const isMoving = t.speed > 0;
+    trains
+      .filter((t) => t.status !== "FINISHED")
+      .forEach((t) => {
+        const hp = interpolatePos(t.positionMeters, sorted);
+        if (!hp) return;
+        const bg = STATUS_COLOR[t.status];
+        const isMoving = t.speed > 0;
 
-      // Head car: large circleMarker with tooltip
-      const hm = L.circleMarker([hp.lat, hp.lng], {
-        radius: 9,
-        fillColor: bg,
-        fillOpacity: 0.9,
-        color: '#fff',
+        // Head car: large circleMarker with tooltip
+        const hm = L.circleMarker([hp.lat, hp.lng], {
+          radius: 9,
+          fillColor: bg,
+          fillOpacity: 0.9,
+          color: "#fff",
+          weight: 2,
+        }).addTo(map);
+        hm.bindTooltip(
+          `<div style="font-weight:700;font-size:12px;color:#e2e8f0;">${t.trainNumber || t.trainName} <span style="font-size:9px;color:${t.direction === "DOWN" ? "#f7b731" : "#06d6a0"}">${t.direction === "DOWN" ? "↓" : "↑"}</span></div>
+         <div style="font-size:10px;color:#94a3b8;">${isMoving ? Math.round(t.speed) + " km/h" : STATUS_LABEL[t.status]} · ${t.routePattern === "SHORT_S" ? "南段" : t.routePattern === "SHORT_N" ? "北段" : "全程"}</div>
+         <div style="font-size:9px;color:#617088;">${fmtNum(t.positionMeters)} m · ${t.carCount ?? 6}节${t.turnbackCount > 0 ? " · 折返" + t.turnbackCount + "次" : ""}</div>`,
+          { direction: "top", offset: [0, -12], className: "d-tooltip" },
+        );
+        trainMrkRef.current.push(hm);
+
+        // All cars (including head car's position for all 6 cars)
+        if (t.cars && t.cars.length > 1) {
+          t.cars.slice(1).forEach((car: any) => {
+            const cp = interpolatePos(car.positionMeters, sorted);
+            if (!cp) return;
+            carMrkRef.current.push(
+              L.circleMarker([cp.lat, cp.lng], {
+                radius: 5.5,
+                fillColor: bg,
+                fillOpacity: 0.65,
+                color: "rgba(255,255,255,0.4)",
+                weight: 1,
+              }).addTo(map),
+            );
+          });
+        }
+      });
+  }, [trains, stations]);
+
+  // Passenger heat layer
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    heatLayerRef.current.forEach((m) => m.remove());
+    heatLayerRef.current = [];
+
+    if (!showHeatmap || stations.length === 0) return;
+
+    // Determine flow data source: stationEntryFlow (CSV) > passengerFlow (simulation)
+    let stationFlow: Record<number, number> = {};
+
+    if (Object.keys(stationEntryFlow).length > 0) {
+      // Use CSV station entry flow data
+      stationFlow = { ...stationEntryFlow };
+    } else if (passengerFlow?.sectionFlows?.length) {
+      // Fallback: aggregate boarding+alighting per station from simulation
+      passengerFlow.sectionFlows.forEach((sf) => {
+        stationFlow[sf.fromStationId] =
+          (stationFlow[sf.fromStationId] ?? 0) + sf.boarding;
+        stationFlow[sf.toStationId] =
+          (stationFlow[sf.toStationId] ?? 0) + sf.alighting;
+      });
+    }
+
+    const values = Object.values(stationFlow);
+    if (values.length === 0) return;
+    const maxFlow = Math.max(...values, 1);
+
+    // Color gradient: green (#06d6a0) → yellow (#f7b731) → red (#fc5c65)
+    const heatColor = (ratio: number) => {
+      if (ratio < 0.5) {
+        const t = ratio / 0.5;
+        const r = Math.round(6 + t * (247 - 6));
+        const g = Math.round(214 + t * (183 - 214));
+        const b = Math.round(160 + t * (49 - 160));
+        return `rgba(${r},${g},${b},0.55)`;
+      }
+      const t = (ratio - 0.5) / 0.5;
+      const r = Math.round(247 + t * (252 - 247));
+      const g = Math.round(183 + t * (92 - 183));
+      const b = Math.round(49 + t * (101 - 49));
+      return `rgba(${r},${g},${b},0.55)`;
+    };
+
+    Object.entries(stationFlow).forEach(([sidStr, flow]) => {
+      const sid = Number(sidStr);
+      const station = stations.find((s) => s.id === sid);
+      if (!station) return;
+
+      const ratio = flow / maxFlow;
+      const radius = 8 + ratio * 20; // 8 ~ 28 px
+
+      const m = L.circleMarker([station.latitude, station.longitude], {
+        radius,
+        fillColor: heatColor(ratio),
+        fillOpacity: 0.6,
+        color: heatColor(ratio),
         weight: 2,
+        opacity: 0.8,
       }).addTo(map);
-      hm.bindTooltip(
-        `<div style="font-weight:700;font-size:12px;color:#e2e8f0;">${t.trainNumber||t.trainName} <span style="font-size:9px;color:${t.direction==='DOWN'?'#f7b731':'#06d6a0'}">${t.direction==='DOWN'?'↓':'↑'}</span></div>
-         <div style="font-size:10px;color:#94a3b8;">${isMoving ? Math.round(t.speed)+' km/h' : STATUS_LABEL[t.status]} · ${t.routePattern==='SHORT_S'?'南段':t.routePattern==='SHORT_N'?'北段':'全程'}</div>
-         <div style="font-size:9px;color:#617088;">${fmtNum(t.positionMeters)} m · ${t.carCount??6}节${t.turnbackCount>0?' · 折返'+t.turnbackCount+'次':''}</div>`,
-        { direction: 'top', offset: [0, -12], className: 'd-tooltip' }
-      );
-      trainMrkRef.current.push(hm);
 
-      // All cars (including head car's position for all 6 cars)
-      if (t.cars && t.cars.length > 1) {
-        t.cars.slice(1).forEach((car: any) => {
-          const cp = interpolatePos(car.positionMeters, sorted); if (!cp) return;
-          carMrkRef.current.push(L.circleMarker([cp.lat, cp.lng], {
-            radius: 5.5,
-            fillColor: bg,
-            fillOpacity: 0.65,
-            color: 'rgba(255,255,255,0.4)',
-            weight: 1,
-          }).addTo(map));
-        });
+      m.bindTooltip(
+        `<div style="text-align:center;font-weight:700;font-size:12px;color:#e2e8f0;">${station.name}</div>
+         <div style="font-size:10px;color:#f7b731;margin-top:2px;">客流量 ${flow.toFixed(0)} 人次/h</div>`,
+        { direction: "top", offset: [0, -10], className: "d-tooltip" },
+      );
+      heatLayerRef.current.push(m);
+    });
+  }, [showHeatmap, passengerFlow, stationEntryFlow, stations]);
+
+  // Population density heat layer (leaflet.heat) — WorldPop real data
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (popHeatLayerRef.current) {
+      map.removeLayer(popHeatLayerRef.current);
+      popHeatLayerRef.current = null;
+    }
+    if (!showPopulationHeatmap || popDensityPoints.length === 0) return;
+
+    const densities = popDensityPoints.map((p) => p.density);
+    const maxDensity = Math.max(...densities, 1);
+
+    // Densify: each 1km cell → 3×3 sub-points for visibility at all zoom levels
+    const CELL_LAT = 0.00417; // ~0.46km half-width at this latitude
+    const CELL_LNG = 0.005; // ~0.43km
+
+    const heatPoints: [number, number, number][] = [];
+    popDensityPoints.forEach((p) => {
+      const intensity = p.density / maxDensity;
+      for (let di = -1; di <= 1; di++) {
+        for (let dj = -1; dj <= 1; dj++) {
+          heatPoints.push([
+            p.lat + di * CELL_LAT,
+            p.lng + dj * CELL_LNG,
+            intensity,
+          ]);
+        }
       }
     });
-  }, [trains, stations]);
+
+    // @ts-expect-error leaflet.heat extends L global
+    popHeatLayerRef.current = L.heatLayer(heatPoints, {
+      radius: 35,
+      blur: 18,
+      maxZoom: 17,
+      max: 0.35,
+      gradient: {
+        0.0: "#0f0",
+        0.25: "#af0",
+        0.5: "#fd0",
+        0.75: "#f60",
+        1.0: "#c00",
+      },
+    }).addTo(map);
+  }, [showPopulationHeatmap, popDensityPoints]);
 
   return <div ref={containerRef} className="d-map-inner" />;
 }
@@ -383,19 +709,188 @@ function MapView({ stations, trains, tileMode }: { stations: StationGeo[]; train
    ================================================================ */
 
 export default function Dispatch() {
-  const { snapshot, isRunning, loading, error, speedIndex, start, stop, step, setSpeed, setError } = useSimulation();
+  const {
+    snapshot,
+    isRunning,
+    loading,
+    error,
+    speedIndex,
+    start,
+    stop,
+    step,
+    reset,
+    setSpeed,
+    setError,
+  } = useSimulation();
   const [stations, setStations] = useState<StationGeo[]>([]);
-  const [tileMode, setTileMode] = useState<TileMode>('dark');
-  const [rightTab, setRightTab] = useState<'trains'|'arrivals'|'commands'|'flow'|'deviation'>('trains');
+  const [tileMode, setTileMode] = useState<TileMode>("dark");
+  const [rightTab, setRightTab] = useState<
+    "trains" | "arrivals" | "commands" | "flow" | "deviation"
+  >("trains");
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [realTime, setRealTime] = useState(
+    new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+  );
+  const [stationEntryFlow, setStationEntryFlow] = useState<
+    Record<number, number>
+  >({});
+  const [stationDailyFlow, setStationDailyFlow] = useState<
+    Record<number, number>
+  >({});
+  const [showPopulationHeatmap, setShowPopulationHeatmap] = useState(false);
+  const [popDensityPoints, setPopDensityPoints] = useState<
+    PopulationDensityPoint[]
+  >([]);
+  const [rawEntryFlowData, setRawEntryFlowData] = useState<
+    StationEntryFlowItem[]
+  >([]);
+  const currentHourRef = useRef(new Date().getHours());
+  const lastMinuteBinRef = useRef(Math.floor(new Date().getMinutes() / 2));
+  const residentialRef = useRef<Record<number, number>>({});
+
+  // Compute residential index per station from population density data
+  const residentialIndex = useMemo(() => {
+    if (popDensityPoints.length === 0 || stations.length === 0)
+      return {} as Record<number, number>;
+    // Aggregate density per station (nearest grid point → station)
+    const stationDensity: Record<number, number> = {};
+    const stationCounts: Record<number, number> = {};
+    popDensityPoints.forEach((p) => {
+      let nearestId = -1;
+      let minDist = Infinity;
+      stations.forEach((s) => {
+        const d = Math.sqrt(
+          (p.lat - s.latitude) ** 2 + (p.lng - s.longitude) ** 2,
+        );
+        if (d < minDist) {
+          minDist = d;
+          nearestId = s.id;
+        }
+      });
+      if (nearestId > 0) {
+        stationDensity[nearestId] =
+          (stationDensity[nearestId] ?? 0) + p.density;
+        stationCounts[nearestId] = (stationCounts[nearestId] ?? 0) + 1;
+      }
+    });
+    const meanDensity: Record<number, number> = {};
+    stations.forEach((s) => {
+      meanDensity[s.id] =
+        (stationDensity[s.id] ?? 5000) / (stationCounts[s.id] ?? 1);
+    });
+    const maxDensity = Math.max(...Object.values(meanDensity), 1);
+    const index: Record<number, number> = {};
+    stations.forEach((s) => {
+      index[s.id] = Math.max(
+        0,
+        Math.min(1, 1 - meanDensity[s.id] / maxDensity),
+      );
+    });
+    residentialRef.current = index;
+    return index;
+  }, [popDensityPoints, stations]);
+
+  // Derive modulated hourly station entry flow from raw data, on hour or 2-min change
+  const updateHourlyFlow = useCallback(
+    (data: StationEntryFlowItem[], hour: number) => {
+      const now = new Date();
+      const minute = now.getMinutes();
+      const hourSlot = `${hour}-${hour + 1}`;
+      const resIdx = residentialRef.current;
+      const keys = Object.keys(resIdx);
+      const peakDir =
+        hour >= 7 && hour <= 9 ? 1 : hour >= 17 && hour <= 19 ? -1 : 0;
+      const intraSin =
+        0.85 + 0.15 * Math.pow(Math.sin((Math.PI * minute) / 60), 2);
+
+      const flow: Record<number, number> = {};
+      data.forEach((item) => {
+        if (item.hourSlot === hourSlot) {
+          const idx = resIdx[item.stationId] ?? 0.5;
+          const resMod = 1 + (idx - 0.5) * peakDir * 0.4;
+          flow[item.stationId] =
+            (flow[item.stationId] ?? 0) + item.entryCount * resMod * intraSin;
+        }
+      });
+      // Fallback: no density data loaded yet, apply only intra-hour smoothing
+      if (keys.length === 0) {
+        data.forEach((item) => {
+          if (item.hourSlot === hourSlot) {
+            flow[item.stationId] =
+              (flow[item.stationId] ?? 0) + item.entryCount * intraSin;
+          }
+        });
+      }
+      setStationEntryFlow(flow);
+    },
+    [],
+  );
 
   useEffect(() => {
-    getLineMap().then((d) => { if (Array.isArray(d) && d.length > 0) setStations(d); else setError('failed load line'); })
-      .catch((e) => setError('Line load: ' + (e?.message || 'network')));
+    getLineMap()
+      .then((d) => {
+        if (Array.isArray(d) && d.length > 0) setStations(d);
+        else setError("failed load line");
+      })
+      .catch((e) => setError("Line load: " + (e?.message || "network")));
   }, []);
 
-  const doStrategy = useCallback(async (trainId: string, type: string, val: number = 0) => {
-    try { await applyStrategy(trainId, type, val); } catch (e: any) { setError(e.message); }
+  useEffect(() => {
+    getStationEntryFlow()
+      .then((data) => {
+        setRawEntryFlowData(data);
+        updateHourlyFlow(data, currentHourRef.current);
+        // Extract daily totals (same for all hour slots per station)
+        const daily: Record<number, number> = {};
+        data.forEach((item) => {
+          if (!daily[item.stationId]) {
+            daily[item.stationId] = item.dailyEntryTotal;
+          }
+        });
+        setStationDailyFlow(daily);
+      })
+      .catch(() => {
+        // CSV data not available
+      });
   }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      setRealTime(now.toLocaleTimeString("zh-CN", { hour12: false }));
+      const h = now.getHours();
+      const mBin = Math.floor(now.getMinutes() / 2);
+      if (h !== currentHourRef.current || mBin !== lastMinuteBinRef.current) {
+        currentHourRef.current = h;
+        lastMinuteBinRef.current = mBin;
+        if (rawEntryFlowData.length > 0) {
+          updateHourlyFlow(rawEntryFlowData, h);
+        }
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [rawEntryFlowData, updateHourlyFlow]);
+
+  useEffect(() => {
+    getPopulationDensity()
+      .then(setPopDensityPoints)
+      .catch(() => {
+        // population density data unavailable
+      });
+  }, []);
+
+  const doStrategy = useCallback(
+    async (trainId: string, type: string, val: number = 0) => {
+      try {
+        await applyStrategy(trainId, type, val);
+      } catch (e: any) {
+        setError(e.message);
+      }
+    },
+    [],
+  );
+  // OB1-OB8 are owned exclusively by the multi-train simulation. Independent
+  // onboard endpoints are displayed in DispatcherWorkstationPanel only.
   const trains = snapshot?.trains ?? [];
   const headways = snapshot?.headways ?? [];
   const commands = snapshot?.commands ?? [];
@@ -407,13 +902,89 @@ export default function Dispatch() {
   const plannedHistory = snapshot?.plannedDiagramPoints ?? [];
   const planDeviations = snapshot?.planDeviations ?? [];
   const energy = snapshot?.totalEnergyKwh ?? 0;
+  const recoveryMap = new Map<string, number>();
+  commands.forEach((c) => {
+    if (c.commandType === "SPEED_UP" && c.targetValue !== undefined) {
+      recoveryMap.set(c.trainId, Math.min(c.targetValue, 3));
+    }
+  });
+
+  // ── CBTC 执行层: 牵引/制动系统状态 ──
+  const [tractionStates, setTractionStates] = useState<
+    Record<string, TractionSystemState>
+  >({});
+  const [brakeStates, setBrakeStates] = useState<
+    Record<string, BrakingSystemState>
+  >({});
+  const [showFaultPanel, setShowFaultPanel] = useState(false);
+  const [faultTarget, setFaultTarget] = useState("");
+
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(async () => {
+      try {
+        const states = await getSystemStates();
+        if (states?.traction) setTractionStates(states.traction);
+        if (states?.brake) setBrakeStates(states.brake);
+      } catch {
+        /* silent poll */
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [isRunning]);
+
+  const doInjectFault = async (trainId: string, faultType: string) => {
+    try {
+      await injectFault(trainId, faultType);
+      const states = await getSystemStates();
+      if (states?.traction) setTractionStates(states.traction);
+      if (states?.brake) setBrakeStates(states.brake);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const doClearFault = async (trainId: string, faultType: string) => {
+    try {
+      await clearFault(trainId, faultType);
+      const states = await getSystemStates();
+      if (states?.traction) setTractionStates(states.traction);
+      if (states?.brake) setBrakeStates(states.brake);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
   if (stations.length === 0 && !error) {
     return (
       <div className="d-root">
-        <div className="d-topbar"><div className="d-tb-left"><div className="d-tb-brand"><div className="d-tb-logo"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg></div><div><span className="d-tb-title">总控调度中心</span><span className="d-tb-sub">DISPATCH</span></div></div></div></div>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Spin tip="加载线路数据..." size="large" />
+        <div className="d-topbar">
+          <div className="d-tb-left">
+            <div className="d-tb-brand">
+              <div className="d-tb-logo">
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                >
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 1v4M12 19v4M1 12h4M19 12h4" />
+                </svg>
+              </div>
+              <div>
+                <span className="d-tb-title">多车仿真调度中心</span>
+                <span className="d-tb-sub">OB1-OB8 SIMULATION</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <Spin size="large" />
+          {/* loading line data */}
         </div>
         <style>{STYLES}</style>
       </div>
@@ -423,43 +994,263 @@ export default function Dispatch() {
   return (
     <>
       <style>{STYLES}</style>
+      <DispatcherWorkstationPanel />
+      {/* ── CBTC 故障注入面板 (浮动) ── */}
+      {showFaultPanel && (
+        <div className="fixed top-20 right-5 z-9999 bg-[rgba(15,23,42,0.97)] border border-solid border-[rgba(239,68,68,0.3)] rounded-[10px] p-4 w-70 max-h-[80vh] overflow-auto shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-red-400 font-bold text-xs">故障注入</span>
+            <button
+              type="button"
+              className="text-slate-500 text-[10px] ml-auto"
+              onClick={() => setShowFaultPanel(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <select
+            className="bg-slate-800 border border-slate-600 rounded text-slate-200 text-[11px] p-1.5 w-full mb-2"
+            title="选择目标列车"
+            value={faultTarget}
+            onChange={(e) => setFaultTarget(e.target.value)}
+          >
+            <option value="">选择列车...</option>
+            {trains
+              .filter(
+                (t) => t.status !== "FINISHED" && t.status !== "DEPOT_WAITING",
+              )
+              .map((t) => (
+                <option key={t.trainId} value={t.trainId}>
+                  {t.trainId} ({t.speed.toFixed(0)}km/h)
+                </option>
+              ))}
+          </select>
+          {faultTarget && (
+            <div className="flex flex-col gap-1">
+              {[
+                { id: "MOTOR_FAILURE", label: "电机故障 (-4台)", icon: "🔧" },
+                {
+                  id: "INVERTER_FAULT",
+                  label: "逆变器降级 (50%功率)",
+                  icon: "⚡",
+                },
+                { id: "ELECTRIC_BRAKE_LOSS", label: "电制动丧失", icon: "🔌" },
+                {
+                  id: "AIR_BRAKE_DEGRADED",
+                  label: "空气制动衰减 (50%)",
+                  icon: "🛑",
+                },
+                { id: "TCU_COMM_LOSS", label: "牵引通信中断", icon: "📡" },
+              ].map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="text-left text-[11px] text-slate-300 hover:bg-[rgba(239,68,68,0.15)] px-2 py-1.5 rounded"
+                  onClick={() => doInjectFault(faultTarget, f.id)}
+                >
+                  {f.icon} {f.label}
+                </button>
+              ))}
+              <hr className="border-slate-700 my-1" />
+              <button
+                type="button"
+                className="text-[11px] text-green-400 hover:bg-[rgba(34,197,94,0.1)] px-2 py-1.5 rounded"
+                onClick={() => doClearFault(faultTarget, "ALL")}
+              >
+                ✅ 清除全部故障
+              </button>
+            </div>
+          )}
+          {Object.keys(tractionStates).length > 0 && (
+            <div className="mt-3 pt-2 border-t border-slate-700">
+              <span className="text-slate-500 text-[10px]">系统状态快照</span>
+              {Object.entries(tractionStates)
+                .filter(
+                  ([tid]) =>
+                    tractionStates[tid]?.faultCode ||
+                    brakeStates[tid]?.faultCode,
+                )
+                .map(([tid, ts]) => (
+                  <div key={tid} className="text-[10px] text-red-400 mt-1">
+                    {tid}: {ts.faultCode || brakeStates[tid]?.faultCode}
+                  </div>
+                ))}
+              {Object.values(tractionStates).every((ts) => !ts.faultCode) &&
+                Object.values(brakeStates).every((bs) => !bs.faultCode) && (
+                  <div className="text-[10px] text-green-500 mt-1">
+                    全部系统正常
+                  </div>
+                )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="d-root">
         {/* ════ Top Bar ════ */}
         <header className="d-topbar">
           <div className="d-tb-left">
             <Link to="/" className="d-tb-back">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              >
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
             </Link>
             <div className="d-tb-brand">
               <div className="d-tb-logo">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg>
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                >
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 1v4M12 19v4M1 12h4M19 12h4" />
+                </svg>
               </div>
-              <div><span className="d-tb-title">总控调度中心</span><span className="d-tb-sub">DISPATCH &middot; LINE 9</span></div>
+              <div>
+                <span className="d-tb-title">多车仿真调度中心</span>
+                <span className="d-tb-sub">
+                  OB1-OB8 SIMULATION &middot; LINE 9
+                </span>
+              </div>
             </div>
           </div>
           <div className="d-tb-center">
-            <div className="d-tb-clock"><span className="d-tb-clock-lbl">SIM TIME</span><span className="d-tb-clock-val">{snapshot ? fmtTime(snapshot.simulationTime) : '00:00:00'}</span></div>
+            <div className="d-tb-clock">
+              <span className="d-tb-clock-lbl">SIM TIME</span>
+              <span className="d-tb-clock-val">
+                {snapshot ? fmtTime(snapshot.simulationTime) : "00:00:00"}
+              </span>
+            </div>
+            <div className="d-tb-clock ml-6">
+              <span className="d-tb-clock-lbl">REAL TIME</span>
+              <span className="d-tb-clock-val">{realTime}</span>
+            </div>
           </div>
           <div className="d-tb-right">
             {error && <span className="d-tb-err">{error}</span>}
-            <div className="d-speed-group">{SPEED_OPTIONS.map((o,i)=><button key={o.label} className={`d-speed-btn${i===speedIndex?' active':''}`} onClick={()=>setSpeed(i)} disabled={loading&&!isRunning}>{o.label}</button>)}</div>
-            <div className="d-map-mode">{(Object.keys(TILE_LAYERS) as TileMode[]).map(m=><button key={m} className={`d-mode-btn${tileMode===m?' active':''}`} onClick={()=>setTileMode(m)}>{TILE_LAYERS[m].label}</button>)}</div>
-            <button className="d-btn d-btn-start" onClick={start} disabled={loading||isRunning}><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>启动</button>
-            <button className="d-btn d-btn-step" onClick={step} disabled={loading||isRunning}>推进</button>
-            {isRunning&&<button className="d-btn d-btn-stop" onClick={stop}><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>停止</button>}
+            <div className="d-speed-group">
+              {SPEED_OPTIONS.map((o, i) => (
+                <button
+                  type="button"
+                  key={o.label}
+                  className={`d-speed-btn${i === speedIndex ? " active" : ""}`}
+                  onClick={() => setSpeed(i)}
+                  disabled={loading && !isRunning}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <div className="d-map-mode">
+              {(Object.keys(TILE_LAYERS) as TileMode[]).map((m) => (
+                <button
+                  type="button"
+                  key={m}
+                  className={`d-mode-btn${tileMode === m ? " active" : ""}`}
+                  onClick={() => setTileMode(m)}
+                >
+                  {TILE_LAYERS[m].label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className={`d-mode-btn${showHeatmap ? " active" : ""}`}
+              onClick={() => setShowHeatmap((v) => !v)}
+              title="客流热力图"
+            >
+              客流
+            </button>
+            <button
+              type="button"
+              className={`d-mode-btn${showPopulationHeatmap ? " active" : ""}`}
+              onClick={() => setShowPopulationHeatmap((v) => !v)}
+              title="人口密度热力图"
+            >
+              密度
+            </button>
+            <button
+              type="button"
+              className="d-btn d-btn-start"
+              onClick={start}
+              disabled={loading || isRunning}
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <polygon points="8,5 19,12 8,19" />
+              </svg>
+              {snapshot ? "继续" : "启动"}
+            </button>
+            <button
+              type="button"
+              className="d-btn d-btn-step"
+              onClick={step}
+              disabled={loading || isRunning}
+            >
+              推进
+            </button>
+            {isRunning && (
+              <button type="button" className="d-btn d-btn-stop" onClick={stop}>
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
+                  <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                </svg>
+                停止
+              </button>
+            )}
+            {!isRunning && snapshot && (
+              <button
+                type="button"
+                className="d-btn d-btn-reset"
+                onClick={reset}
+                disabled={loading}
+              >
+                ↺ 重置
+              </button>
+            )}
+            <button
+              type="button"
+              className={`d-btn text-[11px] border border-solid ${
+                showFaultPanel
+                  ? "bg-[#ef444420] border-[#ef444440]"
+                  : "bg-[#1e293b] border-[#334155]"
+              }`}
+              onClick={() => setShowFaultPanel(!showFaultPanel)}
+              title="故障注入"
+            >
+              ⚠ 故障注入
+            </button>
           </div>
         </header>
 
         {/* ════ Body ════ */}
         {error && (
-          <div style={{ padding: '8px 12px 0' }}>
+          <div className="pt-2 px-3">
             <Alert
               type="warning"
-              message={error}
+              title={error}
               showIcon
-              closable
-              onClose={() => setError('')}
-              style={{ borderRadius: 8, fontSize: 12 }}
+              closable={{ onClose: () => setError("") }}
+              className="rounded-lg text-xs"
             />
           </div>
         )}
@@ -467,12 +1258,61 @@ export default function Dispatch() {
           {/* Flow + Dispatch info banner */}
           {flow && (
             <div className="d-info-bar">
-              <span className="d-info-chip" style={{'--c':'#06d6a0'} as React.CSSProperties}>{flow.period}</span>
-              <span className="d-info-chip" style={{'--c':'#fc5c65'} as React.CSSProperties}>最大断面 {flow.peakSectionFlow.toFixed(0)} p/h</span>
-              <span className="d-info-chip" style={{'--c':'#f7b731'} as React.CSSProperties}>推间 {flow.demandHeadway.toFixed(0)}s</span>
-              <span className="d-info-chip" style={{'--c':dispInfo?.fleetSufficient?'#06d6a0':'#fc5c65'} as React.CSSProperties}>上线 {dispInfo?.onlineTrains}/{dispInfo?.maxAvailableTrains}列</span>
-              <span className="d-info-chip" style={{'--c':dispInfo?.dispatchMode==='NORMAL'?'#06d6a0':'#fc5c65'} as React.CSSProperties}>{dispInfo?.dispatchMode==='NORMAL'?'正常运营':dispInfo?.dispatchMode==='COMPRESS'?'压缩间隔':dispInfo?.dispatchMode==='STRETCH'?'扩大间隔':'紧急'}</span>
-              {delayEvents.length>0 && <span className="d-info-chip" style={{'--c':'#fc5c65'} as React.CSSProperties}>⚠ 晚点 {delayEvents.length}</span>}
+              <span
+                className="d-info-chip"
+                style={{ "--c": "#06d6a0" } as React.CSSProperties}
+              >
+                {flow.period}
+              </span>
+              <span
+                className="d-info-chip"
+                style={{ "--c": "#fc5c65" } as React.CSSProperties}
+              >
+                最大断面 {flow.peakSectionFlow.toFixed(0)} p/h
+              </span>
+              <span
+                className="d-info-chip"
+                style={{ "--c": "#f7b731" } as React.CSSProperties}
+              >
+                推间 {flow.demandHeadway.toFixed(0)}s
+              </span>
+              <span
+                className="d-info-chip"
+                style={
+                  {
+                    "--c": dispInfo?.fleetSufficient ? "#06d6a0" : "#fc5c65",
+                  } as React.CSSProperties
+                }
+              >
+                上线 {dispInfo?.onlineTrains}/{dispInfo?.maxAvailableTrains}列
+              </span>
+              <span
+                className="d-info-chip"
+                style={
+                  {
+                    "--c":
+                      dispInfo?.dispatchMode === "NORMAL"
+                        ? "#06d6a0"
+                        : "#fc5c65",
+                  } as React.CSSProperties
+                }
+              >
+                {dispInfo?.dispatchMode === "NORMAL"
+                  ? "正常运营"
+                  : dispInfo?.dispatchMode === "COMPRESS"
+                    ? "压缩间隔"
+                    : dispInfo?.dispatchMode === "STRETCH"
+                      ? "扩大间隔"
+                      : "紧急"}
+              </span>
+              {delayEvents.length > 0 && (
+                <span
+                  className="d-info-chip"
+                  style={{ "--c": "#fc5c65" } as React.CSSProperties}
+                >
+                  ⚠ 晚点 {delayEvents.length}
+                </span>
+              )}
             </div>
           )}
           {/* Left Column */}
@@ -480,21 +1320,81 @@ export default function Dispatch() {
             {/* Map */}
             <div className="d-map-panel">
               <div className="d-panel-head">
-                <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#00a8e8'}}/>实时运行图</span>
-                <span className="d-panel-badge">{stations.length}站 &middot; {snapshot?.activeTrains??0}/{snapshot?.totalTrains??0}车</span>
+                <span className="d-panel-title">
+                  <span className="d-panel-dot bg-[#00a8e8]" />
+                  实时运行图
+                </span>
+                <span className="d-panel-badge">
+                  {stations.length}站 &middot; {snapshot?.activeTrains ?? 0}/
+                  {snapshot?.totalTrains ?? 0}车
+                </span>
               </div>
-              <div className="d-map-body"><MapView stations={stations} trains={trains} tileMode={tileMode}/></div>
+              <div className="d-map-body">
+                <MapView
+                  stations={stations}
+                  trains={trains}
+                  tileMode={tileMode}
+                  showHeatmap={showHeatmap}
+                  passengerFlow={flow}
+                  stationEntryFlow={stationEntryFlow}
+                  stationDailyFlow={stationDailyFlow}
+                  showPopulationHeatmap={showPopulationHeatmap}
+                  popDensityPoints={popDensityPoints}
+                />
+              </div>
               <div className="d-map-stats">
-                {[{v:snapshot?.activeTrains??'--',l:'在线'},{v:headways.length>0?Math.min(...headways.map(h=>h.timeSeconds)).toFixed(0)+'s':'--',l:'最小时距'},{v:trains.filter(t=>t.status!=='FINISHED').length>0?Math.min(...trains.filter(t=>t.status!=='FINISHED').map(t=>t.speed)).toFixed(0)+'~'+Math.max(...trains.filter(t=>t.status!=='FINISHED').map(t=>t.speed)).toFixed(0):'--',l:'速度 km/h'},{v:energy.toFixed(1)+' kWh',l:'牵引用电'}].map((s,i)=><div className="d-mstat" key={i}><span className="d-mstat-val">{s.v}</span><span className="d-mstat-lbl">{s.l}</span></div>)}
+                {[
+                  { v: snapshot?.activeTrains ?? "--", l: "在线" },
+                  {
+                    v:
+                      headways.length > 0
+                        ? Math.min(
+                            ...headways.map((h) => h.timeSeconds),
+                          ).toFixed(0) + "s"
+                        : "--",
+                    l: "最小时距",
+                  },
+                  {
+                    v:
+                      trains.filter((t) => t.status !== "FINISHED").length > 0
+                        ? Math.min(
+                            ...trains
+                              .filter((t) => t.status !== "FINISHED")
+                              .map((t) => t.speed),
+                          ).toFixed(0) +
+                          "~" +
+                          Math.max(
+                            ...trains
+                              .filter((t) => t.status !== "FINISHED")
+                              .map((t) => t.speed),
+                          ).toFixed(0)
+                        : "--",
+                    l: "速度 km/h",
+                  },
+                  { v: energy.toFixed(1) + " kWh", l: "牵引用电" },
+                ].map((s, i) => (
+                  <div className="d-mstat" key={i}>
+                    <span className="d-mstat-val">{s.v}</span>
+                    <span className="d-mstat-lbl">{s.l}</span>
+                  </div>
+                ))}
               </div>
             </div>
             {/* Train Diagram */}
             <div className="d-diagram-panel">
               <div className="d-panel-head">
-                <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#f7b731'}}/>运行图 (Train Diagram)</span>
+                <span className="d-panel-title">
+                  <span className="d-panel-dot bg-[#f7b731]" />
+                  运行图 (Train Diagram)
+                </span>
                 <span className="d-panel-badge">{history.length} 采样点</span>
               </div>
-              <TrainDiagram history={history} stations={stations} simTime={snapshot?.simulationTime ?? 0} plannedPoints={plannedHistory}/>
+              <TrainDiagram
+                history={history}
+                stations={stations}
+                simTime={snapshot?.simulationTime ?? 0}
+                plannedPoints={plannedHistory}
+              />
             </div>
           </div>
 
@@ -503,43 +1403,367 @@ export default function Dispatch() {
             {/* Tab bar */}
             <div className="d-tab-bar">
               {[
-                { id: 'trains', label: '列车状态', dot: '#06d6a0' },
-                { id: 'arrivals', label: '到站时刻', dot: '#45aaf2' },
-                { id: 'commands', label: '调度指令', dot: '#fc5c65' },
-                { id: 'flow', label: '断面客流', dot: '#f7b731' },
-                { id: 'deviation', label: '偏差', dot: '#9b59b6' },
+                { id: "trains", label: "列车状态", dot: "#06d6a0" },
+                { id: "arrivals", label: "到站时刻", dot: "#45aaf2" },
+                { id: "commands", label: "调度指令", dot: "#fc5c65" },
+                { id: "flow", label: "断面客流", dot: "#f7b731" },
+                { id: "deviation", label: "偏差", dot: "#9b59b6" },
               ].map((tab) => (
                 <button
+                  type="button"
                   key={tab.id}
-                  className={`d-tab${rightTab === tab.id ? ' active' : ''}`}
+                  className={`d-tab${rightTab === tab.id ? " active" : ""}`}
                   onClick={() => setRightTab(tab.id as typeof rightTab)}
                 >
-                  <span className="d-tab-dot" style={{ background: tab.dot }}/>
+                  <span className="d-tab-dot" style={{ background: tab.dot }} />
                   {tab.label}
                 </button>
               ))}
             </div>
 
             {/* Trains Tab */}
-            {rightTab === 'trains' && (
+            {rightTab === "trains" && (
               <div className="d-right-scroll">
                 <div className="d-panel">
                   <div className="d-tbl-scroll">
                     <table className="d-tbl">
-                      <thead><tr><th>车次</th><th>方向</th><th>位置</th><th>速度</th><th>状态</th><th>交路</th><th>折返</th><th>策略</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>车次</th>
+                          <th>方向</th>
+                          <th>位置</th>
+                          <th>速度</th>
+                          <th>状态</th>
+                          <th>交路</th>
+                          <th>折返</th>
+                          <th>牵引</th>
+                          <th>制动</th>
+                          <th>策略</th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        {trains.length===0?<tr><td colSpan={8} className="d-empty">点击「启动」</td></tr>:trains.map(t=><tr key={t.trainId}><td><span className="d-train-id">{t.trainNumber||t.trainName}</span></td><td><span style={{color:t.direction==='DOWN'?'#f7b731':'#06d6a0',fontWeight:600,fontSize:10}}>{t.direction==='DOWN'?'↓下行':'↑上行'}</span></td><td className="d-mono">{fmtNum(t.positionMeters)}</td><td className="d-mono">{t.speed>0?t.speed.toFixed(0)+' km/h':'—'}</td><td><span className="d-status-dot" style={{background:STATUS_COLOR[t.status]}}/>{STATUS_LABEL[t.status]}{t.status==='DWELLING'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='TURNING_BACK'?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{t.actualDwellSeconds.toFixed(0)}/{t.plannedDwellSeconds.toFixed(0)}s</span>:t.status==='DEPOT_WAITING'&&t.plannedDepartureFromDepot>0?<span style={{fontSize:9,color:'#617088',marginLeft:4}}>⌛{(t.plannedDepartureFromDepot-snapshot!.simulationTime).toFixed(0)}s</span>:null}</td><td style={{fontSize:10,color:'#94a3b8'}}>{t.routePattern==='SHORT_S'?'南段小交路':t.routePattern==='SHORT_N'?'北段小交路':'全程'}{t.skipNextStation?<span style={{color:'#fc5c65',marginLeft:4}}>甩站中</span>:null}{t.operationLevel!=='NORMAL'&&t.operationLevel?<span style={{color:'#ff9f43',marginLeft:4}}>{t.operationLevel==='EXPRESS'?'快车':t.operationLevel==='ENERGY_SAVE'?'节能':'慢行'}</span>:null}</td><td className="d-mono" style={{color:t.turnbackCount>0?'#f7b731':'#374151'}}>{t.turnbackCount>0?t.turnbackCount:'—'}</td><td style={{display:'flex',gap:2}}>{t.status!=='FINISHED'&&t.status!=='DEPOT_WAITING'&&<><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'SKIP_STATION')} title="甩站">⊘</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',1)} title="快车">⚡</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'CHANGE_LEVEL',0)} title="节能">♻</button><button className="d-act-btn" onClick={()=>doStrategy(t.trainId,'RESUME_NORMAL')} title="恢复">↺</button></>}</td></tr>)}</tbody>
+                        {trains.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="d-empty">
+                              点击「启动」
+                            </td>
+                          </tr>
+                        ) : (
+                          trains.map((t) => (
+                            <tr key={t.trainId}>
+                              <td>
+                                <span className="d-train-id">
+                                  {t.trainNumber || t.trainName}
+                                </span>
+                              </td>
+                              <td>
+                                <span
+                                  className="font-semibold text-[10px]"
+                                  style={{
+                                    color:
+                                      t.direction === "DOWN"
+                                        ? "#f7b731"
+                                        : "#06d6a0",
+                                  }}
+                                >
+                                  {t.direction === "DOWN" ? "↓下行" : "↑上行"}
+                                </span>
+                              </td>
+                              <td className="d-mono">
+                                {fmtNum(t.positionMeters)}
+                              </td>
+                              <td className="d-mono">
+                                {t.speed > 0
+                                  ? t.speed.toFixed(0) + " km/h"
+                                  : "—"}
+                              </td>
+                              <td>
+                                <span
+                                  className="d-status-dot"
+                                  style={{ background: STATUS_COLOR[t.status] }}
+                                />
+                                {STATUS_LABEL[t.status]}
+                                {t.status === "DWELLING" ? (
+                                  <span className="text-[9px] text-[#617088] ml-1">
+                                    ⌛{t.actualDwellSeconds.toFixed(0)}/
+                                    {t.plannedDwellSeconds.toFixed(0)}s
+                                  </span>
+                                ) : t.status === "TURNING_BACK" ? (
+                                  <span className="text-[9px] text-[#617088] ml-1">
+                                    ⌛{t.actualDwellSeconds.toFixed(0)}/
+                                    {t.plannedDwellSeconds.toFixed(0)}s
+                                  </span>
+                                ) : t.status === "DEPOT_WAITING" &&
+                                  t.plannedDepartureFromDepot > 0 ? (
+                                  <span className="text-[9px] text-[#617088] ml-1">
+                                    ⌛
+                                    {(
+                                      t.plannedDepartureFromDepot -
+                                      snapshot!.simulationTime
+                                    ).toFixed(0)}
+                                    s
+                                  </span>
+                                ) : null}
+                                {recoveryMap.has(t.trainId) && (
+                                  <span
+                                    className="text-[8px] px-0.75 rounded-sm ml-1 font-bold"
+                                    style={
+                                      {
+                                        background:
+                                          RECOVERY_COLOR[
+                                            recoveryMap.get(t.trainId)!
+                                          ] + "20",
+                                        color:
+                                          RECOVERY_COLOR[
+                                            recoveryMap.get(t.trainId)!
+                                          ],
+                                      } as React.CSSProperties
+                                    }
+                                  >
+                                    {
+                                      RECOVERY_LABEL[
+                                        recoveryMap.get(t.trainId)!
+                                      ]
+                                    }
+                                  </span>
+                                )}
+                              </td>
+                              <td className="text-[10px] text-slate-400">
+                                {t.routePattern === "SHORT_S"
+                                  ? "南段小交路"
+                                  : t.routePattern === "SHORT_N"
+                                    ? "北段小交路"
+                                    : "全程"}
+                                {t.skipNextStation ? (
+                                  <span className="text-red-500 ml-1">
+                                    甩站中
+                                  </span>
+                                ) : null}
+                                {t.operationLevel !== "NORMAL" &&
+                                t.operationLevel ? (
+                                  <span className="text-[#ff9f43] ml-1">
+                                    {t.operationLevel === "EXPRESS"
+                                      ? "快车"
+                                      : t.operationLevel === "ENERGY_SAVE"
+                                        ? "节能"
+                                        : "慢行"}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td
+                                className="d-mono"
+                                style={
+                                  {
+                                    color:
+                                      t.turnbackCount > 0
+                                        ? "#f7b731"
+                                        : "#374151",
+                                  } as React.CSSProperties
+                                }
+                              >
+                                {t.turnbackCount > 0 ? t.turnbackCount : "—"}
+                              </td>
+                              {/* CBTC 牵引状态 */}
+                              <td className="text-[9px]">
+                                {(() => {
+                                  const ts = tractionStates[t.trainId];
+                                  if (!ts)
+                                    return (
+                                      <span className="text-slate-600">—</span>
+                                    );
+                                  const healthColor =
+                                    ts.health === "FAULT"
+                                      ? "#ef4444"
+                                      : ts.health === "DEGRADED"
+                                        ? "#f59e0b"
+                                        : "#22c55e";
+                                  return (
+                                    <span
+                                      className="d-mono"
+                                      style={{ color: healthColor }}
+                                    >
+                                      {ts.health === "NORMAL"
+                                        ? `${ts.availableMotors}/24`
+                                        : ts.health}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                              {/* CBTC 制动状态 */}
+                              <td className="text-[9px]">
+                                {(() => {
+                                  const bs = brakeStates[t.trainId];
+                                  if (!bs)
+                                    return (
+                                      <span className="text-slate-600">—</span>
+                                    );
+                                  const healthColor =
+                                    bs.health === "FAULT"
+                                      ? "#ef4444"
+                                      : bs.health === "DEGRADED"
+                                        ? "#f59e0b"
+                                        : "#22c55e";
+                                  return (
+                                    <span
+                                      className="d-mono"
+                                      style={{ color: healthColor }}
+                                    >
+                                      {bs.blendingMode}
+                                      {bs.faultCode ? "!" : ""}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                              <td className="flex gap-0.5">
+                                {t.status !== "FINISHED" &&
+                                  t.status !== "DEPOT_WAITING" && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="d-act-btn"
+                                        onClick={() =>
+                                          doStrategy(t.trainId, "SKIP_STATION")
+                                        }
+                                        title="甩站"
+                                      >
+                                        ⊘
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="d-act-btn"
+                                        onClick={() =>
+                                          doStrategy(
+                                            t.trainId,
+                                            "CHANGE_LEVEL",
+                                            1,
+                                          )
+                                        }
+                                        title="快车"
+                                      >
+                                        ⚡
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="d-act-btn"
+                                        onClick={() =>
+                                          doStrategy(
+                                            t.trainId,
+                                            "CHANGE_LEVEL",
+                                            0,
+                                          )
+                                        }
+                                        title="节能"
+                                      >
+                                        ♻
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="d-act-btn"
+                                        onClick={() =>
+                                          doStrategy(t.trainId, "RESUME_NORMAL")
+                                        }
+                                        title="恢复"
+                                      >
+                                        ↺
+                                      </button>
+                                    </>
+                                  )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
                     </table>
                   </div>
                 </div>
                 {/* Headways */}
-                <div className="d-panel" style={{ marginTop: 8 }}>
-                  <div className="d-panel-head"><span className="d-panel-title"><span className="d-panel-dot" style={{background:'#f7b731'}}/>车头时距</span><span className="d-panel-badge">{headways.length}</span></div>
+                <div className="d-panel mt-2">
+                  <div className="d-panel-head">
+                    <span className="d-panel-title">
+                      <span className="d-panel-dot bg-[#f7b731]" />
+                      车头时距
+                    </span>
+                    <span className="d-panel-badge">{headways.length}</span>
+                  </div>
                   <div className="d-tbl-scroll d-tbl-scroll-sm">
                     <table className="d-tbl">
-                      <thead><tr><th>后车</th><th>前车</th><th>间距</th><th>安全距</th><th>时距</th><th>状态</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>后车</th>
+                          <th>前车</th>
+                          <th>间距</th>
+                          <th>安全距</th>
+                          <th>时距</th>
+                          <th>状态</th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        {headways.length===0?<tr><td colSpan={6} className="d-empty">暂无</td></tr>:headways.map((h,i)=><tr key={i}><td><span className="d-train-id">{h.fromTrainId}</span></td><td><span className="d-train-id">{h.toTrainId}</span></td><td className="d-mono">{fmtNum(h.distanceMeters)}</td><td className="d-mono">{h.safetyDistanceMeters>0?fmtNum(h.safetyDistanceMeters):'—'}</td><td className="d-mono">{h.timeSeconds.toFixed(0)}</td><td><span className="d-h-badge" style={{'--c':h.status==='SAFE'?'#06d6a0':h.status==='CAUTION'?'#f7b731':h.status==='WARNING'?'#ff9f43':'#fc5c65','--bg':(h.status==='SAFE'?'#06d6a0':h.status==='CAUTION'?'#f7b731':h.status==='WARNING'?'#ff9f43':'#fc5c65')+'18'} as React.CSSProperties}>{h.status==='SAFE'?'安全':h.status==='CAUTION'?'关注':h.status==='WARNING'?'警告':'危险'}</span></td></tr>)}
+                        {headways.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="d-empty">
+                              暂无
+                            </td>
+                          </tr>
+                        ) : (
+                          headways.map((h, i) => (
+                            <tr key={i}>
+                              <td>
+                                <span className="d-train-id">
+                                  {h.fromTrainId}
+                                </span>
+                              </td>
+                              <td>
+                                <span className="d-train-id">
+                                  {h.toTrainId}
+                                </span>
+                              </td>
+                              <td className="d-mono">
+                                {fmtNum(h.distanceMeters)}
+                              </td>
+                              <td className="d-mono">
+                                {h.safetyDistanceMeters > 0
+                                  ? fmtNum(h.safetyDistanceMeters)
+                                  : "—"}
+                              </td>
+                              <td className="d-mono">
+                                {h.timeSeconds.toFixed(0)}
+                              </td>
+                              <td>
+                                <span
+                                  className="d-h-badge"
+                                  style={
+                                    {
+                                      "--c":
+                                        h.status === "SAFE"
+                                          ? "#06d6a0"
+                                          : h.status === "CAUTION"
+                                            ? "#f7b731"
+                                            : h.status === "WARNING"
+                                              ? "#ff9f43"
+                                              : "#fc5c65",
+                                      "--bg":
+                                        (h.status === "SAFE"
+                                          ? "#06d6a0"
+                                          : h.status === "CAUTION"
+                                            ? "#f7b731"
+                                            : h.status === "WARNING"
+                                              ? "#ff9f43"
+                                              : "#fc5c65") + "18",
+                                    } as React.CSSProperties
+                                  }
+                                >
+                                  {h.status === "SAFE"
+                                    ? "安全"
+                                    : h.status === "CAUTION"
+                                      ? "关注"
+                                      : h.status === "WARNING"
+                                        ? "警告"
+                                        : "危险"}
+                                </span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -548,14 +1772,57 @@ export default function Dispatch() {
             )}
 
             {/* Arrivals Tab */}
-            {rightTab === 'arrivals' && (
+            {rightTab === "arrivals" && (
               <div className="d-right-scroll">
                 <div className="d-panel">
                   <div className="d-tbl-scroll">
                     <table className="d-tbl">
-                      <thead><tr><th>车次</th><th>车站</th><th>到站</th><th>发车</th><th>停站</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>车次</th>
+                          <th>车站</th>
+                          <th>到站</th>
+                          <th>发车</th>
+                          <th>停站</th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        {arrivals.length===0?<tr><td colSpan={5} className="d-empty">暂无到站记录</td></tr>:arrivals.slice().reverse().map((a,i)=><tr key={i}><td><span className="d-train-id">{a.trainId}</span></td><td style={{fontWeight:600,color:'#e2e8f0'}}>{a.stationName}</td><td className="d-mono">{fmtTime(a.arrivalTimeSeconds)}</td><td className="d-mono">{a.departureTimeSeconds>0?fmtTime(a.departureTimeSeconds):'—'}</td><td className="d-mono">{a.dwellSeconds>0?a.dwellSeconds.toFixed(0)+'s':'—'}</td></tr>)}
+                        {arrivals.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="d-empty">
+                              暂无到站记录
+                            </td>
+                          </tr>
+                        ) : (
+                          arrivals
+                            .slice()
+                            .reverse()
+                            .map((a, i) => (
+                              <tr key={i}>
+                                <td>
+                                  <span className="d-train-id">
+                                    {a.trainId}
+                                  </span>
+                                </td>
+                                <td className="font-semibold text-slate-200">
+                                  {a.stationName}
+                                </td>
+                                <td className="d-mono">
+                                  {fmtTime(a.arrivalTimeSeconds)}
+                                </td>
+                                <td className="d-mono">
+                                  {a.departureTimeSeconds > 0
+                                    ? fmtTime(a.departureTimeSeconds)
+                                    : "—"}
+                                </td>
+                                <td className="d-mono">
+                                  {a.dwellSeconds > 0
+                                    ? a.dwellSeconds.toFixed(0) + "s"
+                                    : "—"}
+                                </td>
+                              </tr>
+                            ))
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -564,14 +1831,151 @@ export default function Dispatch() {
             )}
 
             {/* Commands Tab */}
-            {rightTab === 'commands' && (
+            {rightTab === "commands" && (
               <div className="d-right-scroll d-right-scroll-flex">
                 <div className="d-panel d-panel-flex">
                   <div className="d-cmd-wrap">
-                    {commands.length===0 && delayEvents.length===0 ? <div className="d-empty">暂无调度指令</div> : (
+                    {commands.length === 0 && delayEvents.length === 0 ? (
+                      <div className="d-empty">暂无调度指令</div>
+                    ) : (
                       <>
-                      {commands.map((c,i)=><div className="d-cmd" key={'c'+i}><span className="d-cmd-tag" style={{'--c':c.commandType==='DEPART'?'#06d6a0':c.commandType==='HOLD'?'#f7b731':c.commandType==='SLOW'?'#ff9f43':c.commandType==='ARRIVE'?'#45aaf2':c.commandType==='SPEED_UP'?'#06d6a0':c.commandType==='EMERGENCY_BRAKE'?'#fc5c65':c.commandType==='TURN_BACK'?'#ff9f43':c.commandType==='SKIP_STATION'?'#00a8e8':c.commandType==='CHANGE_LEVEL'?'#9b59b6':c.commandType==='SHORT_TURN'?'#fc5c65':c.commandType==='RESUME_NORMAL'?'#06d6a0':'#9b59b6','--bg':(c.commandType==='DEPART'?'#06d6a0':c.commandType==='HOLD'?'#f7b731':c.commandType==='SLOW'?'#ff9f43':c.commandType==='ARRIVE'?'#45aaf2':c.commandType==='SPEED_UP'?'#06d6a0':c.commandType==='EMERGENCY_BRAKE'?'#fc5c65':c.commandType==='TURN_BACK'?'#ff9f43':c.commandType==='SKIP_STATION'?'#00a8e8':c.commandType==='CHANGE_LEVEL'?'#9b59b6':c.commandType==='SHORT_TURN'?'#fc5c65':c.commandType==='RESUME_NORMAL'?'#06d6a0':'#9b59b6')+'14'} as React.CSSProperties}>{c.commandType==='DEPART'?'发车':c.commandType==='HOLD'?'扣车':c.commandType==='SLOW'?'减速':c.commandType==='ARRIVE'?'到站':c.commandType==='SPEED_UP'?'赶点':c.commandType==='EMERGENCY_BRAKE'?'⚡急制':c.commandType==='TURN_BACK'?'⟲折返':c.commandType==='SKIP_STATION'?'⊘甩站':c.commandType==='CHANGE_LEVEL'?'⚡变等':c.commandType==='SHORT_TURN'?'↩短线折':c.commandType==='RESUME_NORMAL'?'↺恢复':'终到'}</span><span className="d-cmd-train">{c.trainId}</span><span className="d-cmd-reason">{c.reason}</span></div>)}
-                      {delayEvents.slice().reverse().slice(0, 10).map((e,i)=><div className="d-cmd d-cmd-delay" key={'e'+i}><span className="d-cmd-tag" style={{'--c':e.eventType==='PRIMARY_DELAY'?'#f7b731':e.eventType==='PROPAGATED'?'#fc5c65':'#06d6a0','--bg':(e.eventType==='PRIMARY_DELAY'?'#f7b731':e.eventType==='PROPAGATED'?'#fc5c65':'#06d6a0')+'14'} as React.CSSProperties}>{e.eventType==='PRIMARY_DELAY'?'初始晚点':e.eventType==='PROPAGATED'?'传播晚点':'已恢复'}</span><span className="d-cmd-train">{e.trainId}</span><span className="d-cmd-reason">+{e.delaySeconds.toFixed(0)}s {e.cause}{e.affectedTrainId?' → '+e.affectedTrainId:''} @{fmtTime(e.timeSeconds)}</span></div>)}
+                        {commands.map((c, i) => (
+                          <div className="d-cmd" key={"c" + i}>
+                            <span
+                              className="d-cmd-tag"
+                              style={
+                                {
+                                  "--c":
+                                    c.commandType === "DEPART"
+                                      ? "#06d6a0"
+                                      : c.commandType === "HOLD"
+                                        ? "#f7b731"
+                                        : c.commandType === "SLOW"
+                                          ? "#ff9f43"
+                                          : c.commandType === "ARRIVE"
+                                            ? "#45aaf2"
+                                            : c.commandType === "SPEED_UP"
+                                              ? "#06d6a0"
+                                              : c.commandType ===
+                                                  "EMERGENCY_BRAKE"
+                                                ? "#fc5c65"
+                                                : c.commandType === "TURN_BACK"
+                                                  ? "#ff9f43"
+                                                  : c.commandType ===
+                                                      "SKIP_STATION"
+                                                    ? "#00a8e8"
+                                                    : c.commandType ===
+                                                        "CHANGE_LEVEL"
+                                                      ? "#9b59b6"
+                                                      : c.commandType ===
+                                                          "SHORT_TURN"
+                                                        ? "#fc5c65"
+                                                        : c.commandType ===
+                                                            "RESUME_NORMAL"
+                                                          ? "#06d6a0"
+                                                          : "#9b59b6",
+                                  "--bg":
+                                    (c.commandType === "DEPART"
+                                      ? "#06d6a0"
+                                      : c.commandType === "HOLD"
+                                        ? "#f7b731"
+                                        : c.commandType === "SLOW"
+                                          ? "#ff9f43"
+                                          : c.commandType === "ARRIVE"
+                                            ? "#45aaf2"
+                                            : c.commandType === "SPEED_UP"
+                                              ? "#06d6a0"
+                                              : c.commandType ===
+                                                  "EMERGENCY_BRAKE"
+                                                ? "#fc5c65"
+                                                : c.commandType === "TURN_BACK"
+                                                  ? "#ff9f43"
+                                                  : c.commandType ===
+                                                      "SKIP_STATION"
+                                                    ? "#00a8e8"
+                                                    : c.commandType ===
+                                                        "CHANGE_LEVEL"
+                                                      ? "#9b59b6"
+                                                      : c.commandType ===
+                                                          "SHORT_TURN"
+                                                        ? "#fc5c65"
+                                                        : c.commandType ===
+                                                            "RESUME_NORMAL"
+                                                          ? "#06d6a0"
+                                                          : "#9b59b6") + "14",
+                                } as React.CSSProperties
+                              }
+                            >
+                              {c.commandType === "DEPART"
+                                ? "发车"
+                                : c.commandType === "HOLD"
+                                  ? "扣车"
+                                  : c.commandType === "SLOW"
+                                    ? "减速"
+                                    : c.commandType === "ARRIVE"
+                                      ? "到站"
+                                      : c.commandType === "SPEED_UP"
+                                        ? "赶点"
+                                        : c.commandType === "EMERGENCY_BRAKE"
+                                          ? "⚡急制"
+                                          : c.commandType === "TURN_BACK"
+                                            ? "⟲折返"
+                                            : c.commandType === "SKIP_STATION"
+                                              ? "⊘甩站"
+                                              : c.commandType === "CHANGE_LEVEL"
+                                                ? "⚡变等"
+                                                : c.commandType === "SHORT_TURN"
+                                                  ? "↩短线折"
+                                                  : c.commandType ===
+                                                      "RESUME_NORMAL"
+                                                    ? "↺恢复"
+                                                    : "终到"}
+                            </span>
+                            <span className="d-cmd-train">{c.trainId}</span>
+                            <span className="d-cmd-reason">{c.reason}</span>
+                          </div>
+                        ))}
+                        {delayEvents
+                          .slice()
+                          .reverse()
+                          .slice(0, 10)
+                          .map((e, i) => (
+                            <div className="d-cmd d-cmd-delay" key={"e" + i}>
+                              <span
+                                className="d-cmd-tag"
+                                style={
+                                  {
+                                    "--c":
+                                      e.eventType === "PRIMARY_DELAY"
+                                        ? "#f7b731"
+                                        : e.eventType === "PROPAGATED"
+                                          ? "#fc5c65"
+                                          : "#06d6a0",
+                                    "--bg":
+                                      (e.eventType === "PRIMARY_DELAY"
+                                        ? "#f7b731"
+                                        : e.eventType === "PROPAGATED"
+                                          ? "#fc5c65"
+                                          : "#06d6a0") + "14",
+                                  } as React.CSSProperties
+                                }
+                              >
+                                {e.eventType === "PRIMARY_DELAY"
+                                  ? "初始晚点"
+                                  : e.eventType === "PROPAGATED"
+                                    ? "传播晚点"
+                                    : "已恢复"}
+                              </span>
+                              <span className="d-cmd-train">{e.trainId}</span>
+                              <span className="d-cmd-reason">
+                                +{e.delaySeconds.toFixed(0)}s {e.cause}
+                                {e.affectedTrainId
+                                  ? " → " + e.affectedTrainId
+                                  : ""}{" "}
+                                @{fmtTime(e.timeSeconds)}
+                              </span>
+                            </div>
+                          ))}
                       </>
                     )}
                   </div>
@@ -580,49 +1984,107 @@ export default function Dispatch() {
             )}
 
             {/* Flow Tab — 断面客流 */}
-            {rightTab === 'flow' && flow && (
+            {rightTab === "flow" && flow && (
               <div className="d-right-scroll">
-                <div className="d-panel" style={{ marginBottom: 8 }}>
+                <div className="d-panel mb-2">
                   <div className="d-panel-head">
-                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#f7b731'}}/>最大断面客流</span>
-                    <span className="d-panel-badge">峰值 {flow.peakSectionFlow.toFixed(0)} p/h</span>
+                    <span className="d-panel-title">
+                      <span className="d-panel-dot bg-[#f7b731]" />
+                      最大断面客流
+                    </span>
+                    <span className="d-panel-badge">
+                      峰值 {flow.peakSectionFlow.toFixed(0)} p/h
+                    </span>
                   </div>
-                  <div style={{padding: '10px 12px'}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11,color:'#cbd5e1'}}>
-                      最大压力断面位于站点 <b style={{color:'#fc5c65'}}>#{flow.peakSectionStationId}</b>
-                      <span style={{color:'#617088',fontSize:10}}>满载率目标 {(flow.targetLoadFactor*100).toFixed(0)}%</span>
+                  <div className="px-3 py-2.5">
+                    <div className="flex items-center gap-2 text-[11px] text-slate-300">
+                      最大压力断面位于站点{" "}
+                      <b className="text-red-500">
+                        #{flow.peakSectionStationId}
+                      </b>
+                      <span className="text-[#617088] text-[10px]">
+                        满载率目标 {(flow.targetLoadFactor * 100).toFixed(0)}%
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 <div className="d-panel">
                   <div className="d-panel-head">
-                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#00a8e8'}}/>断面客流累加模型</span>
+                    <span className="d-panel-title">
+                      <span className="d-panel-dot bg-[#00a8e8]" />
+                      断面客流累加模型
+                    </span>
                   </div>
-                  <div className="d-tbl-scroll" style={{maxHeight:400}}>
+                  <div className="d-tbl-scroll max-h-100">
                     <table className="d-tbl">
-                      <thead><tr><th>区间</th><th>上车</th><th>下车</th><th>断面客流</th><th>满载率</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>区间</th>
+                          <th>上车</th>
+                          <th>下车</th>
+                          <th>断面客流</th>
+                          <th>满载率</th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        {(flow.sectionFlows??[]).map((sf,i)=>{
-                          const fromName = stations.find(s=>s.id===sf.fromStationId)?.name ?? `站${sf.fromStationId}`;
-                          const toName = stations.find(s=>s.id===sf.toStationId)?.name ?? `站${sf.toStationId}`;
+                        {(flow.sectionFlows ?? []).map((sf, i) => {
+                          const fromName =
+                            stations.find((s) => s.id === sf.fromStationId)
+                              ?.name ?? `站${sf.fromStationId}`;
+                          const toName =
+                            stations.find((s) => s.id === sf.toStationId)
+                              ?.name ?? `站${sf.toStationId}`;
                           const lf = sf.loadFactor;
-                          const barColor = lf>1.0?'#fc5c65':lf>0.8?'#f7b731':lf>0.5?'#45aaf2':'#06d6a0';
-                          const isPeak = sf.fromStationId === flow.peakSectionStationId;
-                          return <tr key={i} style={isPeak?{background:'rgba(252,92,101,0.06)'}:undefined}>
-                            <td style={{fontWeight:600,color:'#e2e8f0'}}>
-                              {fromName} → {toName}
-                              {isPeak && <span style={{fontSize:9,color:'#fc5c65',marginLeft:4}}>PEAK</span>}
-                            </td>
-                            <td className="d-mono" style={{color:'#06d6a0'}}>+{sf.boarding.toFixed(0)}</td>
-                            <td className="d-mono" style={{color:'#fc5c65'}}>-{sf.alighting.toFixed(0)}</td>
-                            <td className="d-mono" style={{fontWeight:700}}>
-                              <span style={{background:`linear-gradient(90deg,${barColor}22 0%,${barColor}66 ${Math.min(lf*100,100)}%,transparent ${Math.min(lf*100,100)}%)`,padding:'2px 6px',borderRadius:3}}>
-                                {sf.load.toFixed(0)}
-                              </span>
-                            </td>
-                            <td className="d-mono" style={{color:barColor,fontWeight:600}}>{(lf*100).toFixed(0)}%</td>
-                          </tr>;
+                          const barColor =
+                            lf > 1.0
+                              ? "#fc5c65"
+                              : lf > 0.8
+                                ? "#f7b731"
+                                : lf > 0.5
+                                  ? "#45aaf2"
+                                  : "#06d6a0";
+                          const isPeak =
+                            sf.fromStationId === flow.peakSectionStationId;
+                          return (
+                            <tr
+                              key={i}
+                              className={
+                                isPeak ? "bg-[rgba(252,92,101,0.06)]" : ""
+                              }
+                            >
+                              <td className="font-semibold text-slate-200">
+                                {fromName} → {toName}
+                                {isPeak && (
+                                  <span className="text-[9px] text-red-500 ml-1">
+                                    PEAK
+                                  </span>
+                                )}
+                              </td>
+                              <td className="d-mono text-[#06d6a0]">
+                                +{sf.boarding.toFixed(0)}
+                              </td>
+                              <td className="d-mono text-[#fc5c65]">
+                                -{sf.alighting.toFixed(0)}
+                              </td>
+                              <td className="d-mono font-bold">
+                                <span
+                                  className="px-1.5 py-0.5 rounded-sm"
+                                  style={{
+                                    background: `linear-gradient(90deg,${barColor}22 0%,${barColor}66 ${Math.min(lf * 100, 100)}%,transparent ${Math.min(lf * 100, 100)}%)`,
+                                  }}
+                                >
+                                  {sf.load.toFixed(0)}
+                                </span>
+                              </td>
+                              <td
+                                className="d-mono font-semibold"
+                                style={{ color: barColor }}
+                              >
+                                {(lf * 100).toFixed(0)}%
+                              </td>
+                            </tr>
+                          );
                         })}
                       </tbody>
                     </table>
@@ -631,77 +2093,193 @@ export default function Dispatch() {
               </div>
             )}
             {/* Deviation Tab — 计划/实绩偏差分析 */}
-            {rightTab === 'deviation' && (
+            {rightTab === "deviation" && (
               <div className="d-right-scroll">
-                <div className="d-panel" style={{ marginBottom: 8 }}>
+                <div className="d-panel mb-2">
                   <div className="d-panel-head">
-                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#9b59b6'}}/>计划-实绩偏差</span>
+                    <span className="d-panel-title">
+                      <span className="d-panel-dot bg-[#9b59b6]" />
+                      计划-实绩偏差
+                    </span>
                     <span className="d-panel-badge">
-                      {planDeviations.filter(d=>Math.abs(d.arrivalDeviation)>30).length} 晚点
+                      {
+                        planDeviations.filter(
+                          (d) => Math.abs(d.arrivalDeviation) > 30,
+                        ).length
+                      }{" "}
+                      晚点
                     </span>
                   </div>
-                  <div style={{padding: '10px 12px'}}>
-                    <div style={{display:'flex',alignItems:'center',gap:12,fontSize:11,color:'#cbd5e1'}}>
+                  <div className="px-3 py-2.5">
+                    <div className="flex items-center gap-3 text-[11px] text-slate-300">
                       <span>Δ = 实绩 - 计划</span>
-                      <span style={{color:'#617088',fontSize:10}}>正值=晚点 / 负值=早点 / |偏差|&gt;60s=显著晚点</span>
+                      <span className="text-[#617088] text-[10px]">
+                        正值=晚点 / 负值=早点 / |偏差|&gt;60s=显著晚点
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 <div className="d-panel">
                   <div className="d-panel-head">
-                    <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#00a8e8'}}/>到站/发车偏差明细</span>
+                    <span className="d-panel-title">
+                      <span className="d-panel-dot bg-[#00a8e8]" />
+                      到站/发车偏差明细
+                    </span>
                   </div>
-                  <div className="d-tbl-scroll" style={{maxHeight:420}}>
+                  <div className="d-tbl-scroll max-h-105">
                     <table className="d-tbl">
-                      <thead><tr><th>车次</th><th>站台</th><th>计划到</th><th>实际到</th><th>Δ到</th><th>计划发</th><th>实际发</th><th>Δ发</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>车次</th>
+                          <th>站台</th>
+                          <th>计划到</th>
+                          <th>实际到</th>
+                          <th>Δ到</th>
+                          <th>计划发</th>
+                          <th>实际发</th>
+                          <th>Δ发</th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        {planDeviations.length===0?<tr><td colSpan={8} className="d-empty">暂无偏差数据</td></tr>:
-                        planDeviations
-                          .sort((a,b)=>Math.abs(b.arrivalDeviation)-Math.abs(a.arrivalDeviation))
-                          .slice(0,30)
-                          .map((d,i)=>{
-                            const arrColor = Math.abs(d.arrivalDeviation)>60?'#fc5c65':d.arrivalDeviation>0?'#f7b731':'#06d6a0';
-                            const depColor = Math.abs(d.departureDeviation)>60?'#fc5c65':d.departureDeviation>0?'#f7b731':'#06d6a0';
-                            return <tr key={i}>
-                              <td><span className="d-train-id">{d.trainId}</span></td>
-                              <td style={{fontWeight:600}}>{d.stationName}</td>
-                              <td className="d-mono" style={{color:'#64748b'}}>{fmtTime(d.plannedArrivalSeconds)}</td>
-                              <td className="d-mono">{fmtTime(d.arrivalTimeSeconds)}</td>
-                              <td className="d-mono" style={{color:arrColor,fontWeight:600}}>{d.arrivalDeviation>0?'+':''}{d.arrivalDeviation.toFixed(0)}s</td>
-                              <td className="d-mono" style={{color:'#64748b'}}>{fmtTime(d.plannedDepartureSeconds)}</td>
-                              <td className="d-mono">{fmtTime(d.departureTimeSeconds)}</td>
-                              <td className="d-mono" style={{color:depColor,fontWeight:600}}>{d.departureDeviation>0?'+':''}{d.departureDeviation.toFixed(0)}s</td>
-                            </tr>;
-                          })
-                        }
+                        {planDeviations.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="d-empty">
+                              暂无偏差数据
+                            </td>
+                          </tr>
+                        ) : (
+                          planDeviations
+                            .sort(
+                              (a, b) =>
+                                Math.abs(b.arrivalDeviation) -
+                                Math.abs(a.arrivalDeviation),
+                            )
+                            .slice(0, 30)
+                            .map((d, i) => {
+                              const arrColor =
+                                Math.abs(d.arrivalDeviation) > 60
+                                  ? "#fc5c65"
+                                  : d.arrivalDeviation > 0
+                                    ? "#f7b731"
+                                    : "#06d6a0";
+                              const depColor =
+                                Math.abs(d.departureDeviation) > 60
+                                  ? "#fc5c65"
+                                  : d.departureDeviation > 0
+                                    ? "#f7b731"
+                                    : "#06d6a0";
+                              return (
+                                <tr key={i}>
+                                  <td>
+                                    <span className="d-train-id">
+                                      {d.trainId}
+                                    </span>
+                                  </td>
+                                  <td className="font-semibold">
+                                    {d.stationName}
+                                  </td>
+                                  <td className="d-mono text-slate-500">
+                                    {fmtTime(d.plannedArrivalSeconds)}
+                                  </td>
+                                  <td className="d-mono">
+                                    {fmtTime(d.arrivalTimeSeconds)}
+                                  </td>
+                                  <td
+                                    className="d-mono font-semibold"
+                                    style={{ color: arrColor }}
+                                  >
+                                    {d.arrivalDeviation > 0 ? "+" : ""}
+                                    {d.arrivalDeviation.toFixed(0)}s
+                                  </td>
+                                  <td className="d-mono text-slate-500">
+                                    {fmtTime(d.plannedDepartureSeconds)}
+                                  </td>
+                                  <td className="d-mono">
+                                    {fmtTime(d.departureTimeSeconds)}
+                                  </td>
+                                  <td
+                                    className="d-mono font-semibold"
+                                    style={{ color: depColor }}
+                                  >
+                                    {d.departureDeviation > 0 ? "+" : ""}
+                                    {d.departureDeviation.toFixed(0)}s
+                                  </td>
+                                </tr>
+                              );
+                            })
+                        )}
                       </tbody>
                     </table>
                   </div>
                 </div>
 
                 {/* 汇总统计 */}
-                {planDeviations.length>0 && (()=>{
-                  const lateArr = planDeviations.filter(d=>d.arrivalDeviation>60);
-                  const earlyArr = planDeviations.filter(d=>d.arrivalDeviation<-15);
-                  const onTime = planDeviations.filter(d=>Math.abs(d.arrivalDeviation)<=60);
-                  const maxDelay = planDeviations.reduce((m,d)=>Math.max(m,d.arrivalDeviation),0);
-                  const avgDelay = planDeviations.reduce((s,d)=>s+Math.max(0,d.arrivalDeviation),0)/planDeviations.length;
-                  return <div className="d-panel" style={{marginTop:8}}>
-                    <div className="d-panel-head">
-                      <span className="d-panel-title"><span className="d-panel-dot" style={{background:'#06d6a0'}}/>汇总统计</span>
-                    </div>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,padding:'8px 12px'}}>
-                      <div style={{textAlign:'center'}}><div className="d-mono" style={{fontSize:18,color:'#06d6a0'}}>{onTime.length}</div><div style={{fontSize:10,color:'#617088'}}>正点 (|Δ|≤60s)</div></div>
-                      <div style={{textAlign:'center'}}><div className="d-mono" style={{fontSize:18,color:'#f7b731'}}>{avgDelay.toFixed(0)}s</div><div style={{fontSize:10,color:'#617088'}}>平均晚点</div></div>
-                      <div style={{textAlign:'center'}}><div className="d-mono" style={{fontSize:18,color:'#fc5c65'}}>{maxDelay.toFixed(0)}s</div><div style={{fontSize:10,color:'#617088'}}>最大晚点</div></div>
-                    </div>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,padding:'0 12px 8px'}}>
-                      <span style={{fontSize:10,color:'#617088'}}>显著晚点 (&gt;60s): {lateArr.length}</span>
-                      <span style={{fontSize:10,color:'#617088'}}>早点 (&lt;-15s): {earlyArr.length}</span>
-                    </div>
-                  </div>;
-                })()}
+                {planDeviations.length > 0 &&
+                  (() => {
+                    const lateArr = planDeviations.filter(
+                      (d) => d.arrivalDeviation > 60,
+                    );
+                    const earlyArr = planDeviations.filter(
+                      (d) => d.arrivalDeviation < -15,
+                    );
+                    const onTime = planDeviations.filter(
+                      (d) => Math.abs(d.arrivalDeviation) <= 60,
+                    );
+                    const maxDelay = planDeviations.reduce(
+                      (m, d) => Math.max(m, d.arrivalDeviation),
+                      0,
+                    );
+                    const avgDelay =
+                      planDeviations.reduce(
+                        (s, d) => s + Math.max(0, d.arrivalDeviation),
+                        0,
+                      ) / planDeviations.length;
+                    return (
+                      <div className="d-panel mt-2">
+                        <div className="d-panel-head">
+                          <span className="d-panel-title">
+                            <span className="d-panel-dot bg-[#06d6a0]" />
+                            汇总统计
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 pt-2 px-3">
+                          <div className="text-center">
+                            <div className="d-mono text-lg text-[#06d6a0]">
+                              {onTime.length}
+                            </div>
+                            <div className="text-[10px] text-[#617088]">
+                              正点 (|Δ|≤60s)
+                            </div>
+                          </div>
+                          <div className="text-center">
+                            <div className="d-mono text-lg text-[#f7b731]">
+                              {avgDelay.toFixed(0)}s
+                            </div>
+                            <div className="text-[10px] text-[#617088]">
+                              平均晚点
+                            </div>
+                          </div>
+                          <div className="text-center">
+                            <div className="d-mono text-lg text-[#fc5c65]">
+                              {maxDelay.toFixed(0)}s
+                            </div>
+                            <div className="text-[10px] text-[#617088]">
+                              最大晚点
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 px-3 pb-2">
+                          <span className="text-[10px] text-[#617088]">
+                            显著晚点 (&gt;60s): {lateArr.length}
+                          </span>
+                          <span className="text-[10px] text-[#617088]">
+                            早点 (&lt;-15s): {earlyArr.length}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
               </div>
             )}
           </div>
@@ -717,121 +2295,183 @@ export default function Dispatch() {
 
 const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-.d-root{height:100%;min-height:100%;display:flex;flex-direction:column;background:#060b11;overflow:hidden}
-.d-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:48px;flex-shrink:0;gap:10px;background:rgba(13,21,32,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid #152433;z-index:20}
-.d-tb-left{display:flex;align-items:center;gap:8px;min-width:0}
-.d-tb-back{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;color:#617088;transition:all .15s;flex-shrink:0}
-.d-tb-back:hover{background:#182537;color:#94a3b8}
+/* ═══════════════════════════════════════════════
+   Dispatcher Workstation panel (调度面板内嵌)
+   ═══════════════════════════════════════════════ */
+.dispatcher-workstation{width:100%;max-height:36vh;overflow:auto;background:var(--color-bg-elevated);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-md);color:var(--color-text);box-shadow:var(--shadow-sm);font-size:var(--text-xs);transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.dispatcher-workstation:hover{border-color:rgba(0,168,232,0.2);box-shadow:var(--shadow-md)}
+.dispatcher-workstation header{display:flex;justify-content:space-between;margin-bottom:var(--space-sm)}.dispatcher-workstation .online{color:var(--color-success)}.dispatcher-workstation .paused{color:var(--color-warning)}
+.workstation-metrics{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:var(--space-sm)}.workstation-metrics span{background:var(--color-bg-hover);padding:5px;border-radius:var(--radius-sm)}
+.dispatcher-workstation button{background:var(--color-accent);color:white;border:0;border-radius:var(--radius-sm);padding:5px var(--space-sm);cursor:pointer;transition:all var(--transition-fast)}
+.dispatcher-workstation button:hover{opacity:0.9;transform:translateY(-1px)}
+.pending-command{display:grid;gap:5px;margin-top:var(--space-sm);padding:var(--space-sm);border-left:3px solid var(--color-warning);background:var(--color-bg-hover);border-radius:0 var(--radius-sm) var(--radius-sm) 0}.pending-command span{color:var(--color-text-secondary)}
+.onboard-event{margin-top:6px;padding:6px;background:var(--color-danger-bg);color:var(--color-danger);border-radius:var(--radius-sm)}
+.onboard-monitor-title{margin:var(--space-sm) 0 5px;color:var(--color-accent);font-weight:700}
+.onboard-monitor-empty{padding:9px;margin-bottom:var(--space-sm);color:var(--color-text-tertiary);background:var(--color-bg-elevated);border:1px dashed var(--color-border);border-radius:var(--radius-md)}
+.onboard-monitor-card{display:grid;gap:3px;margin-bottom:7px;padding:var(--space-sm);background:var(--color-bg-hover);border-left:3px solid var(--color-text-tertiary);border-radius:0 var(--radius-sm) var(--radius-sm) 0;color:var(--color-text);transition:border-color var(--transition-fast)}
+.onboard-monitor-card:hover{border-left-color:var(--color-accent)}
+.onboard-monitor-card.is-online{border-left-color:var(--color-success)}.onboard-monitor-card.is-offline{opacity:.62}
+.onboard-monitor-head{display:flex;align-items:center;gap:var(--space-sm)}.onboard-monitor-head span{color:var(--color-success)}.onboard-monitor-card.is-offline .onboard-monitor-head span{color:var(--color-danger)}.onboard-monitor-head small{margin-left:auto;color:var(--color-text-secondary)}
+.onboard-monitor-meta{color:var(--color-text-tertiary);font-size:10px}
+.onboard-monitor-conflict{color:var(--color-warning);font-weight:700}
+.onboard-depart-actions{display:flex;gap:6px;margin-top:5px}.onboard-depart-actions button{flex:1;background:var(--color-accent);transition:all var(--transition-fast)}.onboard-depart-actions button:hover{opacity:0.9}.onboard-depart-actions button+button{background:var(--color-bg-hover)}
+.onboard-emergency-actions{margin-top:5px;padding:6px;background:var(--color-danger-bg);color:var(--color-danger);border-radius:var(--radius-sm)}.onboard-emergency-actions button{width:100%;background:#b43a45;transition:all var(--transition-fast)}.onboard-emergency-actions button:hover{opacity:0.9}
+
+/* ═══════════════════════════════════════════════
+   Root & Topbar
+   ═══════════════════════════════════════════════ */
+.d-root{height:100%;min-height:100%;display:flex;flex-direction:column;background:var(--color-bg-base);overflow:hidden}
+.d-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 var(--space-md);height:48px;flex-shrink:0;gap:var(--space-sm);background:rgba(13,21,32,0.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid var(--color-border-light);z-index:20}
+.d-tb-left{display:flex;align-items:center;gap:6px;min-width:0;flex-shrink:0}
+.d-tb-back{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:var(--radius-md);color:var(--color-text-tertiary);transition:all var(--transition-fast);flex-shrink:0}
+.d-tb-back:hover{background:var(--color-bg-hover);color:var(--color-text-secondary);transform:translateX(-2px)}
 .d-tb-brand{display:flex;align-items:center;gap:7px}
-.d-tb-logo{width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#00a8e8,#0077b6);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 0 14px rgba(0,168,232,0.25)}
-.d-tb-title{font-size:13px;font-weight:700;color:#e2e8f0;letter-spacing:-0.2px;white-space:nowrap}
-.d-tb-sub{display:block;font-size:8px;color:#617088;letter-spacing:1.5px;font-weight:600;text-transform:uppercase}
+.d-tb-logo{width:32px;height:32px;border-radius:var(--radius-md);background:linear-gradient(135deg,var(--color-accent),#0077b6);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 0 18px var(--color-accent-glow)}
+.d-tb-title{font-size:var(--text-xl);font-weight:700;color:var(--color-text-heading);letter-spacing:-0.2px;white-space:nowrap}
+.d-tb-sub{display:block;font-size:8px;color:var(--color-text-tertiary);letter-spacing:1.5px;font-weight:600;text-transform:uppercase}
+@media(max-width:768px){.d-tb-title{font-size:11px}.d-tb-sub{display:none}.d-tb-logo{width:24px;height:24px}}
 .d-tb-center{flex:1;display:flex;justify-content:center;min-width:0}
+@media(max-width:900px){.d-tb-center{display:none}}
 .d-tb-clock{text-align:center}
-.d-tb-clock-lbl{display:block;font-size:8px;color:#617088;letter-spacing:3px;font-weight:700}
-.d-tb-clock-val{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#e2e8f0;letter-spacing:3px;line-height:1.15}
-.d-tb-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.d-tb-err{font-size:10px;color:#fc5c65;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.d-speed-group{display:flex;border-radius:4px;overflow:hidden;border:1px solid #1c2a3e}
-.d-speed-btn{padding:3px 8px;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;background:transparent;color:#617088;border:none;cursor:pointer;transition:all .12s;border-right:1px solid #1c2a3e}
+.d-tb-clock-lbl{display:block;font-size:8px;color:var(--color-text-tertiary);letter-spacing:3px;font-weight:700}
+.d-tb-clock-val{font-family:var(--font-mono);font-size:22px;font-weight:700;color:var(--color-text-heading);letter-spacing:3px;line-height:1.15}
+.d-tb-right{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:768px){.d-tb-right{gap:4px}}
+.d-tb-err{font-size:var(--text-xs);color:var(--color-danger);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Speed & Mode buttons ── */
+.d-speed-group{display:flex;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--color-border)}
+.d-speed-btn{padding:3px 8px;font-size:var(--text-xs);font-weight:600;font-family:var(--font-mono);background:transparent;color:var(--color-text-tertiary);border:none;cursor:pointer;transition:all var(--transition-fast);border-right:1px solid var(--color-border)}
 .d-speed-btn:last-child{border-right:none}
-.d-speed-btn:hover:not(:disabled){background:#182537;color:#94a3b8}
-.d-speed-btn.active{background:#00a8e8;color:#060b11}
+.d-speed-btn:hover:not(:disabled){background:var(--color-bg-hover);color:var(--color-text-secondary)}
+.d-speed-btn.active{background:var(--color-accent);color:var(--color-bg-base);box-shadow:0 0 10px var(--color-accent-glow)}
 .d-speed-btn:disabled{opacity:0.35;cursor:not-allowed}
-.d-map-mode{display:flex;border-radius:4px;overflow:hidden;border:1px solid #1c2a3e}
-.d-mode-btn{padding:3px 7px;font-size:9px;font-weight:600;background:transparent;color:#617088;border:none;cursor:pointer;transition:all .12s;border-right:1px solid #1c2a3e;text-transform:uppercase;letter-spacing:.5px}
+.d-map-mode{display:flex;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--color-border)}
+.d-mode-btn{padding:3px 7px;font-size:9px;font-weight:600;background:transparent;color:var(--color-text-tertiary);border:none;cursor:pointer;transition:all var(--transition-fast);border-right:1px solid var(--color-border);text-transform:uppercase;letter-spacing:.5px}
 .d-mode-btn:last-child{border-right:none}
-.d-mode-btn:hover{background:#182537;color:#94a3b8}
-.d-mode-btn.active{background:#1c2a3e;color:#00a8e8}
-.d-btn{display:flex;align-items:center;gap:4px;padding:4px 12px;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;white-space:nowrap}
+.d-mode-btn:hover{background:var(--color-bg-hover);color:var(--color-text-secondary)}
+.d-mode-btn.active{background:var(--color-border);color:var(--color-accent)}
+
+/* ── Generic action buttons ── */
+.d-btn{display:flex;align-items:center;gap:4px;padding:4px 10px;border:none;border-radius:var(--radius-sm);font-size:var(--text-xs);font-weight:600;cursor:pointer;transition:all var(--transition-fast);white-space:nowrap}
 .d-btn:disabled{opacity:0.35;cursor:not-allowed}
-.d-btn-start{background:#06d6a0;color:#060b11}
-.d-btn-start:hover:not(:disabled){background:#05c492}
-.d-btn-step{background:#1c2a3e;color:#94a3b8}
-.d-btn-step:hover:not(:disabled){background:#253448;color:#cbd5e1}
-.d-btn-stop{background:#fc5c65;color:#fff}
-.d-btn-stop:hover{background:#e55058}
+@media(max-width:768px){.d-btn{padding:3px 8px;font-size:10px}}
+.d-btn-start{background:var(--color-success);color:var(--color-bg-base)}
+.d-btn-start:hover:not(:disabled){background:#05c492;box-shadow:0 0 14px rgba(6,214,160,0.3);transform:translateY(-1px)}
+.d-btn-step{background:var(--color-border);color:var(--color-text-secondary)}
+.d-btn-step:hover:not(:disabled){background:#253448;color:var(--color-text);transform:translateY(-1px)}
+.d-btn-stop{background:var(--color-danger);color:#fff}
+.d-btn-stop:hover{background:#e55058;box-shadow:0 0 14px rgba(252,92,101,0.3);transform:translateY(-1px)}
+.d-btn-reset{background:#1e293b;color:var(--color-text-secondary)}
+.d-btn-reset:hover:not(:disabled){background:#253448;color:var(--color-text)}
 
-/* ── Body ── */
-.d-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:auto minmax(0,1fr);flex:1;padding:6px 12px 8px;overflow:hidden;min-height:0;gap:6px 10px;align-items:stretch}
+/* ═══════════════════════════════════════════════
+   Body Grid Layout
+   ═══════════════════════════════════════════════ */
+.d-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,460px);grid-template-rows:auto minmax(0,1fr);flex:1;padding:var(--space-sm) var(--space-md) var(--space-sm);overflow:hidden;min-height:0;gap:var(--space-sm) 10px;align-items:stretch}
 .d-info-bar{grid-column:1/-1;grid-row:1;display:flex;align-items:center;gap:6px;padding:4px 0;width:100%;flex-shrink:0;flex-wrap:wrap}
-.d-info-chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);border:1px solid color-mix(in srgb,var(--c) 25%,transparent);white-space:nowrap}
+.d-info-chip{display:inline-flex;align-items:center;padding:3px 10px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:600;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);border:1px solid color-mix(in srgb,var(--c) 25%,transparent);white-space:nowrap;transition:all var(--transition-fast)}
+.d-info-chip:hover{border-color:color-mix(in srgb,var(--c) 45%,transparent)}
+@media(max-width:1400px){.d-body{grid-template-columns:minmax(0,1fr) minmax(280px,380px)}}
 @media(max-width:1200px){.d-body{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto;overflow:auto}}
+@media(max-width:768px){.d-body{padding:4px 6px 6px;gap:4px}}
 
-/* ── Left ── */
-.d-left{grid-column:1;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px}
-@media(max-width:1200px){.d-left{grid-column:1;min-height:60vh}}
-.d-map-panel{flex:1;min-height:200px;display:flex;flex-direction:column;background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e}
+/* ═══════════════════════════════════════════════
+   Left Column - Map & Diagram panels
+   ═══════════════════════════════════════════════ */
+.d-left{grid-column:1;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:var(--space-sm)}
+@media(max-width:1200px){.d-left{grid-column:1;min-height:55vh}}
+@media(max-width:768px){.d-left{min-height:45vh;gap:6px}}
+.d-map-panel{flex:1;min-height:200px;display:flex;flex-direction:column;background:var(--color-bg-elevated);border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--color-border);transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.d-map-panel:hover{border-color:rgba(0,168,232,0.2);box-shadow:var(--shadow-md)}
 .d-map-body{flex:1;min-height:150px;position:relative}
 .d-map-inner{width:100%;height:100%;position:absolute;top:0;left:0}
-.d-map-stats{display:flex;border-top:1px solid #1c2a3e;background:#0a1019;flex-shrink:0}
-.d-mstat{flex:1;text-align:center;padding:7px 4px;border-right:1px solid #1c2a3e}
+.d-map-stats{display:flex;border-top:1px solid var(--color-border);background:var(--color-bg-surface);flex-shrink:0}
+.d-mstat{flex:1;text-align:center;padding:7px 4px;border-right:1px solid var(--color-border);transition:background var(--transition-fast)}
+.d-mstat:hover{background:var(--color-bg-hover)}
 .d-mstat:last-child{border-right:none}
-.d-mstat-val{display:block;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#e2e8f0}
-.d-mstat-lbl{font-size:9px;color:#617088;margin-top:1px}
+.d-mstat-val{display:block;font-family:var(--font-mono);font-size:var(--text-sm);font-weight:700;color:var(--color-text-heading)}
+.d-mstat-lbl{font-size:9px;color:var(--color-text-tertiary);margin-top:1px}
+@media(max-width:768px){.d-mstat-val{font-size:10px}.d-mstat-lbl{font-size:8px}.d-map-stats{flex-wrap:wrap}}
 
-/* ── Train Diagram ── */
-.d-diagram-panel{height:180px;flex-shrink:0;display:flex;flex-direction:column;background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e}
+/* ═══════════════════════════════════════════════
+   Train Diagram panel
+   ═══════════════════════════════════════════════ */
+.d-diagram-panel{flex-shrink:0;display:flex;flex-direction:column;background:var(--color-bg-elevated);border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--color-border);min-height:140px;max-height:240px;transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.d-diagram-panel:hover{border-color:rgba(247,183,49,0.2);box-shadow:var(--shadow-md)}
 .d-diagram{flex:1;width:100%}
-.d-empty-panel{flex:1;display:flex;align-items:center;justify-content:center;color:#374151;font-size:12px}
+.d-empty-panel{flex:1;display:flex;align-items:center;justify-content:center;color:var(--color-text-disabled);font-size:var(--text-sm)}
+@media(max-width:768px){.d-diagram-panel{max-height:160px}}
 
 /* ── Panel Head ── */
-.d-panel-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#0a1019;border-bottom:1px solid #1c2a3e;flex-shrink:0}
-.d-panel-title{font-size:11px;font-weight:600;color:#e2e8f0;display:flex;align-items:center;gap:6px;letter-spacing:-0.1px}
-.d-panel-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.d-panel-badge{font-size:10px;color:#617088;font-weight:500}
+.d-panel-head{display:flex;align-items:center;justify-content:space-between;padding:8px var(--space-md);background:var(--color-bg-surface);border-bottom:1px solid var(--color-border);flex-shrink:0}
+.d-panel-title{font-size:var(--text-xs);font-weight:600;color:var(--color-text-heading);display:flex;align-items:center;gap:6px;letter-spacing:-0.1px}
+.d-panel-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor}
+.d-panel-badge{font-size:var(--text-xs);color:var(--color-text-tertiary);font-weight:500}
 
-/* ── Right ── */
-.d-right{grid-column:2;grid-row:2;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px;overflow:hidden}
-@media(max-width:1200px){.d-right{grid-column:1;width:100%;flex:initial}}
+/* ═══════════════════════════════════════════════
+   Right Column - Tabs & Data panels
+   ═══════════════════════════════════════════════ */
+.d-right{grid-column:2;grid-row:2;min-width:260px;min-height:0;display:flex;flex-direction:column;gap:var(--space-sm);overflow:hidden}
+@media(max-width:1400px){.d-right{min-width:240px;gap:6px}}
+@media(max-width:1200px){.d-right{grid-column:1;width:100%;max-height:50vh;flex:initial}}
+@media(max-width:768px){.d-right{max-height:45vh}}
 
 /* ── Tab Bar ── */
-.d-tab-bar{display:flex;gap:2px;margin-bottom:8px;flex-shrink:0}
-.d-tab{display:flex;align-items:center;gap:5px;padding:6px 12px;font-size:11px;font-weight:600;border:none;border-radius:5px;cursor:pointer;transition:all .15s;background:transparent;color:#617088}
-.d-tab:hover{background:#182537;color:#94a3b8}
-.d-tab.active{background:#0d1520;color:#e2e8f0;border:1px solid #1c2a3e}
-.d-tab-dot{width:5px;height:5px;border-radius:50%}
+.d-tab-bar{display:flex;gap:2px;margin-bottom:var(--space-sm);flex-shrink:0;overflow-x:auto;scrollbar-width:none}
+.d-tab-bar::-webkit-scrollbar{display:none}
+.d-tab{display:flex;align-items:center;gap:5px;padding:6px 10px;font-size:var(--text-xs);font-weight:600;border:none;border-radius:var(--radius-md);cursor:pointer;transition:all var(--transition-fast);background:transparent;color:var(--color-text-tertiary);white-space:nowrap;flex-shrink:0}
+.d-tab:hover{background:var(--color-bg-hover);color:var(--color-text-secondary)}
+.d-tab.active{background:var(--color-bg-elevated);color:var(--color-text-heading);border:1px solid var(--color-border);box-shadow:var(--shadow-sm)}
+.d-tab-dot{width:6px;height:6px;border-radius:50%}
+@media(max-width:768px){.d-tab{padding:4px 8px;font-size:10px}}
 
 /* ── Right scroll area ── */
 .d-right-scroll{flex:1;overflow-y:auto;min-height:0}
 .d-right-scroll-flex{display:flex;flex-direction:column}
 .d-right-scroll-flex .d-panel-flex{flex:1;min-height:0}
 
-/* ── Tables ── */
-.d-panel{background:#0d1520;border-radius:8px;overflow:hidden;border:1px solid #1c2a3e;display:flex;flex-direction:column}
+/* ═══════════════════════════════════════════════
+   Tables & Data Display
+   ═══════════════════════════════════════════════ */
+.d-panel{background:var(--color-bg-elevated);border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--color-border);display:flex;flex-direction:column;transition:border-color var(--transition-base),box-shadow var(--transition-base)}
+.d-panel:hover{border-color:rgba(59,130,246,0.12);box-shadow:var(--shadow-md)}
 .d-panel-flex{flex:1;min-height:0}
-.d-tbl-scroll{overflow:auto;max-height:240px;min-height:0}
-.d-tbl-scroll-sm{max-height:120px}
-.d-tbl{width:100%;border-collapse:collapse;font-size:11px}
+.d-tbl-scroll{overflow:auto;max-height:260px;min-height:0}
+.d-tbl-scroll-sm{max-height:140px}
+.d-tbl{width:100%;border-collapse:collapse;font-size:var(--text-xs)}
 .d-tbl thead{position:sticky;top:0;z-index:2}
-.d-tbl th{background:#0a1019;color:#617088;font-weight:600;padding:6px 8px;text-align:left;border-bottom:1px solid #1c2a3e;font-size:9px;text-transform:uppercase;letter-spacing:.5px}
-.d-tbl td{padding:6px 8px;border-bottom:1px solid #152433;color:#cbd5e1}
-.d-tbl tbody tr:hover{background:rgba(255,255,255,0.02)}
+.d-tbl th{background:var(--color-bg-surface);color:var(--color-text-tertiary);font-weight:700;padding:8px;text-align:left;border-bottom:1px solid var(--color-border);font-size:9px;text-transform:uppercase;letter-spacing:.5px}
+.d-tbl td{padding:8px;border-bottom:1px solid var(--color-border-light);color:var(--color-text-secondary)}
+.d-tbl tbody tr{transition:background var(--transition-fast)}
+.d-tbl tbody tr:hover{background:var(--color-bg-active)}
 .d-tbl tbody tr:last-child td{border-bottom:none}
-.d-mono{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500}
-.d-train-id{font-weight:700;color:#e2e8f0;font-family:'JetBrains Mono',monospace}
-.d-status-dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:4px;vertical-align:middle}
-.d-empty{text-align:center;color:#374151;padding:24px 8px!important;font-size:11px}
-.d-h-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:600;color:var(--c);background:var(--bg)}
+.d-mono{font-family:var(--font-mono);font-size:10px;font-weight:500;font-variant-numeric:tabular-nums}
+.d-train-id{font-weight:700;color:var(--color-text-heading);font-family:var(--font-mono)}
+.d-status-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle;box-shadow:0 0 4px currentColor}
+.d-empty{text-align:center;color:var(--color-text-disabled);padding:24px 8px!important;font-size:var(--text-xs)}
+.d-h-badge{display:inline-block;padding:2px 8px;border-radius:var(--radius-full);font-size:9px;font-weight:700;color:var(--c);background:var(--bg);transition:transform var(--transition-fast)}
+.d-h-badge:hover{transform:scale(1.05)}
 
-/* ── Commands ── */
+/* ── Commands list ── */
 .d-cmd-wrap{overflow-y:auto;flex:1;min-height:0}
-.d-cmd{display:flex;align-items:center;gap:7px;padding:6px 12px;border-bottom:1px solid #152433;font-size:11px}
+.d-cmd{display:flex;align-items:center;gap:7px;padding:8px var(--space-md);border-bottom:1px solid var(--color-border-light);font-size:var(--text-xs);transition:background var(--transition-fast)}
+.d-cmd:hover{background:var(--color-bg-hover)}
 .d-cmd:last-child{border-bottom:none}
-.d-cmd-tag{padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;color:var(--c);background:var(--bg);white-space:nowrap}
-.d-cmd-train{font-weight:700;color:#e2e8f0;font-family:'JetBrains Mono',monospace;font-size:10px;min-width:24px}
-.d-cmd-reason{color:#94a3b8;flex:1;font-size:10px}
+.d-cmd-tag{padding:2px 8px;border-radius:var(--radius-full);font-size:9px;font-weight:700;color:var(--c);background:var(--bg);white-space:nowrap}
+.d-cmd-train{font-weight:700;color:var(--color-text-heading);font-family:var(--font-mono);font-size:10px;min-width:24px}
+.d-cmd-reason{color:var(--color-text-secondary);flex:1;font-size:10px}
 
 /* ── Strategy action buttons ── */
-.d-act-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:18px;border:1px solid #1c2a3e;border-radius:3px;background:transparent;color:#617088;cursor:pointer;font-size:10px;padding:0;transition:all .12s;line-height:1}
-.d-act-btn:hover{background:#182537;color:#00a8e8;border-color:#00a8e8}
+.d-act-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:transparent;color:var(--color-text-tertiary);cursor:pointer;font-size:11px;padding:0;transition:all var(--transition-fast);line-height:1}
+.d-act-btn:hover{background:var(--color-bg-active);color:var(--color-accent);border-color:var(--color-accent);transform:scale(1.1)}
 
 /* ── Leaflet overrides ── */
-.leaflet-container{background:#060b11!important}
-.leaflet-control-zoom a{background:#0d1520!important;color:#94a3b8!important;border-color:#1c2a3e!important}
-.leaflet-control-zoom a:hover{background:#182537!important;color:#e2e8f0!important}
-.leaflet-control-attribution{background:rgba(13,21,32,0.8)!important;color:#617088!important;font-size:8px!important;padding:2px 5px!important}
-.leaflet-control-attribution a{color:#00a8e8!important}
+.leaflet-container{background:var(--color-bg-base)!important}
+.leaflet-control-zoom a{background:var(--color-bg-elevated)!important;color:var(--color-text-secondary)!important;border-color:var(--color-border)!important;border-radius:var(--radius-sm)!important;transition:all var(--transition-fast)!important}
+.leaflet-control-zoom a:hover{background:var(--color-bg-hover)!important;color:var(--color-text-heading)!important}
+.leaflet-control-attribution{background:rgba(13,21,32,0.8)!important;color:var(--color-text-tertiary)!important;font-size:8px!important;padding:2px 5px!important;border-radius:var(--radius-sm)!important}
+.leaflet-control-attribution a{color:var(--color-accent)!important}
 
-.d-tooltip{font-size:11px!important;padding:5px 8px!important;border-radius:5px!important;border:none!important;background:rgba(13,21,32,0.95)!important;color:#e2e8f0!important;box-shadow:0 2px 12px rgba(0,0,0,0.4)!important}
-.d-tooltip::before{border-top-color:rgba(13,21,32,0.95)!important}`;
+.d-tooltip{font-size:var(--text-xs)!important;padding:5px 8px!important;border-radius:var(--radius-md)!important;border:none!important;background:rgba(13,21,32,0.96)!important;color:var(--color-text-heading)!important;box-shadow:var(--shadow-lg)!important}
+.d-tooltip::before{border-top-color:rgba(13,21,32,0.96)!important}`;

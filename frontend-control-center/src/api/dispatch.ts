@@ -1,4 +1,4 @@
-import type { ApiResponse, SimulationSnapshot, StationGeo } from '../types/dispatch';
+import type { ApiResponse, SimulationSnapshot, StationGeo, SystemStatesResponse } from '../types/dispatch';
 import type { SimulationLog } from '../types';
 
 const API_BASE = '/api';
@@ -33,6 +33,14 @@ export async function stepSimulation(steps: number = 1): Promise<string> {
   });
 }
 
+export async function resetSimulation(): Promise<string> {
+  return request<string>('/simulations/reset', { method: 'POST' });
+}
+
+export async function pauseSimulation(): Promise<string> {
+  return request<string>('/simulations/pause', { method: 'POST' });
+}
+
 export async function getSnapshot(): Promise<SimulationSnapshot> {
   return request<SimulationSnapshot>('/simulations/snapshot');
 }
@@ -54,11 +62,116 @@ export async function applyStrategy(trainId: string, strategyType: string, targe
 
 /**
  * 拉取仿真日志（列车粒度时序：速度/位置/牵引制动等），供能耗评估页使用。
- * 注意：该前端函数原在 origin/main 中被 EnergyEvaluation 引用，但从未在 dispatch.ts 中定义
- * （仅后端 EvaluationRequest 有同名 DTO 方法）——属 周 的调度/仿真域代码缺口。
- * TODO(周): 确认后端仿真日志接口的真实路径；此处按 /simulations/logs 推测，
- * 若路径不符，调用方 EnergyEvaluation 已用 try/catch 兜底（空数组 + 提示），不阻断页面。
  */
 export async function getSimulationLogs(): Promise<SimulationLog[]> {
   return request<SimulationLog[]>('/simulations/logs');
 }
+
+export interface IntegrationCommand {
+  commandId: string; trainId: string; commandType: string; reason: string;
+  status: string; source: string; targetValue: number;
+}
+export interface OnboardStatusReport {
+  trainId: string;
+  deviceId?: string;
+  sourceType?: string;
+  timestampSeconds: number;
+  positionMeters: number;
+  speedKmh: number;
+  accelerationMps2: number;
+  direction: string;
+  currentStationId?: string;
+  nextStationId?: string;
+  phase: string;
+  health: string;
+  lineId?: string;
+  routeId?: string;
+  fromStationId?: string;
+  toStationId?: string;
+  fromStationName?: string;
+  toStationName?: string;
+  operatingMode?: string;
+  paused: boolean;
+  authoritative?: boolean;
+}
+export interface OnboardMonitoringItem {
+  trainId: string;
+  deviceId?: string;
+  sourceType: string;
+  online: boolean;
+  ageSeconds: number;
+  receivedAtEpochMillis: number;
+  report: OnboardStatusReport;
+}
+export interface DispatcherWorkstation {
+  automaticOperation: boolean;
+  commands: IntegrationCommand[];
+  pendingManualConfirmations: IntegrationCommand[];
+  onboardReports: unknown[];
+  onboardMonitoring: OnboardMonitoringItem[];
+  onboardEvents: Array<{ eventId: string; trainId: string; eventType: string; severity: string; details: string }>;
+  communicationStatus: { mode: string; healthy: boolean };
+  protocolAdapterStatus: Record<string,string>;
+}
+export const getDispatcherWorkstation = () => request<DispatcherWorkstation>('/dispatch/workstation');
+export const getOnboardMonitoring = () => request<OnboardMonitoringItem[]>('/onboard/monitoring');
+export const issueIntegrationCommand = (
+  trainId: string,
+  commandType: string,
+  reason: string,
+  targetValue = 0,
+) =>
+  request<IntegrationCommand>('/dispatch/commands', {
+    method: 'POST',
+    body: JSON.stringify({
+      trainId,
+      commandType,
+      reason,
+      targetValue,
+      source: 'DISPATCHER',
+      priority: 80,
+    }),
+  });
+export const confirmIntegrationCommand = (commandId: string, approved = true) =>
+  request<IntegrationCommand>('/dispatch/commands/confirm', {
+    method: 'POST', body: JSON.stringify({ commandId, approved }),
+  });
+
+// ── CBTC 执行层: 故障注入 ──
+export const injectFault = (trainId: string, faultType: string, severity = 4) =>
+  request<{ trainId: string; faultType: string; status: string }>('/dispatch/fault/inject', {
+    method: 'POST',
+    body: JSON.stringify({ trainId, faultType, severity }),
+  });
+
+export const clearFault = (trainId: string, faultType: string) =>
+  request<{ trainId: string; faultType: string; status: string }>('/dispatch/fault/clear', {
+    method: 'POST',
+    body: JSON.stringify({ trainId, faultType }),
+  });
+
+export const getSystemStates = () =>
+  request<SystemStatesResponse>('/dispatch/states');
+
+// 站点进站客流数据
+export interface StationEntryFlowItem {
+  stationId: number;
+  stationName: string;
+  dailyEntryTotal: number;
+  hourSlot: string;
+  entryCount: number;
+  isPeak: boolean;
+}
+
+export const getStationEntryFlow = () =>
+  request<StationEntryFlowItem[]>('/dispatch/station-entry-flow');
+
+// 人口密度数据点
+export interface PopulationDensityPoint {
+  lat: number;
+  lng: number;
+  density: number;
+}
+
+export const getPopulationDensity = () =>
+  request<PopulationDensityPoint[]>('/dispatch/population-density');

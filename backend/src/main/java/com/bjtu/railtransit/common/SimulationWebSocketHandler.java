@@ -4,6 +4,7 @@ import com.bjtu.railtransit.domain.model.SimulationSnapshot;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -23,24 +24,25 @@ public class SimulationWebSocketHandler extends TextWebSocketHandler {
     private final Set<WebSocketSession> sessions = new CopyOnWriteArraySet<>();
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) {
+    public void afterConnectionEstablished(@NonNull WebSocketSession session) {
         sessions.add(session);
         log.info("WS client connected: {} (total: {})", session.getId(), sessions.size());
     }
 
     @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+    public void afterConnectionClosed(@NonNull WebSocketSession session, @NonNull CloseStatus status) {
         sessions.remove(session);
         log.info("WS client disconnected: {} (total: {})", session.getId(), sessions.size());
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+    protected void handleTextMessage(@NonNull WebSocketSession session, @NonNull TextMessage message) {
         // Optional: handle incoming commands from client
     }
 
     public void broadcast(SimulationSnapshot snapshot) {
-        if (sessions.isEmpty()) return;
+        if (sessions.isEmpty())
+            return;
         try {
             String json = mapper.writeValueAsString(snapshot);
             TextMessage msg = new TextMessage(json);

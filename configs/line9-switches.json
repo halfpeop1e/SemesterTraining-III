@@ -1,0 +1,365 @@
+{
+  "lineId": "line-9",
+  "switches": [
+    {
+      "switchId": 1,
+      "type": 65535,
+      "normalSegId": 6,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 2,
+      "type": 65535,
+      "normalSegId": 29,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 3,
+      "type": 65535,
+      "normalSegId": 32,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 4,
+      "type": 7,
+      "normalSegId": 7,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 5,
+      "type": 6,
+      "normalSegId": 11,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 6,
+      "type": 5,
+      "normalSegId": 34,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 7,
+      "type": 4,
+      "normalSegId": 37,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 8,
+      "type": 11,
+      "normalSegId": 14,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 9,
+      "type": 10,
+      "normalSegId": 16,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 10,
+      "type": 9,
+      "normalSegId": 40,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 11,
+      "type": 8,
+      "normalSegId": 43,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 12,
+      "type": 65535,
+      "normalSegId": 20,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 13,
+      "type": 65535,
+      "normalSegId": 46,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 14,
+      "type": 15,
+      "normalSegId": 64,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 15,
+      "type": 14,
+      "normalSegId": 78,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 16,
+      "type": 65535,
+      "normalSegId": 89,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 17,
+      "type": 19,
+      "normalSegId": 94,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 18,
+      "type": 21,
+      "normalSegId": 118,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 19,
+      "type": 17,
+      "normalSegId": 122,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 20,
+      "type": 23,
+      "normalSegId": 121,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 21,
+      "type": 18,
+      "normalSegId": 105,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 22,
+      "type": 65535,
+      "normalSegId": 109,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 23,
+      "type": 20,
+      "normalSegId": 113,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 24,
+      "type": 25,
+      "normalSegId": 131,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 25,
+      "type": 24,
+      "normalSegId": 149,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 26,
+      "type": 29,
+      "normalSegId": 152,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 27,
+      "type": 28,
+      "normalSegId": 155,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 28,
+      "type": 27,
+      "normalSegId": 163,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 29,
+      "type": 26,
+      "normalSegId": 166,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 30,
+      "type": 31,
+      "normalSegId": 160,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 31,
+      "type": 30,
+      "normalSegId": 142,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 32,
+      "type": 65535,
+      "normalSegId": 175,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 33,
+      "type": 35,
+      "normalSegId": 197,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 34,
+      "type": 36,
+      "normalSegId": 200,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 35,
+      "type": 33,
+      "normalSegId": 187,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 36,
+      "type": 34,
+      "normalSegId": 192,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 37,
+      "type": 40,
+      "normalSegId": 208,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 38,
+      "type": 39,
+      "normalSegId": 211,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 39,
+      "type": 38,
+      "normalSegId": 222,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 40,
+      "type": 37,
+      "normalSegId": 225,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 41,
+      "type": 65535,
+      "normalSegId": 214,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 42,
+      "type": 65535,
+      "normalSegId": 228,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 43,
+      "type": 44,
+      "normalSegId": 240,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 44,
+      "type": 43,
+      "normalSegId": 244,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 45,
+      "type": 46,
+      "normalSegId": 246,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 46,
+      "type": 45,
+      "normalSegId": 251,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 47,
+      "type": 48,
+      "normalSegId": 253,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 48,
+      "type": 47,
+      "normalSegId": 263,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 49,
+      "type": 50,
+      "normalSegId": 261,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 50,
+      "type": 49,
+      "normalSegId": 257,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 51,
+      "type": 52,
+      "normalSegId": 265,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 52,
+      "type": 51,
+      "normalSegId": 270,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 53,
+      "type": 65535,
+      "normalSegId": 271,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 54,
+      "type": 55,
+      "normalSegId": 273,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 55,
+      "type": 54,
+      "normalSegId": 278,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 56,
+      "type": 65535,
+      "normalSegId": 274,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 57,
+      "type": 65535,
+      "normalSegId": 285,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 58,
+      "type": 65535,
+      "normalSegId": 287,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 59,
+      "type": 65535,
+      "normalSegId": 303,
+      "reverseSegId": -1
+    },
+    {
+      "switchId": 60,
+      "type": 65535,
+      "normalSegId": 309,
+      "reverseSegId": -1
+    }
+  ]
+}

@@ -9,10 +9,8 @@ import com.bjtu.railtransit.signal.model.LineProfile;
 import com.bjtu.railtransit.signal.service.MaConfig;
 import com.bjtu.railtransit.signal.service.MovingAuthorityService;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**

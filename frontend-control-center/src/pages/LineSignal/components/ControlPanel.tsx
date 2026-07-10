@@ -73,7 +73,7 @@ export default function ControlPanel({
   };
 
   const switchTab = (
-    <Space direction="vertical" className="w-full">
+    <Space orientation="vertical" className="w-full">
       <Select placeholder="选择道岔" options={switchOptions} value={selectedSwitch} onChange={setSelectedSwitch} className="w-full" size="small" />
       {currentSwitch && (
         <div className="text-xs text-slate-400">当前状态：
@@ -90,7 +90,7 @@ export default function ControlPanel({
   );
 
   const routeTab = (
-    <Space direction="vertical" className="w-full">
+    <Space orientation="vertical" className="w-full">
       <Select placeholder="始端信号机" options={signalOptions} value={startSignal} onChange={setStartSignal} className="w-full" size="small" />
       <Select placeholder="终端信号机" options={signalOptions} value={endSignal} onChange={setEndSignal} className="w-full" size="small" />
       <Button size="small" type="primary" onClick={handleBuildRoute} loading={loading} disabled={!startSignal || !endSignal}>办理进路</Button>
@@ -107,14 +107,14 @@ export default function ControlPanel({
   );
 
   const signalTab = (
-    <Space direction="vertical" className="w-full">
+    <Space orientation="vertical" className="w-full">
       <Select placeholder="选择信号机" options={signalOptions} value={selectedSignal} onChange={setSelectedSignal} className="w-full" size="small" />
       <Button size="small" type="primary" onClick={handleOpenSignal} loading={loading} disabled={selectedSignal === undefined}>重开绿灯</Button>
     </Space>
   );
 
   const tsrTab = (
-    <Space direction="vertical" className="w-full">
+    <Space orientation="vertical" className="w-full">
       <div className="flex gap-2">
         <InputNumber placeholder="起点 m" size="small" value={tsrStart} onChange={(v) => setTsrStart(v ?? undefined)} className="w-full" />
         <InputNumber placeholder="终点 m" size="small" value={tsrEnd} onChange={(v) => setTsrEnd(v ?? undefined)} className="w-full" />
@@ -134,7 +134,7 @@ export default function ControlPanel({
   );
 
   return (
-    <Card size="small" title="控制面板" className="h-full" bodyStyle={{ padding: 12 }}>
+    <Card size="small" title="控制面板" className="h-full" styles={{ body: { padding: 12 } }}>
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}

@@ -1,13 +1,45 @@
-import { useState } from 'react';
-import { Card, Button, Tabs, Row, Col, Statistic, Table, Tag, Empty, Space, Spin, Alert, Result, message } from 'antd';
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  ThunderboltOutlined, CheckCircleOutlined, ExperimentOutlined, ReloadOutlined,
-} from '@ant-design/icons';
-import type { EvaluationReport, SimulationLog } from '../../types';
-import { generateReport } from '../../api/evaluation';
-import { getSimulationLogs } from '../../api/dispatch';
+  Card,
+  Button,
+  Tabs,
+  Row,
+  Col,
+  Statistic,
+  Table,
+  Tag,
+  Empty,
+  Progress,
+} from "antd";
+import {
+  CheckCircleOutlined,
+  ExperimentOutlined,
+  SyncOutlined,
+} from "@ant-design/icons";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as ReTooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+  ResponsiveContainer,
+} from "recharts";
+import type { EvaluationReport, SimulationLog } from "../../types";
+import type {
+  EnergyOptimizationInfo,
+  EnergyDataPoint,
+  PowerSupplyData,
+} from "../../types/dispatch";
+import { generateReport } from "../../api/evaluation";
+import { getSnapshot } from "../../api/dispatch";
+import { getSimulationLogs } from "../../api/dispatch";
+import { LineChart, Line, Area, AreaChart } from "recharts";
 
-/* ---- Helpers ---- */
 const riskLevelLabel: Record<string, string> = {
   safe: "安全",
   warning: "警告",
@@ -40,100 +72,234 @@ const eventTypeColor: Record<string, string> = {
   brake_insufficient: "orange",
   degraded_mode: "orange",
 };
+const CHART_COLORS = {
+  traction: "#38bdf8",
+  regen: "#22c55e",
+  net: "#f59e0b",
+  brake: "#ef4444",
+  coast: "#94a3b8",
+  aux: "#f97316",
+  cruise: "#06b6d4",
+};
+const fmt = (v: number | undefined | null, d = 1) => (v ?? 0).toFixed(d);
+const fmtTime = (s: number | undefined | null) => {
+  const t = s ?? 0;
+  const m = Math.floor(t / 60),
+    sec = Math.floor(t % 60);
+  return `${m}:${String(sec).padStart(2, "0")}`;
+};
 
-const fmt = (v: number, d = 1) => v.toFixed(d);
+function computeOperationRatio(logs: SimulationLog[]) {
+  let traction = 0,
+    brake = 0,
+    coast = 0;
+  for (const log of logs) {
+    if (log.tractiveBrakeCmd === "traction") traction++;
+    else if (log.tractiveBrakeCmd === "brake") brake++;
+    else coast++;
+  }
+  const total = traction + brake + coast || 1;
+  return [
+    {
+      name: "牵引",
+      value: +((traction / total) * 100).toFixed(1),
+      color: CHART_COLORS.traction,
+    },
+    {
+      name: "制动",
+      value: +((brake / total) * 100).toFixed(1),
+      color: CHART_COLORS.brake,
+    },
+    {
+      name: "惰行/停站",
+      value: +((coast / total) * 100).toFixed(1),
+      color: CHART_COLORS.coast,
+    },
+  ];
+}
 
-/* ---- Metric Card ---- */
-function Metric({
+function LiveGauge({
   label,
   value,
   unit,
   color,
+  max,
+  sub,
 }: {
   label: string;
   value: number;
   unit: string;
   color: string;
+  max?: number;
+  sub?: string;
 }) {
+  const pct = max && max > 0 ? Math.min(100, (value / max) * 100) : undefined;
   return (
-    <Card variant="borderless" className="rounded-xl!">
-      <Statistic
-        title={
-          <span className="text-xs text-slate-400 font-medium">{label}</span>
-        }
-        value={fmt(value)}
-        suffix={
-          <span className="text-sm font-normal ml-0.5 text-slate-400">
-            {unit}
-          </span>
-        }
-        valueStyle={{ fontSize: 26, fontWeight: 700, color }}
-      />
-    </Card>
+    <div className="p-3 rounded-xl text-center bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+      <div className="text-[10px] text-slate-500 mb-0.5 truncate">{label}</div>
+      <div
+        className="text-lg font-bold tabular-nums"
+        style={{ color, fontFamily: "'Orbitron', monospace" }}
+      >
+        {fmt(value, value < 10 ? 2 : 1)}
+        <span className="text-xs font-normal ml-0.5 text-slate-400">
+          {unit}
+        </span>
+      </div>
+      {pct !== undefined && (
+        <Progress
+          percent={+pct.toFixed(1)}
+          showInfo={false}
+          strokeColor={color}
+          railColor="rgba(148,163,184,0.1)"
+          size="small"
+        />
+      )}
+      {sub && <div className="text-[10px] text-slate-500 mt-0.5">{sub}</div>}
+    </div>
   );
 }
 
-/* ---- Page ---- */
+function PieTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number; payload: { color: string } }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0];
+  return (
+    <div className="rounded-lg px-3 py-2 text-xs bg-[rgba(15,23,42,0.95)] border border-[rgba(148,163,184,0.15)]">
+      <span style={{ color: d.payload.color }}>{d.name}</span>
+      <span className="text-slate-200 font-mono ml-2">{d.value}%</span>
+    </div>
+  );
+}
+
+function ChartTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: Array<{ color: string; name: string; value: number }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg px-3 py-2 text-xs bg-[rgba(15,23,42,0.95)] border border-[rgba(148,163,184,0.15)]">
+      <p className="text-slate-400 mb-1">{label}</p>
+      {payload.map((p, i) => (
+        <p key={i} style={{ color: p.color }}>
+          {p.name}:{" "}
+          <span className="font-mono">
+            {typeof p.value === "number" ? p.value.toFixed(1) : p.value}
+          </span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
 export default function EnergyEvaluation() {
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rawLogs, setRawLogs] = useState<SimulationLog[]>([]);
+  const [liveEnergy, setLiveEnergy] = useState<EnergyOptimizationInfo | null>(
+    null,
+  );
+  const [snapshotEnergy, setSnapshotEnergy] = useState<{
+    totalKwh: number;
+    tractionKwh: number;
+    regenKwh: number;
+    auxKwh: number;
+    cruisingKwh: number;
+  }>({ totalKwh: 0, tractionKwh: 0, regenKwh: 0, auxKwh: 0, cruisingKwh: 0 });
+  const [energyHistory, setEnergyHistory] = useState<EnergyDataPoint[]>([]);
+  const [powerSupply, setPowerSupply] = useState<PowerSupplyData[]>([]);
+  const [coastingSaved, setCoastingSaved] = useState(0);
+  const [isSimRunning, setIsSimRunning] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const pollSnapshot = useCallback(async () => {
+    try {
+      const snap = await getSnapshot();
+      if (snap && snap.activeTrains > 0) {
+        setIsSimRunning(true);
+        if (snap.energyOptimization) setLiveEnergy(snap.energyOptimization);
+        setSnapshotEnergy({
+          totalKwh: snap.totalEnergyKwh ?? 0,
+          tractionKwh: snap.totalTractionKwh ?? 0,
+          regenKwh: snap.totalRegenKwh ?? 0,
+          auxKwh: snap.totalAuxKwh ?? 0,
+          cruisingKwh: snap.totalCruisingKwh ?? 0,
+        });
+        setEnergyHistory(snap.energyHistory ?? []);
+        setPowerSupply(snap.powerSupplyStatus ?? []);
+        setCoastingSaved(snap.coastingSavedKwh ?? 0);
+      } else setIsSimRunning(false);
+    } catch {
+      setIsSimRunning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    pollRef.current = setInterval(pollSnapshot, 2000);
+    pollSnapshot();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [pollSnapshot]);
 
   const handleRun = async () => {
     setLoading(true);
     setError(null);
     try {
-      // 从仿真服务获取真实日志
-      let simulationLogs: SimulationLog[] = [];
-      try {
-        simulationLogs = await getSimulationLogs();
-      } catch {
-        // 日志获取失败，使用空数组
-      }
-      if (simulationLogs.length === 0) {
-        message.warning("未获取到仿真日志，请先在调度页面启动仿真");
-      }
-
+      let logs = await getSimulationLogs().catch(() => [] as SimulationLog[]);
+      if (logs.length > 5000) logs = logs.slice(-5000);
+      setRawLogs(logs);
       const result = await generateReport(
         {
           scenarioName: "北京9号线仿真场景",
-          simulationLogs,
+          simulationLogs: logs,
           tractionEfficiency: 0.85,
           regenEfficiency: 0.65,
           powerSupplyThreshold: 2000,
         },
         {
           scenarioName: "北京9号线仿真场景",
-          simulationLogs,
+          simulationLogs: logs,
           stationPositions: {
-            1: 313,
-            2: 1660,
-            3: 2448,
-            4: 3429,
-            5: 5014,
-            6: 6339,
-            7: 8118,
-            8: 9429,
-            9: 10598,
-            10: 11996,
-            11: 13906,
-            12: 14954,
-            13: 16048,
+            1: 313, // 郭公庄
+            2: 1660, // 丰台科技园
+            3: 2448, // 科怡路
+            4: 3429, // 丰台南路
+            5: 5014, // 丰台东大街
+            6: 6339, // 七里庄
+            7: 8118, // 六里桥
+            8: 9429, // 六里桥东
+            9: 10598, // 北京西站
+            10: 11996, // 军事博物馆
+            11: 13906, // 白堆子
+            12: 14954, // 白石桥南
+            13: 16048, // 国家图书馆
           },
           stationNames: {
-            1: "GGZ",
-            2: "FSP",
-            3: "KYL",
-            4: "FTN",
-            5: "FTD",
-            6: "QLZ",
-            7: "LLQ",
-            8: "LLE",
-            9: "BWR",
-            10: "JBG",
-            11: "BDZ",
-            12: "BQS",
-            13: "GTG",
+            1: "郭公庄",
+            2: "丰台科技园",
+            3: "科怡路",
+            4: "丰台南路",
+            5: "丰台东大街",
+            6: "七里庄",
+            7: "六里桥",
+            8: "六里桥东",
+            9: "北京西站",
+            10: "军事博物馆",
+            11: "白堆子",
+            12: "白石桥南",
+            13: "国家图书馆",
           },
           plannedArrivals: {
             1: 120,
@@ -167,76 +333,493 @@ export default function EnergyEvaluation() {
   };
 
   const s = report?.summary;
+  const pieData =
+    rawLogs.length > 0
+      ? computeOperationRatio(rawLogs)
+      : computeOperationRatio([]);
+  const barData = (report?.energyRecords ?? []).map((r) => ({
+    name: `TC${String(r.trainId).padStart(2, "0")}`,
+    牵引能耗: +r.totalTractionEnergyKwh.toFixed(1),
+    再生制动: +r.totalRegenEnergyKwh.toFixed(1),
+    净能耗: +r.netEnergyKwh.toFixed(2),
+  }));
+
+  const liveE = liveEnergy;
+  const G = LiveGauge;
+
+  const liveDashboard = (
+    <Card
+      variant="borderless"
+      className="rounded-xl!"
+      title={
+        <div className="flex items-center gap-2">
+          <SyncOutlined
+            spin={isSimRunning}
+            style={{ color: isSimRunning ? "#22c55e" : "#64748b" }}
+          />
+          <span>实时能耗仪表</span>
+          {isSimRunning && liveE && (
+            <Tag color="green" className="ml-2">
+              运行中 {fmtTime(liveE.simulationTimeSeconds)}
+            </Tag>
+          )}
+          {!isSimRunning && <Tag color="default">仿真未启动</Tag>}
+          <Tag color="blue" className="ml-2">
+            能源 {snapshotEnergy.totalKwh.toFixed(1)} kWh
+          </Tag>
+        </div>
+      }
+    >
+      {/* 快照能源汇总（每秒更新） */}
+      <Row gutter={[8, 8]} style={{ marginBottom: 12 }}>
+        <Col xs={12} sm={4}>
+          <G
+            label="累计总能耗"
+            value={snapshotEnergy.totalKwh}
+            unit="kWh"
+            color="#38bdf8"
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="牵引能耗"
+            value={snapshotEnergy.tractionKwh}
+            unit="kWh"
+            color={CHART_COLORS.traction}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="再生回收"
+            value={snapshotEnergy.regenKwh}
+            unit="kWh"
+            color={CHART_COLORS.regen}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="辅助能耗"
+            value={snapshotEnergy.auxKwh}
+            unit="kWh"
+            color={CHART_COLORS.aux}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="巡航能耗"
+            value={snapshotEnergy.cruisingKwh}
+            unit="kWh"
+            color={CHART_COLORS.cruise}
+          />
+        </Col>
+        <Col xs={12} sm={4}>
+          <G
+            label="净能耗"
+            value={snapshotEnergy.totalKwh - snapshotEnergy.regenKwh}
+            unit="kWh"
+            color={CHART_COLORS.net}
+          />
+        </Col>
+      </Row>
+      {/* 惰行节省 + DC1500V 供电状态 */}
+      <Row gutter={[8, 8]} style={{ marginBottom: 12 }}>
+        <Col xs={24} sm={6}>
+          <div className="p-3 rounded-xl text-center bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+            <div className="text-[10px] text-slate-500 mb-0.5 truncate">
+              惰行节省
+            </div>
+            <div
+              className="text-lg font-bold tabular-nums"
+              style={{ color: "#22c55e", fontFamily: "'Orbitron', monospace" }}
+            >
+              {fmt(coastingSaved, 3)}
+              <span className="text-xs font-normal ml-0.5 text-slate-400">
+                kWh
+              </span>
+            </div>
+          </div>
+        </Col>
+        {powerSupply.slice(0, 5).map((ps) => (
+          <Col xs={12} sm={3} key={ps.trainId}>
+            <div className="p-3 rounded-xl text-center bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+              <div className="text-[10px] text-slate-500 mb-0.5 truncate">
+                {ps.trainId} {ps.nearestSubstation}
+              </div>
+              <div
+                className="text-lg font-bold tabular-nums"
+                style={{
+                  color: ps.voltageOK ? "#22c55e" : "#ef4444",
+                  fontFamily: "'Orbitron', monospace",
+                }}
+              >
+                {ps.voltage.toFixed(0)}
+                <span className="text-xs font-normal ml-0.5 text-slate-400">
+                  V
+                </span>
+              </div>
+              <Progress
+                percent={+(((ps.voltage - 950) / 550) * 100).toFixed(1)}
+                showInfo={false}
+                strokeColor={ps.voltageOK ? "#22c55e" : "#ef4444"}
+                railColor="rgba(148,163,184,0.1)"
+                size="small"
+              />
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                {ps.powerKw.toFixed(0)} kW
+              </div>
+            </div>
+          </Col>
+        ))}
+      </Row>
+      {/* 能耗趋势图 */}
+      {energyHistory.length >= 2 && (
+        <Row style={{ marginBottom: 12 }}>
+          <Col span={24}>
+            <div className="p-3 rounded-xl bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+              <div className="text-[10px] text-slate-500 mb-1">
+                能耗趋势 (kWh)
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <AreaChart data={energyHistory}>
+                  <defs>
+                    <linearGradient id="colTotal" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colTrac" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colReg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#22c55e" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="rgba(148,163,184,0.1)"
+                  />
+                  <XAxis
+                    dataKey="timeSeconds"
+                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    tickFormatter={(v: number) => `${Math.floor(v / 60)}m`}
+                  />
+                  <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} />
+                  <ReTooltip content={<ChartTooltip />} />
+                  <Area
+                    type="monotone"
+                    dataKey="totalKwh"
+                    stroke="#38bdf8"
+                    fill="url(#colTotal)"
+                    strokeWidth={2}
+                    name="总能耗"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="tractionKwh"
+                    stroke="#ef4444"
+                    fill="url(#colTrac)"
+                    strokeWidth={1}
+                    name="牵引"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="regenKwh"
+                    stroke="#22c55e"
+                    fill="url(#colReg)"
+                    strokeWidth={1}
+                    name="再生"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Col>
+        </Row>
+      )}
+      {liveE ? (
+        <div className="space-y-3">
+          {/* 8项实时指标 */}
+          <Row gutter={[8, 8]}>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="累计牵引"
+                value={liveE.totalTractionEnergyKwh}
+                unit="kWh"
+                color={CHART_COLORS.traction}
+              />
+            </Col>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="再生制动"
+                value={liveE.totalRegenEnergyKwh}
+                unit="kWh"
+                color={CHART_COLORS.regen}
+              />
+            </Col>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="净能耗"
+                value={liveE.netEnergyKwh}
+                unit="kWh"
+                color={CHART_COLORS.net}
+              />
+            </Col>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="峰值功率"
+                value={liveE.currentPeakKw}
+                unit="kW"
+                color={CHART_COLORS.brake}
+                max={liveE.powerSupplyThresholdKw}
+                sub={`阈值${liveE.powerSupplyThresholdKw.toFixed(0)}kW`}
+              />
+            </Col>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="辅助能耗"
+                value={liveE.auxiliaryEnergyKwh}
+                unit="kWh"
+                color={CHART_COLORS.aux}
+              />
+            </Col>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="巡航能耗"
+                value={liveE.cruisingEnergyKwh}
+                unit="kWh"
+                color={CHART_COLORS.cruise}
+              />
+            </Col>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="牵引列车"
+                value={liveE.tractionCount}
+                unit={`/${liveE.maxTractionCount}`}
+                color="#e2e8f0"
+              />
+            </Col>
+            <Col xs={12} sm={6} md={3}>
+              <G
+                label="可回收能"
+                value={liveE.totalRecoverableEnergyKw}
+                unit="kW"
+                color="#a78bfa"
+              />
+            </Col>
+          </Row>
+          {/* 风险 + 策略 */}
+          <Row gutter={[8, 8]}>
+            <Col xs={24} sm={8}>
+              <div className="p-3 rounded-xl flex items-center gap-3 bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+                <div
+                  className="w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                  style={{
+                    background: `rgba(${liveE.peakRiskLevel === "safe" ? "34,197,94" : liveE.peakRiskLevel === "warning" ? "245,158,11" : "239,68,68"},0.08)`,
+                    color: riskLevelColor[liveE.peakRiskLevel],
+                    fontFamily: "'Orbitron', monospace",
+                  }}
+                >
+                  {riskLevelLabel[liveE.peakRiskLevel]}
+                </div>
+                <div className="text-xs text-slate-400 space-y-0.5">
+                  <div>供电风险</div>
+                  <div className="text-slate-200 font-semibold">
+                    {riskLevelLabel[liveE.peakRiskLevel]}
+                  </div>
+                </div>
+              </div>
+            </Col>
+            <Col xs={12} sm={8}>
+              <div className="p-3 rounded-xl bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+                <div className="text-xs text-slate-500">再生协同</div>
+                <div
+                  className="text-lg font-bold text-emerald-400"
+                  style={{ fontFamily: "'Orbitron', monospace" }}
+                >
+                  {liveE.regenCoordinationCount}
+                </div>
+              </div>
+            </Col>
+            <Col xs={12} sm={8}>
+              <div className="p-3 rounded-xl bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+                <div className="text-xs text-slate-500">惰行窗口</div>
+                <div
+                  className="text-lg font-bold text-blue-400"
+                  style={{ fontFamily: "'Orbitron', monospace" }}
+                >
+                  {liveE.coastingOpportunityCount}
+                </div>
+              </div>
+            </Col>
+          </Row>
+          {liveE.recommendations?.length > 0 && (
+            <div className="p-3 rounded-xl bg-[rgba(245,158,11,0.06)] border border-[rgba(245,158,11,0.12)]">
+              <div className="text-xs text-amber-400 font-medium mb-1">
+                策略建议
+              </div>
+              {liveE.recommendations.map((r, i) => (
+                <div
+                  key={i}
+                  className="text-xs text-slate-400 flex items-center gap-1.5"
+                >
+                  <span className="w-1 h-1 rounded-full bg-amber-400 shrink-0" />
+                  {r}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <Empty
+          description={
+            isSimRunning
+              ? "正在获取实时数据..."
+              : "请先启动仿真，仪表将自动显示实时能耗数据"
+          }
+        />
+      )}
+    </Card>
+  );
 
   const energy = (
     <div className="space-y-4">
+      {liveDashboard}
       {report ? (
         <>
           <Row gutter={[12, 12]}>
             {[
-              ["总牵引能耗", s?.["总牵引能耗(kWh)"] ?? 0, "kWh", "#38bdf8"],
-              ["再生制动回收", s?.["总再生能量(kWh)"] ?? 0, "kWh", "#22c55e"],
-              ["净能耗", s?.["总净能耗(kWh)"] ?? 0, "kWh", "#f59e0b"],
-              ["峰值功率", s?.["峰值功率(kW)"] ?? 0, "kW", "#ef4444"],
+              [
+                "总牵引能耗",
+                s?.["总牵引能耗(kWh)"] ?? 0,
+                "kWh",
+                CHART_COLORS.traction,
+              ],
+              [
+                "再生制动回收",
+                s?.["总再生能量(kWh)"] ?? 0,
+                "kWh",
+                CHART_COLORS.regen,
+              ],
+              ["净能耗", s?.["总净能耗(kWh)"] ?? 0, "kWh", CHART_COLORS.net],
+              ["峰值功率", s?.["峰值功率(kW)"] ?? 0, "kW", CHART_COLORS.brake],
             ].map(([l, v, u, c]) => (
               <Col xs={12} sm={6} key={l as string}>
-                <Metric
-                  label={l as string}
-                  value={v as number}
-                  unit={u as string}
-                  color={c as string}
-                />
+                <Card variant="borderless" className="rounded-xl!">
+                  <Statistic
+                    title={
+                      <span className="text-xs text-slate-400 font-medium">
+                        {l}
+                      </span>
+                    }
+                    value={fmt(v as number)}
+                    suffix={
+                      <span className="text-sm font-normal ml-0.5 text-slate-400">
+                        {u}
+                      </span>
+                    }
+                    styles={{
+                      content: {
+                        fontSize: 26,
+                        fontWeight: 700,
+                        color: c as string,
+                      },
+                    }}
+                  />
+                </Card>
               </Col>
             ))}
           </Row>
-
-          <Card title="供电风险评估" variant="borderless" className="rounded-xl!">
-            <div className="flex items-center gap-5">
-              <div
-                className="w-[72px] h-[72px] rounded-full flex items-center justify-center text-sm font-bold"
-                style={{
-                  background: `rgba(${report.powerRiskLevel === "safe" ? "34,197,94" : report.powerRiskLevel === "warning" ? "245,158,11" : "239,68,68"},0.06)`,
-                  color: riskLevelColor[report.powerRiskLevel],
-                  fontFamily: "'Orbitron', monospace",
-                }}
+          <Row gutter={[12, 12]}>
+            <Col xs={24} lg={12}>
+              <Card
+                title="工况占比"
+                variant="borderless"
+                className="rounded-xl!"
               >
-                {riskLevelLabel[report.powerRiskLevel]}
-              </div>
-              <div className="space-y-1.5 text-sm">
-                <div className="flex gap-6 text-slate-400">
-                  <span>
-                    供电阈值{" "}
-                    <b className="text-slate-200">
-                      {report.powerSupplyThreshold > 0
-                        ? `${report.powerSupplyThreshold} kW`
-                        : "未设置"}
-                    </b>
-                  </span>
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={45}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      dataKey="value"
+                      stroke="rgba(15,23,42,0.8)"
+                      strokeWidth={2}
+                    >
+                      {pieData.map((e, i) => (
+                        <Cell key={i} fill={e.color} />
+                      ))}
+                    </Pie>
+                    <ReTooltip content={<PieTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="flex justify-center gap-4">
+                  {pieData.map((d) => (
+                    <div
+                      key={d.name}
+                      className="flex items-center gap-1 text-xs text-slate-400"
+                    >
+                      <span
+                        className="w-2 h-2 rounded-sm"
+                        style={{ backgroundColor: d.color }}
+                      />
+                      {d.name} {d.value}%
+                    </div>
+                  ))}
                 </div>
-                <div className="flex gap-6 text-slate-400">
-                  <span>
-                    峰值功率{" "}
-                    <b className="text-slate-200">
-                      {report.peakPowerResult?.maxPeakKw?.toFixed(0) ?? 0} kW
-                    </b>
-                  </span>
-                  <span>
-                    峰值时刻{" "}
-                    <b className="text-slate-200">
-                      {(
-                        (report.peakPowerResult?.timeOfPeak ?? 0) / 1000
-                      ).toFixed(1)}{" "}
-                      s
-                    </b>
-                  </span>
-                </div>
-              </div>
-            </div>
-          </Card>
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card
+                title="能耗对比"
+                variant="borderless"
+                className="rounded-xl!"
+              >
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart
+                    data={barData}
+                    margin={{ top: 5, right: 5, left: -15, bottom: 5 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="rgba(148,163,184,0.08)"
+                    />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fill: "#94a3b8", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: "#64748b", fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      unit="kWh"
+                    />
+                    <ReTooltip content={<ChartTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar
+                      dataKey="牵引能耗"
+                      fill={CHART_COLORS.traction}
+                      radius={[3, 3, 0, 0]}
+                    />
+                    <Bar
+                      dataKey="再生制动"
+                      fill={CHART_COLORS.regen}
+                      radius={[3, 3, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Card>
+            </Col>
+          </Row>
         </>
       ) : (
         <Card variant="borderless" className="rounded-xl!">
-          <Empty description="点击「运行评估」开始分析" />
+          <Empty description="点击「运行评估」生成详细报告和图表" />
         </Card>
       )}
     </div>
@@ -246,7 +829,11 @@ export default function EnergyEvaluation() {
     <div className="space-y-4">
       {report ? (
         <>
-          <Card title="停站误差分析" variant="borderless" className="rounded-xl!">
+          <Card
+            title="停站误差分析"
+            variant="borderless"
+            className="rounded-xl!"
+          >
             <Table
               dataSource={(report.stopErrors || []).map((e, i) => ({
                 ...e,
@@ -304,9 +891,8 @@ export default function EnergyEvaluation() {
               ]}
             />
           </Card>
-
           {report.punctuality && (
-            <Card title="准点率评估" variant="borderless" className="rounded-xl!">
+            <Card title="准点率" variant="borderless" className="rounded-xl!">
               <Row gutter={[16, 16]}>
                 {[
                   [
@@ -343,10 +929,12 @@ export default function EnergyEvaluation() {
                           {u}
                         </span>
                       }
-                      valueStyle={{
-                        fontSize: 26,
-                        fontWeight: 700,
-                        color: c as string,
+                      styles={{
+                        content: {
+                          fontSize: 26,
+                          fontWeight: 700,
+                          color: c as string,
+                        },
                       }}
                     />
                   </Col>
@@ -354,28 +942,27 @@ export default function EnergyEvaluation() {
               </Row>
             </Card>
           )}
-
           {report.comfort && (
-            <Card title="舒适性评估" variant="borderless" className="rounded-xl!">
+            <Card title="舒适性" variant="borderless" className="rounded-xl!">
               <Row gutter={[16, 16]}>
                 {[
                   [
                     "最大加速度",
                     +report.comfort.maxAcceleration.toFixed(2),
                     "m/s²",
-                    "#38bdf8",
+                    CHART_COLORS.traction,
                   ],
                   [
                     "最大减速度",
                     +report.comfort.maxDeceleration.toFixed(2),
                     "m/s²",
-                    "#f59e0b",
+                    CHART_COLORS.brake,
                   ],
                   [
                     "评分",
                     +report.comfort.comfortScore.toFixed(0),
                     "分",
-                    "#22c55e",
+                    CHART_COLORS.regen,
                   ],
                 ].map(([l, v, u, c]) => (
                   <Col span={8} key={l as string}>
@@ -391,10 +978,12 @@ export default function EnergyEvaluation() {
                           {u}
                         </span>
                       }
-                      valueStyle={{
-                        fontSize: 26,
-                        fontWeight: 700,
-                        color: c as string,
+                      styles={{
+                        content: {
+                          fontSize: 26,
+                          fontWeight: 700,
+                          color: c as string,
+                        },
                       }}
                     />
                   </Col>
@@ -402,8 +991,7 @@ export default function EnergyEvaluation() {
               </Row>
             </Card>
           )}
-
-          <Card title="安全事件日志" variant="borderless" className="rounded-xl!">
+          <Card title="安全事件" variant="borderless" className="rounded-xl!">
             {(report.safetyEvents || []).length > 0 ? (
               <Table
                 dataSource={(report.safetyEvents || []).map((e, i) => ({
@@ -429,7 +1017,7 @@ export default function EnergyEvaluation() {
                     width: 70,
                     render: (v: number) => (
                       <span className="text-slate-200">
-                        TC{v.toString().padStart(2, "0")}
+                        TC{String(v).padStart(2, "0")}
                       </span>
                     ),
                   },
@@ -454,14 +1042,14 @@ export default function EnergyEvaluation() {
               />
             ) : (
               <div className="flex items-center justify-center gap-2 py-8 text-emerald-400">
-                <CheckCircleOutlined /> 无安全事件，系统运行正常
+                <CheckCircleOutlined /> 无安全事件
               </div>
             )}
           </Card>
         </>
       ) : (
         <Card variant="borderless" className="rounded-xl!">
-          <Empty description="点击「运行评估」开始分析" />
+          <Empty description="点击「运行评估」查看详细指标" />
         </Card>
       )}
     </div>
@@ -470,137 +1058,239 @@ export default function EnergyEvaluation() {
   const reportTab = (
     <div className="space-y-4">
       {report ? (
-        <Card variant="borderless" className="rounded-xl!">
-          <div className="space-y-6">
-            <h4 className="text-[15px] font-semibold text-slate-200 m-0">
-              评估概要
-            </h4>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {[
-                ["场景", report.scenarioName],
-                [
-                  "仿真时长",
-                  `${(report.simulationDuration / 1000).toFixed(1)} s`,
-                ],
-                ["车辆数", `${report.energyRecords?.length ?? 0}`],
-                ["站点数", `${report.stopErrors?.length ?? 0} 站`],
-                ["供电风险", riskLevelLabel[report.powerRiskLevel]],
-                [
-                  "准点率",
-                  report.punctuality
-                    ? `${(report.punctuality.punctualityRate * 100).toFixed(1)}%`
-                    : "-",
-                ],
-                [
-                  "舒适性",
-                  report.comfort
-                    ? `${report.comfort.comfortScore.toFixed(0)} 分`
-                    : "-",
-                ],
-                ["安全事件", `${report.safetyEvents?.length ?? 0} 起`],
-              ].map(([k, v]) => (
+        <>
+          <Card variant="borderless" className="rounded-xl!">
+            <div className="space-y-6">
+              <h4 className="text-[15px] font-semibold text-slate-200 m-0">
+                评估概要
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div
-                  key={k}
-                  className="flex items-center justify-between p-3.5 rounded-xl text-sm"
-                  style={{
-                    background: "rgba(15,23,42,0.5)",
-                    border: "1px solid rgba(148,163,184,0.06)",
-                  }}
+                  key="scenario"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
                 >
-                  <span className="text-slate-500">{k}</span>
+                  <span className="text-slate-500">场景</span>
                   <span className="text-slate-200 font-semibold tabular-nums">
-                    {v}
+                    {report.scenarioName}
                   </span>
                 </div>
-              ))}
+                <div
+                  key="duration"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
+                >
+                  <span className="text-slate-500">仿真时长</span>
+                  <span className="text-slate-200 font-semibold tabular-nums">
+                    {(report.simulationDuration / 1000).toFixed(1)} s
+                  </span>
+                </div>
+                <div
+                  key="trains"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
+                >
+                  <span className="text-slate-500">车辆数</span>
+                  <span className="text-slate-200 font-semibold tabular-nums">
+                    {report.energyRecords?.length ?? 0}
+                  </span>
+                </div>
+                <div
+                  key="stations"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
+                >
+                  <span className="text-slate-500">站点数</span>
+                  <span className="text-slate-200 font-semibold tabular-nums">
+                    {report.stopErrors?.length ?? 0} 站
+                  </span>
+                </div>
+                <div
+                  key="power-risk"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
+                >
+                  <span className="text-slate-500">供电风险</span>
+                  <span className="text-slate-200 font-semibold tabular-nums">
+                    {riskLevelLabel[report.powerRiskLevel]}
+                  </span>
+                </div>
+                <div
+                  key="punctuality"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
+                >
+                  <span className="text-slate-500">准点率</span>
+                  <span className="text-slate-200 font-semibold tabular-nums">
+                    {report.punctuality
+                      ? fmt(report.punctuality.punctualityRate * 100, 1) + "%"
+                      : "-"}
+                  </span>
+                </div>
+                <div
+                  key="comfort"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
+                >
+                  <span className="text-slate-500">舒适性</span>
+                  <span className="text-slate-200 font-semibold tabular-nums">
+                    {report.comfort
+                      ? report.comfort.comfortScore.toFixed(0) + " 分"
+                      : "-"}
+                  </span>
+                </div>
+                <div
+                  key="safety"
+                  className="flex items-center justify-between p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]"
+                >
+                  <span className="text-slate-500">安全事件</span>
+                  <span className="text-slate-200 font-semibold tabular-nums">
+                    {report.safetyEvents?.length ?? 0} 起
+                  </span>
+                </div>
+              </div>
+              {report.summary && (
+                <>
+                  <h4 className="text-[15px] font-semibold text-slate-200 m-0">
+                    汇总指标
+                  </h4>
+                  <Row gutter={[12, 12]}>
+                    {Object.entries(report.summary).map(([k, v]) => (
+                      <Col xs={12} sm={8} md={6} key={k}>
+                        <div className="p-3.5 rounded-xl text-sm bg-[rgba(15,23,42,0.5)] border border-[rgba(148,163,184,0.06)]">
+                          <div className="text-slate-500 text-xs mb-1">{k}</div>
+                          <div className="text-slate-200 font-semibold text-lg tabular-nums">
+                            {fmt(v, 2)}
+                          </div>
+                        </div>
+                      </Col>
+                    ))}
+                  </Row>
+                </>
+              )}
             </div>
-            {report.energyRecords?.length ? (
-              <>
-                <h4 className="text-[15px] font-semibold text-slate-200 m-0">
-                  各列车能耗明细
-                </h4>
-                <Table
-                  dataSource={report.energyRecords.map((r, i) => ({
-                    ...r,
-                    key: i,
-                  }))}
-                  pagination={false}
-                  size="small"
-                  columns={[
-                    {
-                      title: "列车",
-                      dataIndex: "trainId",
-                      render: (v: number) => (
-                        <span className="text-slate-200 font-medium">
-                          TC{v.toString().padStart(2, "0")}
-                        </span>
-                      ),
-                    },
-                    {
-                      title: "牵引能耗",
-                      dataIndex: "totalTractionEnergyKwh",
-                      render: (v: number) => (
-                        <span className="text-blue-400 font-mono text-xs font-semibold">
-                          {v.toFixed(2)} kWh
-                        </span>
-                      ),
-                    },
-                    {
-                      title: "再生制动",
-                      dataIndex: "totalRegenEnergyKwh",
-                      render: (v: number) => (
-                        <span className="text-emerald-400 font-mono text-xs font-semibold">
-                          {v.toFixed(2)} kWh
-                        </span>
-                      ),
-                    },
-                    {
-                      title: "净能耗",
-                      dataIndex: "netEnergyKwh",
-                      render: (v: number) => (
-                        <span className="text-amber-400 font-mono text-xs font-semibold">
-                          {v.toFixed(2)} kWh
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-              </>
-            ) : null}
-          </div>
-        </Card>
+          </Card>
+          {barData.length > 0 && (
+            <Card
+              title="能耗明细（图表）"
+              variant="borderless"
+              className="rounded-xl!"
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart
+                  data={barData}
+                  margin={{ top: 5, right: 10, left: -10, bottom: 5 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="rgba(148,163,184,0.08)"
+                  />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fill: "#94a3b8", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fill: "#64748b", fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    unit="kWh"
+                  />
+                  <ReTooltip content={<ChartTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar
+                    dataKey="牵引能耗"
+                    fill={CHART_COLORS.traction}
+                    radius={[3, 3, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="再生制动"
+                    fill={CHART_COLORS.regen}
+                    radius={[3, 3, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="净能耗"
+                    fill={CHART_COLORS.net}
+                    radius={[3, 3, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+          {report.energyRecords?.length ? (
+            <Card
+              title="能耗明细（数据表）"
+              variant="borderless"
+              className="rounded-xl!"
+            >
+              <Table
+                dataSource={report.energyRecords.map((r, i) => ({
+                  ...r,
+                  key: i,
+                }))}
+                pagination={false}
+                size="small"
+                columns={[
+                  {
+                    title: "列车",
+                    dataIndex: "trainId",
+                    render: (v: number) => (
+                      <span className="text-slate-200 font-medium">
+                        TC{String(v).padStart(2, "0")}
+                      </span>
+                    ),
+                  },
+                  {
+                    title: "牵引",
+                    dataIndex: "totalTractionEnergyKwh",
+                    render: (v: number) => (
+                      <span className="text-blue-400 font-mono text-xs font-semibold">
+                        {fmt(v, 2)} kWh
+                      </span>
+                    ),
+                  },
+                  {
+                    title: "再生",
+                    dataIndex: "totalRegenEnergyKwh",
+                    render: (v: number) => (
+                      <span className="text-emerald-400 font-mono text-xs font-semibold">
+                        {fmt(v, 2)} kWh
+                      </span>
+                    ),
+                  },
+                  {
+                    title: "净能耗",
+                    dataIndex: "netEnergyKwh",
+                    render: (v: number) => (
+                      <span className="text-amber-400 font-mono text-xs font-semibold">
+                        {fmt(v, 2)} kWh
+                      </span>
+                    ),
+                  },
+                  {
+                    title: "峰值功率",
+                    dataIndex: "maxTractionPowerKw",
+                    render: (v: number) => (
+                      <span className="text-red-400 font-mono text-xs">
+                        {v.toFixed(0)} kW
+                      </span>
+                    ),
+                  },
+                  {
+                    title: "平均功率",
+                    dataIndex: "avgTractionPowerKw",
+                    render: (v: number) => (
+                      <span className="text-slate-400 font-mono text-xs">
+                        {fmt(v)} kW
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </Card>
+          ) : null}
+        </>
       ) : (
         <Card variant="borderless" className="rounded-xl!">
-          <Empty description="点击「运行评估」开始分析" />
+          <Empty description="点击「运行评估」查看综合报告" />
         </Card>
       )}
     </div>
   );
-
-  if (loading && !report) {
-    return (
-      <div className="h-full flex items-center justify-center" style={{ minHeight: 400 }}>
-        <Spin tip="正在运行评估分析..." size="large" />
-      </div>
-    );
-  }
-
-  if (error && !report) {
-    return (
-      <div className="p-6">
-        <Result
-          status="warning"
-          title="评估服务不可用"
-          subTitle={error}
-          extra={[
-            <Button key="retry" type="primary" icon={<ReloadOutlined />} onClick={handleRun}>
-              重试
-            </Button>,
-          ]}
-        />
-      </div>
-    );
-  }
 
   return (
     <div className="p-6 space-y-5">
@@ -610,8 +1300,8 @@ export default function EnergyEvaluation() {
             供电能源评估
           </h2>
           <p className="text-sm text-slate-500 mt-1 m-0">
-            牵引能耗 · 再生制动 · 峰值功率 · 停站误差 · 准点率 · 舒适性 ·
-            安全事件
+            TB/T 1407.2 物理模型 · 实时仪表 · 牵引·再生·辅助·巡航能耗 · 坡道阻力
+            · 电机效率曲线
           </p>
         </div>
         <Button
@@ -624,18 +1314,12 @@ export default function EnergyEvaluation() {
           {loading ? "评估中..." : "运行评估"}
         </Button>
       </div>
-
-      {error && report && (
-        <Alert
-          type="warning"
-          message="部分评估数据可能过期"
-          description={error}
-          showIcon
-          closable
-          className="!rounded-xl"
-        />
+      {error && (
+        <div className="text-red-400 text-sm p-3.5 rounded-xl flex items-center gap-2 bg-[rgba(239,68,68,0.06)] border border-[rgba(239,68,68,0.12)]">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+          {error}
+        </div>
       )}
-
       <Tabs
         defaultActiveKey="energy"
         tabBarStyle={{

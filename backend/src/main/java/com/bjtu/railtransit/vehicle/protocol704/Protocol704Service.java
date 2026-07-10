@@ -113,8 +113,9 @@ public class Protocol704Service {
             }
             status.setPortStatuses(portStatusMap);
 
-            realtimeStates.put(trainId, new RealtimeVehicleState());
-            status.setRealtimeVehicleState(realtimeStates.get(trainId));
+            RealtimeVehicleState realtimeState = createRealtimeState(trainId);
+            realtimeStates.put(trainId, realtimeState);
+            status.setRealtimeVehicleState(realtimeState);
 
             Map<Integer, PortClient> clients = new ConcurrentHashMap<>();
             for (int port : ports) {
@@ -161,7 +162,7 @@ public class Protocol704Service {
             }
             s.setPortStatuses(pss);
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
-            s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, key -> new RealtimeVehicleState()));
+            s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             return s;
         });
     }
@@ -182,7 +183,7 @@ public class Protocol704Service {
             }
             s.setPortStatuses(pss);
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
-            s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, key -> new RealtimeVehicleState()));
+            s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             return s;
         });
 
@@ -228,6 +229,12 @@ public class Protocol704Service {
         addLog(status, entry);
 
         return status;
+    }
+
+    private RealtimeVehicleState createRealtimeState(String trainId) {
+        RealtimeVehicleState state = new RealtimeVehicleState();
+        state.setTrainId(trainId);
+        return state;
     }
 
     private byte[] buildTestFrame(String type) {
@@ -443,7 +450,8 @@ public class Protocol704Service {
 
         private void handleFrame(byte[] frame) {
             // Mark port as connected only after receiving actual data, not just TCP handshake
-            if (!ps.isConnected()) {
+            PortConnectionStatus ps = status.getPortStatuses().get(port);
+            if (ps != null && !ps.isConnected()) {
                 ps.setConnected(true);
                 updateOverallConnected();
             }

@@ -1,225 +1,353 @@
 // 郭逸晨车载模块（成员三）—— Vehicle 页面
-// 704协议对接：URL参数trainId、704连接状态面板、实时状态展示
+// 本轮改造：
+// 1. 单页面多车载实例管理，无需打开多个浏览器 tab
+// 2. 顶部训练号标签可切换不同实例，点击"＋"添加新车载
+// 3. 每实例独立运行仿真、独立与总控通信
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { callVehicleControl, runVehicleSimulation } from '../../api/vehicle';
-import { connectProtocol704, disconnectProtocol704, getProtocol704Status, resetProtocol704, sendTestFrame } from '../../api/protocol704';
+import { callVehicleControl, reportOnboardEvent, runVehicleSimulation } from '../../api/vehicle';
+import { disconnectProtocol704 } from '../../api/protocol704';
 import type { DrivingMode, SafetyEvent, SimulationResult, TrainState } from '../../types/vehicle';
-import type { Protocol704Status } from '../../types/protocol704';
 import { STATIONS } from './data/lineMap';
 import DriverCabView from './components/DriverCabView';
 import LineRunView from './components/LineRunView';
+import IntegrationPanel from './components/IntegrationPanel';
+import Protocol704Panel from './components/Protocol704Panel';
 import './vehicle.css';
 
 const DEMO_SPEED_LIMIT_FALLBACK_MS = 20;
 const SPEED_MULTIPLIER_OPTIONS = [0.5, 1, 2, 4, 8] as const;
 type SpeedMultiplier = (typeof SPEED_MULTIPLIER_OPTIONS)[number];
+type PageStatus = 'idle' | 'loading' | 'playing' | 'finished' | 'error';
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-type PageStatus = 'idle' | 'loading' | 'playing' | 'finished' | 'error';
-
-function getTrainIdFromUrl(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get('trainId') || 'T1';
+/** 单个车载实例的全部状态 */
+interface InstanceState {
+  trainId: string;
+  status: PageStatus;
+  errorMessage: string | null;
+  result: SimulationResult | null;
+  /** Increments whenever a continuation replaces the remaining trajectory. */
+  trajectoryVersion: number;
+  frameIndex: number;
+  timerId: number | null;  // setInterval ID
+  isPaused: boolean;
+  /** A dispatch HOLD is braking the train; pause only after its speed reaches zero. */
+  holdAfterBraking: boolean;
+  departureAuthorized: boolean;
+  speedMultiplier: SpeedMultiplier;
+  fromStationId: number;
+  toStationId: number;
+  drivingMode: DrivingMode;
+  allSafetyEvents: SafetyEvent[];
+  handleResetToken: number;
+  /** useRef 等效保持引用 (不触发重渲染) */
+  stateRef: TrainState | null;
+  frameIndexRef: number;
+  fromStationIdRef: number;
+  toStationIdRef: number;
+  resultRef: SimulationResult | null;
+  drivingModeRef: DrivingMode;
 }
 
-function formatTime(ts?: number): string {
-  if (!ts) return '-';
-  const d = new Date(ts);
-  return d.toLocaleTimeString('zh-CN', { hour12: false });
+interface InstanceApi {
+  state: InstanceState;
+  setState: React.Dispatch<React.SetStateAction<InstanceState>>;
+}
+
+let nextAutoId = 1;
+
+/** 从训练号解析数字后缀，如 "OB3" → 3；失败返回 null */
+function parseTrainIdSuffix(trainId: string): number | null {
+  const match = trainId.match(/^OB(\d+)$/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+function createInstance(trainId: string): InstanceState {
+  return {
+    trainId,
+    status: 'idle',
+    errorMessage: null,
+    result: null,
+    trajectoryVersion: 0,
+    frameIndex: 0,
+    timerId: null,
+    isPaused: false,
+    holdAfterBraking: false,
+    departureAuthorized: false,
+    speedMultiplier: 1,
+    fromStationId: 1,
+    toStationId: 2,
+    drivingMode: 'ato',
+    allSafetyEvents: [],
+    handleResetToken: 0,
+    stateRef: null,
+    frameIndexRef: 0,
+    fromStationIdRef: 1,
+    toStationIdRef: 2,
+    resultRef: null,
+    drivingModeRef: 'ato',
+  };
+}
+
+/** 获取唯一 ID，确保不与已有实例冲突 */
+function getTrainId(existingTrainIds: string[]): string {
+  while (true) {
+    const candidate = `OB${nextAutoId++}`;
+    if (!existingTrainIds.includes(candidate)) return candidate;
+  }
 }
 
 function Vehicle() {
-  const [trainId] = useState(getTrainIdFromUrl());
-  const [status, setStatus] = useState<PageStatus>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [result, setResult] = useState<SimulationResult | null>(null);
-  const [frameIndex, setFrameIndex] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
-  const [speedMultiplier, setSpeedMultiplier] = useState<SpeedMultiplier>(1);
-  const [fromStationId, setFromStationId] = useState(1);
-  const [toStationId, setToStationId] = useState(2);
-  const [drivingMode, setDrivingMode] = useState<DrivingMode>('ato');
-  const [allSafetyEvents, setAllSafetyEvents] = useState<SafetyEvent[]>([]);
-  // 受控重置 token：resume_ato / reset_emergency 成功后递增，DriverCabView 监听后清空级位 UI
-  const [handleResetToken, setHandleResetToken] = useState(0);
-  // 播放视觉插值层：在 frameIndex 之上用 rAF 计算相邻帧间的 displayState（不影响底层 frameIndex/暂停/倍速/续算）
+  // URL 参数作为初始 trainId
+  const urlParam = new URLSearchParams(window.location.search).get('trainId');
+  const urlTrainId = urlParam || getTrainId([]);
+
+  // 若 URL 提供了 trainId，同步计数器避免后续冲突
+  if (urlParam) {
+    const suffix = parseTrainIdSuffix(urlParam);
+    if (suffix !== null && suffix >= nextAutoId) {
+      nextAutoId = suffix + 1;
+    }
+  }
+
+  // 多实例存储
+  const [instances, setInstances] = useState<Map<string, InstanceState>>(() => {
+    const m = new Map<string, InstanceState>();
+    m.set(urlTrainId, createInstance(urlTrainId));
+    return m;
+  });
+  const [activeTrainId, setActiveTrainId] = useState<string>(urlTrainId);
   const [displayState, setDisplayState] = useState<TrainState | null>(null);
 
-  const [p704Status, setP704Status] = useState<Protocol704Status | null>(null);
-  const [p704Polling, setP704Polling] = useState(false);
-  const [p704Expanded, setP704Expanded] = useState(false);
-  const [p704TestFrameLoading, setP704TestFrameLoading] = useState<string | null>(null);
+  // 用 ref 跟踪最新 instances，供 unmount cleanup 使用
+  const instancesRef = useRef(instances);
+  instancesRef.current = instances;
 
-  const currentStateRef = useRef<TrainState | null>(null);
-  const frameIndexRef = useRef(0);
-  const fromStationIdRef = useRef(fromStationId);
-  const toStationIdRef = useRef(toStationId);
-  const resultRef = useRef<SimulationResult | null>(null);
-  const drivingModeRef = useRef<DrivingMode>('ato');
-  const trainIdRef = useRef(trainId);
+  // ── 每实例可变引用（render 时同步，handler 中通过此 ref 获取最新值）──
+  const instanceRefs = useRef<Map<string, {
+    stateRef: TrainState | null;
+    frameIndexRef: number;
+    fromStationIdRef: number;
+    toStationIdRef: number;
+    resultRef: SimulationResult | null;
+    drivingModeRef: DrivingMode;
+  }>>(new Map());
 
-  const currentState: TrainState | null =
-    result && result.states.length > 0 ? result.states[frameIndex] : null;
-  currentStateRef.current = currentState;
-  // 传给驾驶台/线路图的视觉状态：优先用 rAF 插值后的 displayState，回退到底层帧
-  const viewState: TrainState | null = displayState ?? currentState;
-  frameIndexRef.current = frameIndex;
-  fromStationIdRef.current = fromStationId;
-  toStationIdRef.current = toStationId;
-  resultRef.current = result;
-  drivingModeRef.current = drivingMode;
-  trainIdRef.current = trainId;
+  // 在 render 阶段同步所有实例的最新 ref 值
+  {
+    const nextRefs = new Map<string, typeof instanceRefs.current extends Map<any, infer V> ? V : never>();
+    instances.forEach((inst, tid) => {
+      const cs: TrainState | null =
+        inst.result && inst.result.states.length > 0 ? inst.result.states[inst.frameIndex] : null;
+      nextRefs.set(tid, {
+        stateRef: cs,
+        frameIndexRef: inst.frameIndex,
+        fromStationIdRef: inst.fromStationId,
+        toStationIdRef: inst.toStationId,
+        resultRef: inst.result,
+        drivingModeRef: inst.drivingMode,
+      });
+    });
+    instanceRefs.current = nextRefs;
+  }
 
-  useEffect(() => {
-    const existingIcon = document.querySelector<HTMLLinkElement>(
-      'link[rel="icon"], link[rel="shortcut icon"]',
-    );
-    if (existingIcon) return;
-    const icon = document.createElement('link');
-    icon.rel = 'icon';
-    icon.href = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%230f766e%22/%3E%3Cpath d=%22M4 11h8M5 4h6l1 4H4l1-4Z%22 stroke=%22white%22 stroke-width=%221.4%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E';
-    document.head.appendChild(icon);
+  // 获取当前活跃实例
+  const activeInstance = instances.get(activeTrainId);
+
+  // ── 实例状态更新辅助 ──
+  const updateInstance = useCallback((trainId: string, updater: (prev: InstanceState) => InstanceState) => {
+    setInstances((prev) => {
+      const next = new Map(prev);
+      const current = next.get(trainId);
+      if (current) next.set(trainId, updater(current));
+      return next;
+    });
   }, []);
 
-  useEffect(() => {
-    if (status !== 'playing' || isPaused || !result || result.states.length === 0) {
-      return undefined;
+  // ── 停止活跃实例的定时器 ──
+  const stopTimer = useCallback((inst: InstanceState) => {
+    if (inst.timerId !== null) {
+      window.clearInterval(inst.timerId);
     }
-    const dtPerFrame = result.summary.dtPerFrame ?? 0.5;
-    const intervalMs = (dtPerFrame * 1000) / speedMultiplier;
-    const totalFrames = result.states.length;
+  }, []);
+
+  // ── 启动活跃实例的定时器 ──
+  const startTimer = useCallback((trainId: string, inst: InstanceState) => {
+    stopTimer(inst);
+    const dtPerFrame = inst.result?.summary.dtPerFrame ?? 0.5;
+    const intervalMs = (dtPerFrame * 1000) / inst.speedMultiplier;
+    const totalFrames = inst.result?.states.length ?? 0;
+
     const timerId = window.setInterval(() => {
-      setFrameIndex((prev) => {
-        const next = prev + 1;
-        if (next >= totalFrames - 1) {
+      setInstances((prev) => {
+        const next = new Map(prev);
+        const cur = next.get(trainId);
+        if (!cur) return prev;
+
+        const nextIdx = cur.frameIndex + 1;
+        if (nextIdx >= totalFrames - 1) {
           window.clearInterval(timerId);
-          setStatus('finished');
-          return totalFrames - 1;
+          // A safety HOLD first plays the ATP braking trajectory.  It becomes a
+          // held train only after the simulated speed has reached zero.
+          if (cur.holdAfterBraking) {
+            next.set(trainId, {
+              ...cur,
+              frameIndex: totalFrames - 1,
+              isPaused: true,
+              holdAfterBraking: false,
+              timerId: null,
+            });
+          } else {
+            next.set(trainId, { ...cur, frameIndex: totalFrames - 1, status: 'finished', timerId: null });
+          }
+          return next;
         }
+        next.set(trainId, { ...cur, frameIndex: nextIdx, timerId: timerId as unknown as number });
         return next;
       });
     }, intervalMs);
-    return () => window.clearInterval(timerId);
-  }, [isPaused, result, status, speedMultiplier]);
 
-  // 视觉插值层：保留现有 setInterval 推进 frameIndex（不破坏暂停/倍速/控制续算），
-  // 在 frameIndex 之上用 requestAnimationFrame 在 states[fi] 与 states[fi+1] 之间线性插值出 displayState。
-  // 控制续算仍使用 currentStateRef.current（底层帧），不用插值帧，避免续算错位。
-  useEffect(() => {
-    if (!result || result.states.length === 0) {
-      setDisplayState(null);
-      return;
-    }
-    const states = result.states;
-    const fi = frameIndex;
-    const frame = states[fi];
+    updateInstance(trainId, (cur) => ({ ...cur, timerId: timerId as unknown as number }));
+  }, [stopTimer, updateInstance]);
 
-    // 非播放 / 暂停 / 末帧：不插值，直接用当前帧
-    if (status !== 'playing' || isPaused || fi >= states.length - 1) {
-      setDisplayState(frame);
-      return;
-    }
-
-    const upper = states[fi + 1];
-    const lowerTime = frame.time;
-    const upperTime = upper.time;
-    const span = upperTime - lowerTime;
-    const frameStartPerf = performance.now();
-    let rafId = 0;
-
-    const tick = () => {
-      const elapsed = (performance.now() - frameStartPerf) / 1000;
-      let frac = span > 0 ? (elapsed * speedMultiplier) / span : 1;
-      frac = clamp(frac, 0, 1);
-      setDisplayState({
-        time: lowerTime + span * frac,
-        position: frame.position + (upper.position - frame.position) * frac,
-        velocity: frame.velocity + (upper.velocity - frame.velocity) * frac,
-        acceleration: frame.acceleration + (upper.acceleration - frame.acceleration) * frac,
-        phase: frame.phase,
-        trainId: frame.trainId,
-        absolutePosition: frame.absolutePosition !== undefined && upper.absolutePosition !== undefined
-          ? frame.absolutePosition + (upper.absolutePosition - frame.absolutePosition) * frac
-          : frame.absolutePosition,
-      });
-      if (frac < 1) {
-        rafId = window.requestAnimationFrame(tick);
-      }
-    };
-    rafId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(rafId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result, frameIndex, isPaused, speedMultiplier, status]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function initialLoad() {
-      try {
-        const s = await getProtocol704Status(trainIdRef.current);
-        if (!cancelled) setP704Status(s);
-      } catch {
-        // ignore
-      }
-    }
-    initialLoad();
-    return () => { cancelled = true; };
+  // ── 切换活跃车载：仅切换视图，不干涉其他实例的定时器 ──
+  const switchToTrain = useCallback((newId: string) => {
+    setActiveTrainId(newId);
   }, []);
 
-  useEffect(() => {
-    if (!p704Polling) return undefined;
-    const timerId = window.setInterval(async () => {
-      try {
-        const s = await getProtocol704Status(trainIdRef.current);
-        setP704Status(s);
-      } catch {
-        // ignore
-      }
-    }, 500);
-    return () => window.clearInterval(timerId);
-  }, [p704Polling]);
+  // ── 添加新实例 ──
+  const addInstance = useCallback(() => {
+    setInstances((prev) => {
+      const existingIds = Array.from(prev.keys());
+      const newId = getTrainId(existingIds);
+      const next = new Map(prev);
+      next.set(newId, createInstance(newId));
+      // 需要在 setState 外设置 activeTrainId，用 setTimeout 保证在渲染后切换
+      setTimeout(() => setActiveTrainId(newId), 0);
+      return next;
+    });
+  }, []);
 
-  const handleStart = async () => {
-    setStatus('loading');
-    setErrorMessage(null);
-    setResult(null);
-    setFrameIndex(0);
-    setIsPaused(false);
-    setSpeedMultiplier(1);
-    setDrivingMode('ato');
-    setAllSafetyEvents([]);
+  // ── 删除实例（至少保留一个） ──
+  const removeInstance = useCallback((trainId: string) => {
+    if (instances.size <= 1) return;
+    const inst = instances.get(trainId);
+    if (inst) stopTimer(inst);
+    void disconnectProtocol704(trainId).catch(() => undefined);
+    setInstances((prev) => {
+      const next = new Map(prev);
+      next.delete(trainId);
+      return next;
+    });
+    if (activeTrainId === trainId) {
+      const remaining = Array.from(instances.keys()).filter((id) => id !== trainId);
+      setActiveTrainId(remaining[0] || activeTrainId);
+    }
+  }, [instances, activeTrainId, stopTimer]);
+
+  // ── 组件卸载清理所有定时器 ──
+  useEffect(() => {
+    return () => {
+      instancesRef.current.forEach((inst) => {
+        if (inst.timerId !== null) window.clearInterval(inst.timerId);
+      });
+    };
+  }, []);
+
+  // ── 定时器管理：检查所有实例，确保该跑的跑、该停的停 ──
+  // 序列化与定时器相关的字段（不含 timerId 本身），避免 restart loop
+  const timerDigest = Array.from(instances.entries())
+    .map(([id, inst]) => `${id}:${inst.status}:${inst.isPaused}:${inst.speedMultiplier}:${inst.trajectoryVersion}`)
+    .join('|');
+
+  useEffect(() => {
+    instances.forEach((inst, trainId) => {
+      const shouldRun = inst.status === 'playing' && !inst.isPaused
+        && inst.result && inst.result.states.length > 0;
+
+      if (inst.timerId !== null && !shouldRun) {
+        // 该停：timer 还在跑但实例已暂停/结束
+        window.clearInterval(inst.timerId);
+        updateInstance(trainId, (cur) => ({ ...cur, timerId: null }));
+      } else if (inst.timerId === null && shouldRun) {
+        // 该启：timer 未跑但实例应该播放
+        startTimer(trainId, inst);
+      } else if (inst.timerId !== null && shouldRun) {
+        // 该跑但倍速可能变了 → 重启以应用新 interval
+        window.clearInterval(inst.timerId);
+        startTimer(trainId, { ...inst, timerId: null });
+      }
+    });
+    // timerDigest 变化时重新评估所有实例
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timerDigest]);
+
+  // ═══════════════════════════════════════════
+  // 实例操作（handleStart / handleReset / 等）
+  // 通过 trainId 操作指定实例
+  // ═══════════════════════════════════════════
+
+  const handleStart = useCallback(async (trainId: string) => {
+    const inst = instances.get(trainId);
+    if (!inst) return;
+
+    updateInstance(trainId, (cur) => ({
+      ...cur,
+      status: 'loading',
+      errorMessage: null,
+      result: null,
+      trajectoryVersion: 0,
+      frameIndex: 0,
+      isPaused: true,
+      holdAfterBraking: false,
+      departureAuthorized: false,
+      speedMultiplier: 1,
+      drivingMode: 'ato',
+      allSafetyEvents: [],
+      handleResetToken: cur.handleResetToken + 1,
+    }));
+
     try {
       const simulationResult = await runVehicleSimulation({
-        fromStationId,
-        toStationId,
+        fromStationId: inst.fromStationId,
+        toStationId: inst.toStationId,
       });
       if (!simulationResult.states || simulationResult.states.length === 0) {
         throw new Error('后端返回的仿真结果不包含任何 states 数据');
       }
-      setResult(simulationResult);
-      setAllSafetyEvents(simulationResult.safetyEvents ?? []);
-      setStatus('playing');
-      setFrameIndex(0);
+      updateInstance(trainId, (cur) => ({
+        ...cur,
+        result: {
+          ...simulationResult,
+          states: simulationResult.states.map((state) => ({ ...state, trainId })),
+        },
+        allSafetyEvents: simulationResult.safetyEvents ?? [],
+        status: 'playing',
+        frameIndex: 0,
+      }));
     } catch (err) {
-      setStatus('error');
-      setErrorMessage(err instanceof Error ? err.message : String(err));
+      updateInstance(trainId, (cur) => ({
+        ...cur,
+        status: 'error',
+        errorMessage: err instanceof Error ? err.message : String(err),
+      }));
     }
-  };
+  }, [instances, updateInstance]);
 
   const handleControl = useCallback(async (
+    trainId: string,
     command: string,
     targetDecel: number,
     mode: DrivingMode,
-    levelPercent?: number,
+    levelPercent = 0,
   ) => {
-    const cs = currentStateRef.current;
-    const fi = frameIndexRef.current;
-    const fromId = fromStationIdRef.current;
-    const toId = toStationIdRef.current;
-    const res = resultRef.current;
+    const refs = instanceRefs.current.get(trainId);
+    if (!refs) return;
+    const { stateRef: cs, frameIndexRef: fi, fromStationIdRef: fromId, toStationIdRef: toId, resultRef: res } = refs;
     if (!cs || !res) return;
 
     const totalTarget = res.stopResult?.targetStopPosition ?? 0;
@@ -234,252 +362,303 @@ function Vehicle() {
         totalTargetPosition: totalTarget,
       });
 
-      setResult((prev) => {
-        if (!prev) return prev;
-        const before = prev.states.slice(0, fi + 1);
+      updateInstance(trainId, (cur) => {
+        if (!cur.result) return cur;
+        const before = cur.result.states.slice(0, fi + 1);
         return {
-          ...prev,
-          states: [...before, ...controlResult.states],
-          stopResult: controlResult.stopResult,
-          safetyEvents: [...(prev.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
-          stationStops: controlResult.stationStops,
-          // 仅合并模式相关字段，保留原始线路/限速等字段
-          summary: {
-            ...prev.summary,
-            currentMode: controlResult.summary.currentMode ?? prev.summary.currentMode,
-            nextMode: controlResult.summary.nextMode ?? prev.summary.nextMode,
+          ...cur,
+          result: {
+            ...cur.result,
+            states: [
+              ...before,
+              ...controlResult.states.map((s) => ({ ...s, trainId })),
+            ],
+            stopResult: controlResult.stopResult,
+            safetyEvents: [...(cur.result.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
+            stationStops: controlResult.stationStops,
+            summary: {
+              ...cur.result.summary,
+              currentMode: controlResult.summary.currentMode ?? cur.result.summary.currentMode,
+              nextMode: controlResult.summary.nextMode ?? cur.result.summary.nextMode,
+            },
           },
+          allSafetyEvents: [...cur.allSafetyEvents, ...(controlResult.safetyEvents ?? [])],
+          trajectoryVersion: cur.trajectoryVersion + 1,
+          drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
+          handleResetToken:
+            command === 'resume_ato' || command === 'reset_emergency'
+              ? cur.handleResetToken + 1
+              : cur.handleResetToken,
+          status: 'playing',
         };
       });
-
-      if (controlResult.summary.currentMode) {
-        setDrivingMode(controlResult.summary.currentMode);
-      }
-
-      if (controlResult.safetyEvents && controlResult.safetyEvents.length > 0) {
-        setAllSafetyEvents((prev) => [...prev, ...controlResult.safetyEvents]);
-      }
-
-      setStatus('playing');
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
+      updateInstance(trainId, (cur) => ({
+        ...cur,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      }));
     }
-  }, []);
+  }, [updateInstance]);
 
-  const handleReset = () => {
-    setStatus('idle');
-    setErrorMessage(null);
-    setResult(null);
-    setFrameIndex(0);
-    setIsPaused(false);
-    setSpeedMultiplier(1);
-    setDrivingMode('ato');
-    setAllSafetyEvents([]);
-  };
+  const handleReset = useCallback((trainId: string) => {
+    updateInstance(trainId, (cur) => ({
+      ...cur,
+      status: 'idle',
+      errorMessage: null,
+      result: null,
+      trajectoryVersion: 0,
+      frameIndex: 0,
+      isPaused: false,
+      holdAfterBraking: false,
+      departureAuthorized: false,
+      speedMultiplier: 1,
+      drivingMode: 'ato',
+      allSafetyEvents: [],
+      handleResetToken: cur.handleResetToken + 1,
+    }));
+  }, [updateInstance]);
 
-  const handleTogglePause = () => {
-    if (status === 'playing') setIsPaused((v) => !v);
-  };
+  const handleTogglePause = useCallback((trainId: string) => {
+    updateInstance(trainId, (cur) => {
+      if (cur.status !== 'playing' || !cur.departureAuthorized) return cur;
+      return { ...cur, isPaused: !cur.isPaused };
+    });
+  }, [updateInstance]);
 
-  const handleRequestManual = useCallback(() => {
-    setDrivingMode('manual');
-  }, []);
+  const handleDepartAuthorized = useCallback((trainId: string) => {
+    updateInstance(trainId, (cur) => ({
+      ...cur,
+      departureAuthorized: true,
+      isPaused: false,
+    }));
+  }, [updateInstance]);
 
-  const handleTractionLevel = useCallback((_level: number, levelPercent: number) => {
-    handleControl('traction', 0, drivingModeRef.current, levelPercent);
+  const handleDispatchHold = useCallback((trainId: string) => {
+    const refs = instanceRefs.current.get(trainId);
+    if (!refs?.stateRef || refs.stateRef.velocity <= 0.05) {
+      updateInstance(trainId, (cur) => ({ ...cur, isPaused: true, holdAfterBraking: false }));
+      return;
+    }
+
+    // Do not freeze a moving train.  The safety command replaces the remaining
+    // local trajectory with an ATP emergency-brake curve, then holds at zero.
+    updateInstance(trainId, (cur) => ({ ...cur, holdAfterBraking: true, isPaused: false }));
+    handleControl(trainId, 'atp_emergency_brake', 0, refs.drivingModeRef);
+  }, [updateInstance, handleControl]);
+
+  const handleDispatchRecovery = useCallback((trainId: string) => {
+    updateInstance(trainId, (cur) => ({ ...cur, drivingMode: 'ato', isPaused: false, holdAfterBraking: false, status: 'playing' }));
+    handleControl(trainId, 'traction', 0, 'ato');
+  }, [updateInstance, handleControl]);
+
+  const handleRequestManual = useCallback((trainId: string) => {
+    updateInstance(trainId, (cur) => ({ ...cur, drivingMode: 'manual' }));
+  }, [updateInstance]);
+
+  const handleTractionLevel = useCallback((trainId: string, _level: number, levelPercent: number) => {
+    const refs = instanceRefs.current.get(trainId);
+    handleControl(trainId, 'traction', 0, refs?.drivingModeRef ?? 'manual', levelPercent);
   }, [handleControl]);
 
-  const handleBrakeLevel = useCallback((_level: number, targetDecel: number, levelPercent: number) => {
-    handleControl('brake', targetDecel, drivingModeRef.current, levelPercent);
+  const handleBrakeLevel = useCallback((
+    trainId: string,
+    _level: number,
+    targetDecel: number,
+    levelPercent: number,
+  ) => {
+    const refs = instanceRefs.current.get(trainId);
+    handleControl(trainId, 'brake', targetDecel, refs?.drivingModeRef ?? 'manual', levelPercent);
   }, [handleControl]);
 
-  const handleCoast = useCallback(() => {
-    handleControl('coast', 0, drivingModeRef.current, 0);
+  const handleCoast = useCallback((trainId: string) => {
+    const refs = instanceRefs.current.get(trainId);
+    handleControl(trainId, 'coast', 0, refs?.drivingModeRef ?? 'manual');
   }, [handleControl]);
 
-  const handleEmergencyBrake = useCallback(() => {
-    const prevMode = drivingModeRef.current;
-    setDrivingMode('emergency');
-    handleControl('emergency_brake', 0, prevMode, 0);
+  const handleRequestAto = useCallback((trainId: string) => {
+    handleControl(trainId, 'resume_ato', 0, 'manual');
   }, [handleControl]);
 
-  // 恢复 ATO（MANUAL → ATO）：调用后端 /control resume_ato，成功后切换模式 + 清空级位 UI + 续算播放
-  const handleRequestAto = useCallback(async () => {
-    const cs = currentStateRef.current;
-    const fi = frameIndexRef.current;
-    const fromId = fromStationIdRef.current;
-    const toId = toStationIdRef.current;
-    const res = resultRef.current;
-    if (!cs || !res) return;
-    const totalTarget = res.stopResult?.targetStopPosition ?? 0;
-    try {
-      const controlResult = await callVehicleControl({
-        fromStationId: fromId,
-        toStationId: toId,
-        currentState: cs,
-        currentMode: 'manual',
-        controlCommand: { command: 'resume_ato', targetDecel: 0, levelPercent: 0 },
-        totalTargetPosition: totalTarget,
+  const handleResetEmergency = useCallback((trainId: string) => {
+    handleControl(trainId, 'reset_emergency', 0, 'emergency');
+  }, [handleControl]);
+
+  const handleEmergencyBrake = useCallback((trainId: string) => {
+    const refs = instanceRefs.current.get(trainId);
+    if (!refs) return;
+    const { drivingModeRef: prevMode, stateRef: state, resultRef: res } = refs;
+    updateInstance(trainId, (cur) => ({ ...cur, drivingMode: 'emergency' }));
+    handleControl(trainId, 'emergency_brake', 0, prevMode);
+    if (state) {
+      const lineStart = res?.summary.lineStartPosition ?? 0;
+      void reportOnboardEvent({
+        trainId,
+        eventType: 'ATP_EB_TRIGGERED',
+        timestampSeconds: state.time,
+        positionMeters: state.absolutePosition ?? lineStart + state.position,
+        speedKmh: state.velocity * 3.6,
+        severity: 'CRITICAL',
+        details: '车载端触发紧急制动，请求总控保持停车并重新评估运行策略',
       });
-      setResult((prev) => {
-        if (!prev) return prev;
-        const before = prev.states.slice(0, fi + 1);
-        return {
-          ...prev,
-          states: [...before, ...controlResult.states],
-          stopResult: controlResult.stopResult,
-          safetyEvents: [...(prev.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
-          stationStops: controlResult.stationStops,
-          summary: {
-            ...prev.summary,
-            currentMode: controlResult.summary.currentMode ?? prev.summary.currentMode,
-            nextMode: controlResult.summary.nextMode ?? prev.summary.nextMode,
-          },
-        };
+    }
+  }, [updateInstance, handleControl]);
+
+  const ai = activeInstance ?? createInstance(activeTrainId);
+  const currentState: TrainState | null =
+    ai.result && ai.result.states.length > 0 ? ai.result.states[ai.frameIndex] : null;
+  const viewState =
+    displayState?.trainId === activeTrainId ? displayState : currentState;
+  const canResetEmergency =
+    ai.drivingMode === 'emergency' && ai.result?.summary?.nextMode === 'manual';
+  const targetStopPosition = ai.result?.stopResult?.targetStopPosition ?? 1200;
+  const speedLimitValue = ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
+  const lineStartPosition = ai.result?.summary?.lineStartPosition ?? 0;
+  const fromStationName = ai.result?.summary?.fromStationName ?? null;
+  const toStationName = ai.result?.summary?.toStationName ?? null;
+  const isLoading = ai.status === 'loading';
+  const isPlaying = ai.status === 'playing';
+  const canReset = ai.result !== null || ai.status === 'error';
+  const toStationOptions = STATIONS.filter((s) => s.stationId > ai.fromStationId);
+  const totalStations = ai.result?.summary?.totalStations;
+  const completedStops = ai.result?.summary?.completedStops;
+
+  const trainIds = Array.from(instances.keys());
+
+  useEffect(() => {
+    const states = ai.result?.states;
+    if (!states || states.length === 0) {
+      setDisplayState(null);
+      return undefined;
+    }
+
+    const frame = states[ai.frameIndex];
+    if (
+      ai.status !== 'playing'
+      || ai.isPaused
+      || ai.frameIndex >= states.length - 1
+    ) {
+      setDisplayState(frame);
+      return undefined;
+    }
+
+    const nextFrame = states[ai.frameIndex + 1];
+    const span = nextFrame.time - frame.time;
+    const startedAt = performance.now();
+    let rafId = 0;
+
+    const tick = () => {
+      const elapsedSeconds = (performance.now() - startedAt) / 1000;
+      const fraction = clamp(
+        span > 0 ? (elapsedSeconds * ai.speedMultiplier) / span : 1,
+        0,
+        1,
+      );
+      setDisplayState({
+        time: frame.time + span * fraction,
+        position: frame.position + (nextFrame.position - frame.position) * fraction,
+        velocity: frame.velocity + (nextFrame.velocity - frame.velocity) * fraction,
+        acceleration:
+          frame.acceleration
+          + (nextFrame.acceleration - frame.acceleration) * fraction,
+        phase: frame.phase,
+        trainId: frame.trainId,
+        absolutePosition:
+          frame.absolutePosition !== undefined
+          && nextFrame.absolutePosition !== undefined
+            ? frame.absolutePosition
+              + (nextFrame.absolutePosition - frame.absolutePosition) * fraction
+            : frame.absolutePosition,
       });
-      setDrivingMode('ato');
-      setHandleResetToken((t) => t + 1);
-      if (controlResult.safetyEvents && controlResult.safetyEvents.length > 0) {
-        setAllSafetyEvents((prev) => [...prev, ...controlResult.safetyEvents]);
+      if (fraction < 1) {
+        rafId = window.requestAnimationFrame(tick);
       }
-      setStatus('playing');
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+    };
 
-  // EB 复位（EMERGENCY → MANUAL）：调用后端 /control reset_emergency，成功后切换模式 + 清空级位 UI + 续算播放
-  const handleResetEmergency = useCallback(async () => {
-    const cs = currentStateRef.current;
-    const fi = frameIndexRef.current;
-    const fromId = fromStationIdRef.current;
-    const toId = toStationIdRef.current;
-    const res = resultRef.current;
-    if (!cs || !res) return;
-    const totalTarget = res.stopResult?.targetStopPosition ?? 0;
-    try {
-      const controlResult = await callVehicleControl({
-        fromStationId: fromId,
-        toStationId: toId,
-        currentState: cs,
-        currentMode: 'emergency',
-        controlCommand: { command: 'reset_emergency', targetDecel: 0, levelPercent: 0 },
-        totalTargetPosition: totalTarget,
-      });
-      setResult((prev) => {
-        if (!prev) return prev;
-        const before = prev.states.slice(0, fi + 1);
-        return {
-          ...prev,
-          states: [...before, ...controlResult.states],
-          stopResult: controlResult.stopResult,
-          safetyEvents: [...(prev.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
-          stationStops: controlResult.stationStops,
-          summary: {
-            ...prev.summary,
-            currentMode: controlResult.summary.currentMode ?? prev.summary.currentMode,
-            nextMode: controlResult.summary.nextMode ?? prev.summary.nextMode,
-          },
-        };
-      });
-      setDrivingMode('manual');
-      setHandleResetToken((t) => t + 1);
-      if (controlResult.safetyEvents && controlResult.safetyEvents.length > 0) {
-        setAllSafetyEvents((prev) => [...prev, ...controlResult.safetyEvents]);
-      }
-      setStatus('playing');
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [
+    activeTrainId,
+    ai.result,
+    ai.frameIndex,
+    ai.status,
+    ai.isPaused,
+    ai.speedMultiplier,
+    ai.trajectoryVersion,
+  ]);
 
-  const handleP704Connect = async () => {
-    try {
-      await connectProtocol704(trainId);
-      setP704Polling(true);
-      setP704Expanded(true);
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleP704Disconnect = async () => {
-    try {
-      await disconnectProtocol704(trainId);
-      setP704Polling(false);
-      const s = await getProtocol704Status(trainId);
-      setP704Status(s);
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleP704Reset = async () => {
-    try {
-      await resetProtocol704(trainId);
-      setP704Polling(false);
-      const s = await getProtocol704Status(trainId);
-      setP704Status(s);
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleTestFrame = async (type: string) => {
-    setP704TestFrameLoading(type);
-    try {
-      const s = await sendTestFrame(trainId, type);
-      setP704Status(s);
-      setP704Expanded(true);
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    } finally {
-      setP704TestFrameLoading(null);
-    }
-  };
-
-  const targetStopPosition = result?.stopResult?.targetStopPosition ?? 1200;
-  const speedLimitValue = result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
-  const lineStartPosition = result?.summary?.lineStartPosition ?? 0;
-  const fromStationName = result?.summary?.fromStationName ?? null;
-  const toStationName = result?.summary?.toStationName ?? null;
-  const isLoading = status === 'loading';
-  const isPlaying = status === 'playing';
-  const canReset = result !== null || status === 'error';
-  // EB 停稳后可复位到人工：EMERGENCY 模式 + 后端返回 nextMode==='manual'
-  const canResetEmergency = drivingMode === 'emergency' && result?.summary?.nextMode === 'manual';
-  const toStationOptions = STATIONS.filter((s) => s.stationId > fromStationId);
-  const totalStations = result?.summary?.totalStations;
-  const completedStops = result?.summary?.completedStops;
-
-  const p704connected = p704Status?.connected ?? false;
-  const portStatuses = p704Status?.portStatuses ? Object.values(p704Status.portStatuses) : [];
-  const lastMappedCmd = p704Status?.lastMappedCommand;
-  const rtState = p704Status?.realtimeVehicleState;
+  if (!activeInstance) {
+    return (
+      <div className="vehicle-page">
+        <div className="vehicle-empty">暂无车载实例，请点击"＋"添加</div>
+      </div>
+    );
+  }
 
   return (
     <div className="vehicle-page">
 
+      {/* ═══ 多实例标签栏 ═══ */}
+      <div className="vehicle-tab-bar">
+        <div className="vehicle-tab-list">
+          {trainIds.map((tid) => {
+            const inst = instances.get(tid);
+            const isActive = tid === activeTrainId;
+            const statusIcon = inst?.status === 'playing' ? '▶' : inst?.status === 'finished' ? '✓' : '○';
+            return (
+              <div key={tid} className={`vehicle-tab ${isActive ? 'is-active' : ''}`}>
+                <button
+                  type="button"
+                  className="vehicle-tab-btn"
+                  onClick={() => switchToTrain(tid)}
+                  title={`切换到 ${tid}`}
+                >
+                  <span className="vehicle-tab-dot">{statusIcon}</span>
+                  <span>{tid}</span>
+                </button>
+                {trainIds.length > 1 && (
+                  <button
+                    type="button"
+                    className="vehicle-tab-close"
+                    onClick={(e) => { e.stopPropagation(); removeInstance(tid); }}
+                    title={`关闭 ${tid}`}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <button type="button" className="vehicle-tab-add" onClick={addInstance} title="添加新车载实例">
+          ＋
+        </button>
+      </div>
+
+      {/* ═══ Header（活跃实例的操作栏）═══ */}
       <header className="vehicle-page__header">
         <div>
-          <p className="vehicle-page__eyebrow">Onboard cab HMI <span style={{ marginLeft: 8, padding: '2px 8px', background: '#0f766e', color: 'white', borderRadius: 4, fontSize: 12 }}>车组 {trainId}</span></p>
-          <h2>车载驾驶台系统</h2>
+          <p className="vehicle-page__eyebrow">Onboard cab HMI</p>
+          <h2>车载驾驶台系统 · {activeTrainId}</h2>
         </div>
         <div className="vehicle-page__actions">
+          {/* 起止站选择器 */}
           <div className="vehicle-station-selector" aria-label="起止站选择">
             <label htmlFor="from-station-select" className="vehicle-station-label">出发站</label>
             <select
               id="from-station-select"
               className="vehicle-station-select"
-              value={fromStationId}
+              value={ai.fromStationId}
               disabled={isLoading || isPlaying}
               onChange={(e) => {
                 const newFrom = Number(e.target.value);
-                setFromStationId(newFrom);
-                if (toStationId <= newFrom) {
-                  const nextId = STATIONS.find((s) => s.stationId > newFrom)?.stationId;
-                  if (nextId !== undefined) setToStationId(nextId);
-                }
+                updateInstance(activeTrainId, (cur) => {
+                  let newTo = cur.toStationId;
+                  if (newTo <= newFrom) {
+                    const nextId = STATIONS.find((s) => s.stationId > newFrom)?.stationId;
+                    if (nextId !== undefined) newTo = nextId;
+                  }
+                  return { ...cur, fromStationId: newFrom, toStationId: newTo };
+                });
               }}
             >
               {STATIONS.filter((s) => s.stationId < STATIONS[STATIONS.length - 1].stationId).map((s) => (
@@ -495,9 +674,9 @@ function Vehicle() {
             <select
               id="to-station-select"
               className="vehicle-station-select"
-              value={toStationId}
+              value={ai.toStationId}
               disabled={isLoading || isPlaying}
-              onChange={(e) => setToStationId(Number(e.target.value))}
+              onChange={(e) => updateInstance(activeTrainId, (cur) => ({ ...cur, toStationId: Number(e.target.value) }))}
             >
               {toStationOptions.map((s) => (
                 <option key={s.stationId} value={s.stationId}>
@@ -507,15 +686,15 @@ function Vehicle() {
             </select>
           </div>
 
-          <button className="vehicle-start-btn" onClick={handleStart}
+          <button className="vehicle-start-btn" onClick={() => handleStart(activeTrainId)}
             disabled={isLoading || isPlaying} type="button">
-            {isLoading ? '计算中...' : status === 'finished' || status === 'error' ? '重新仿真' : '开始仿真'}
+            {isLoading ? '准备中...' : ai.status === 'finished' || ai.status === 'error' ? '重新上线' : '上线并等待发车'}
           </button>
-          <button className="vehicle-secondary-btn" onClick={handleTogglePause}
-            disabled={!isPlaying} type="button">
-            {isPaused ? '继续' : '暂停'}
+          <button className="vehicle-secondary-btn" onClick={() => handleTogglePause(activeTrainId)}
+            disabled={!isPlaying || !ai.departureAuthorized} type="button">
+            {!ai.departureAuthorized && isPlaying ? '等待调度发车' : ai.isPaused ? '继续' : '暂停'}
           </button>
-          <button className="vehicle-ghost-btn" onClick={handleReset}
+          <button className="vehicle-ghost-btn" onClick={() => handleReset(activeTrainId)}
             disabled={!canReset || isLoading} type="button">
             复位
           </button>
@@ -523,15 +702,16 @@ function Vehicle() {
           <div className="vehicle-speed-group" aria-label="播放倍速">
             {SPEED_MULTIPLIER_OPTIONS.map((m) => (
               <button key={m} type="button"
-                className={`vehicle-speed-btn${speedMultiplier === m ? ' is-active' : ''}`}
-                onClick={() => setSpeedMultiplier(m)}
-                disabled={!result && status !== 'playing'}
-                aria-pressed={speedMultiplier === m}>
+                className={`vehicle-speed-btn${ai.speedMultiplier === m ? ' is-active' : ''}`}
+                onClick={() => updateInstance(activeTrainId, (cur) => ({ ...cur, speedMultiplier: m }))}
+                disabled={!ai.result && ai.status !== 'playing'}
+                aria-pressed={ai.speedMultiplier === m}>
                 {m}x
               </button>
             ))}
           </div>
 
+          {/* 区间 / 多站信息 */}
           {(fromStationName && toStationName) ? (
             <span className="vehicle-section-label">
               {fromStationName} → {toStationName}
@@ -539,275 +719,127 @@ function Vehicle() {
             </span>
           ) : (
             <span className="vehicle-section-label vehicle-section-label--pending">
-              {(STATIONS.find((s) => s.stationId === fromStationId)?.displayNameOverride
-                ?? STATIONS.find((s) => s.stationId === fromStationId)?.displayName) || `站${fromStationId}`}
+              {(STATIONS.find((s) => s.stationId === ai.fromStationId)?.displayNameOverride
+                ?? STATIONS.find((s) => s.stationId === ai.fromStationId)?.displayName) || `站${ai.fromStationId}`}
               {' → '}
-              {(STATIONS.find((s) => s.stationId === toStationId)?.displayNameOverride
-                ?? STATIONS.find((s) => s.stationId === toStationId)?.displayName) || `站${toStationId}`}
+              {(STATIONS.find((s) => s.stationId === ai.toStationId)?.displayNameOverride
+                ?? STATIONS.find((s) => s.stationId === ai.toStationId)?.displayName) || `站${ai.toStationId}`}
             </span>
           )}
 
           {isPlaying && currentState && (
             <span className="vehicle-status-text">
-              {isPaused ? '已暂停' : '播放中'} · {frameIndex + 1}/{result?.states.length}
+              {ai.isPaused ? '已暂停' : '播放中'} · {ai.frameIndex + 1}/{ai.result?.states.length}
               {' · '}t={currentState.time.toFixed(1)}s
-              {' · '}模式:{drivingMode.toUpperCase()}
+              {' · '}模式:{ai.drivingMode.toUpperCase()}
             </span>
           )}
-          {status === 'finished' && <span className="vehicle-status-text">仿真完成</span>}
+          {ai.status === 'finished' && <span className="vehicle-status-text">仿真完成</span>}
         </div>
       </header>
 
-      {status === 'error' && (
+      {/* ═══ 所有实例的总控联调面板（隐藏非活跃实例，但保持挂载以维持通信）═══ */}
+      {trainIds.map((tid) => {
+        const inst = instances.get(tid)!;
+        const instState: TrainState | null =
+          inst.result && inst.result.states.length > 0 ? inst.result.states[inst.frameIndex] : null;
+        const instFromName = inst.result?.summary?.fromStationName
+          ?? STATIONS.find((s) => s.stationId === inst.fromStationId)?.displayNameOverride
+          ?? STATIONS.find((s) => s.stationId === inst.fromStationId)?.displayName
+          ?? String(inst.fromStationId);
+        const instToName = inst.result?.summary?.toStationName
+          ?? STATIONS.find((s) => s.stationId === inst.toStationId)?.displayNameOverride
+          ?? STATIONS.find((s) => s.stationId === inst.toStationId)?.displayName
+          ?? String(inst.toStationId);
+        const instLineStart = inst.result?.summary?.lineStartPosition ?? 0;
+        const isActive = tid === activeTrainId;
+
+        return (
+          <div key={`ip-${tid}`} style={{ display: isActive ? undefined : 'none' }}>
+            <IntegrationPanel
+              trainId={tid}
+              localState={instState}
+              pageStatus={inst.status}
+              paused={inst.isPaused}
+              fromStationId={inst.fromStationId}
+              toStationId={inst.toStationId}
+              fromStationName={instFromName}
+              toStationName={instToName}
+              lineStartPosition={instLineStart}
+              drivingMode={inst.drivingMode}
+              departureAuthorized={inst.departureAuthorized}
+              onDepartAuthorized={() => handleDepartAuthorized(tid)}
+              onDispatchHold={() => handleDispatchHold(tid)}
+              onDispatchRecovery={() => handleDispatchRecovery(tid)}
+            />
+          </div>
+        );
+      })}
+
+      {trainIds.map((tid) => (
+        <div key={`p704-${tid}`} style={{ display: tid === activeTrainId ? undefined : 'none' }}>
+          <Protocol704Panel
+            trainId={tid}
+            onError={(message) => {
+              updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
+            }}
+          />
+        </div>
+      ))}
+
+      {ai.status === 'error' && (
         <div className="vehicle-error">
-          <span>仿真失败：{errorMessage}</span>
-          <button onClick={handleStart} type="button">重试</button>
+          <span>仿真失败：{ai.errorMessage}</span>
+          <button onClick={() => handleStart(activeTrainId)} type="button">重试</button>
         </div>
       )}
 
-      {allSafetyEvents.length > 0 && (
+      {/* SafetyEvent 紧凑展示区 */}
+      {ai.allSafetyEvents.length > 0 && (
         <div className="vehicle-safety-bar" role="alert" aria-label="安全事件">
-          <strong>⚠ 安全事件({allSafetyEvents.length})：</strong>
-          {allSafetyEvents.slice(-3).map((ev, i) => (
+          <strong>⚠ 安全事件({ai.allSafetyEvents.length})：</strong>
+          {ai.allSafetyEvents.slice(-3).map((ev, i) => (
             <span key={i} className="vehicle-safety-chip">
               {ev.reason} t={ev.time.toFixed(0)}s pos={ev.position.toFixed(0)}m v={ev.velocity.toFixed(1)}m/s [{ev.action}]
             </span>
           ))}
-          {allSafetyEvents.length > 3 && <span className="vehicle-safety-chip">…</span>}
+          {ai.allSafetyEvents.length > 3 && <span className="vehicle-safety-chip">…</span>}
         </div>
       )}
 
-      {/* 704 协议状态面板 */}
-      <div className="vehicle-704-panel">
-        <div className="vehicle-704-panel__header" onClick={() => setP704Expanded(!p704Expanded)} style={{ cursor: 'pointer' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <strong>704/司机台连接状态 · 车组 {trainId}</strong>
-            <span className={`vehicle-704-badge ${p704connected ? 'vehicle-704-badge--connected' : (p704Polling ? 'vehicle-704-badge--connecting' : 'vehicle-704-badge--disconnected')}`}>
-              {p704connected ? '已连接' : (p704Polling ? '连接中' : '未连接')}
-            </span>
-            <span style={{ fontSize: 12, color: '#6b7280' }}>目标: {p704Status?.host ?? '192.168.100.123'}:{portStatuses.map(p => p.port).join('/') || '8001/8002/8003'}</span>
-            {!p704Expanded && (
-              <>
-                {lastMappedCmd && (
-                  <span style={{ fontSize: 11, color: lastMappedCmd.verified ? '#059669' : '#d97706', fontWeight: 600 }}>
-                    最近命令: {lastMappedCmd.command}
-                    {lastMappedCmd.levelPercent > 0 ? ` ${lastMappedCmd.levelPercent}%` : ''}
-                  </span>
-                )}
-                {p704Status?.lastFrameLength != null && (
-                  <span style={{ fontSize: 11, color: '#6b7280' }}>帧长: {p704Status.lastFrameLength}B</span>
-                )}
-                {p704Status?.recentLogs && p704Status.recentLogs.length > 0 && (
-                  <span style={{ fontSize: 11, color: '#6b7280' }}>日志: {p704Status.recentLogs.length}条</span>
-                )}
-              </>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={(e) => { e.stopPropagation(); handleP704Connect(); }} disabled={p704Polling} type="button" className="vehicle-704-btn">连接704</button>
-            <button onClick={(e) => { e.stopPropagation(); handleP704Disconnect(); }} disabled={!p704Polling} type="button" className="vehicle-704-btn">断开</button>
-            <button onClick={(e) => { e.stopPropagation(); handleP704Reset(); }} type="button" className="vehicle-704-btn">重置</button>
-            <span className="vehicle-704-expand-icon">{p704Expanded ? '▲' : '▼'}</span>
-          </div>
-        </div>
-
-        {p704Expanded && (
-          <div className="vehicle-704-panel__body">
-            {/* 端口状态 */}
-            <div className="vehicle-704-section">
-              <div className="vehicle-704-section__title">端口状态</div>
-              <div className="vehicle-704-port-grid">
-                {portStatuses.map((ps) => (
-                  <div key={ps.port} className={`vehicle-704-port-card ${ps.connected ? 'vehicle-704-port-card--connected' : (ps.connecting ? 'vehicle-704-port-card--connecting' : '')}`}>
-                    <div className="vehicle-704-port-card__header">
-                      <span className="vehicle-704-port-card__port">PLC 端口 {ps.port}</span>
-                      <span className={`vehicle-704-port-card__status ${ps.connected ? 'vehicle-704-text-green' : ps.connecting ? 'vehicle-704-text-yellow' : 'vehicle-704-text-red'}`}>
-                        {ps.connecting ? '连接中...' : ps.connected ? '✓ 已连接' : '✗ 未连接'}
-                      </span>
-                    </div>
-                    <div className="vehicle-704-port-card__details">
-                      <div>最近接收: {formatTime(ps.lastReceiveTime)}</div>
-                      <div>帧间隔: {ps.lastFrameIntervalMs ? ps.lastFrameIntervalMs + 'ms' : '-'}</div>
-                      <div>帧长度: {ps.lastFrameLength ? ps.lastFrameLength + 'B' : '-'}</div>
-                      <div>收帧数: {ps.frameCount ?? 0}</div>
-                      <div>接收字节: {ps.bytesReceived != null ? (ps.bytesReceived > 1024 ? (ps.bytesReceived / 1024).toFixed(1) + 'KB' : ps.bytesReceived + 'B') : '0B'}</div>
-                    </div>
-                    {ps.lastError && (
-                      <div className="vehicle-704-port-card__error">{ps.lastError}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 测试帧按钮 */}
-            <div className="vehicle-704-section vehicle-704-test-section">
-              <div className="vehicle-704-section__title">
-                测试帧
-                <span className="vehicle-704-test-warning">（不代表真实704已连接）</span>
-              </div>
-              <div className="vehicle-704-test-buttons">
-                <button onClick={() => handleTestFrame('coast')} disabled={p704TestFrameLoading !== null} type="button" className="vehicle-704-test-btn">
-                  {p704TestFrameLoading === 'coast' ? '发送中...' : '测试惰行'}
-                </button>
-                <button onClick={() => handleTestFrame('traction')} disabled={p704TestFrameLoading !== null} type="button" className="vehicle-704-test-btn vehicle-704-test-btn--traction">
-                  {p704TestFrameLoading === 'traction' ? '发送中...' : '测试牵引'}
-                </button>
-                <button onClick={() => handleTestFrame('brake')} disabled={p704TestFrameLoading !== null} type="button" className="vehicle-704-test-btn vehicle-704-test-btn--brake">
-                  {p704TestFrameLoading === 'brake' ? '发送中...' : '测试制动'}
-                </button>
-                <button onClick={() => handleTestFrame('emergency_brake')} disabled={p704TestFrameLoading !== null} type="button" className="vehicle-704-test-btn vehicle-704-test-btn--eb">
-                  {p704TestFrameLoading === 'emergency_brake' ? '发送中...' : '测试EB'}
-                </button>
-              </div>
-            </div>
-
-            {/* 解析字段 & 映射命令 */}
-            {(p704Status?.lastParsedFrame || lastMappedCmd) && (
-              <div className="vehicle-704-section">
-                <div className="vehicle-704-section__title">解析结果</div>
-                <div className="vehicle-704-parse-grid">
-                  {p704Status?.lastParsedFrame?.fields && (
-                    <>
-                      <div className="vehicle-704-parse-item">
-                        <span className="vehicle-704-parse-label">帧头</span>
-                        <span className={`vehicle-704-parse-value ${p704Status.lastParsedFrame.fields.header_valid ? 'vehicle-704-text-green' : 'vehicle-704-text-red'}`}>
-                          {String(p704Status.lastParsedFrame.fields.frame_header ?? '-')}
-                          {p704Status.lastParsedFrame.fields.header_valid ? ' ✓' : ' ✗'}
-                        </span>
-                      </div>
-                      <div className="vehicle-704-parse-item">
-                        <span className="vehicle-704-parse-label">totalLen / dataLen</span>
-                        <span className="vehicle-704-parse-value">{String(p704Status.lastParsedFrame.fields.total_len_field ?? '-')} / {String(p704Status.lastParsedFrame.fields.data_len_field ?? '-')}</span>
-                      </div>
-                      <div className="vehicle-704-parse-item">
-                        <span className="vehicle-704-parse-label">主手柄</span>
-                        <span className="vehicle-704-parse-value">{String(p704Status.lastParsedFrame.fields.master_handle ?? '-')}</span>
-                      </div>
-                      <div className="vehicle-704-parse-item">
-                        <span className="vehicle-704-parse-label">方向手柄</span>
-                        <span className="vehicle-704-parse-value">{String(p704Status.lastParsedFrame.fields.direction_desc ?? '-')}</span>
-                      </div>
-                      <div className="vehicle-704-parse-item">
-                        <span className="vehicle-704-parse-label">牵引级位</span>
-                        <span className="vehicle-704-parse-value">{String(p704Status.lastParsedFrame.fields.traction_level_percent_raw ?? '-')}</span>
-                      </div>
-                      <div className="vehicle-704-parse-item">
-                        <span className="vehicle-704-parse-label">制动级位</span>
-                        <span className="vehicle-704-parse-value">{String(p704Status.lastParsedFrame.fields.brake_level_percent_raw ?? '-')}</span>
-                      </div>
-                      <div className="vehicle-704-parse-item">
-                        <span className="vehicle-704-parse-label">EB按钮</span>
-                        <span className={`vehicle-704-parse-value ${p704Status.lastParsedFrame.fields.eb_button_locked ? 'vehicle-704-text-red' : ''}`}>
-                          {p704Status.lastParsedFrame.fields.eb_button_locked ? '⚠ 已触发' : '正常'}
-                        </span>
-                      </div>
-                    </>
-                  )}
-                  {lastMappedCmd && (
-                    <div className="vehicle-704-parse-item vehicle-704-parse-item--full">
-                      <span className="vehicle-704-parse-label">映射命令</span>
-                      <span className={`vehicle-704-parse-value ${lastMappedCmd.verified ? 'vehicle-704-text-green' : 'vehicle-704-text-yellow'}`}>
-                        {lastMappedCmd.command}
-                        {lastMappedCmd.levelPercent > 0 ? ` (级位:${lastMappedCmd.levelPercent}%)` : ''}
-                        {lastMappedCmd.targetDecel > 0 ? ` (减速度:${lastMappedCmd.targetDecel.toFixed(2)}m/s²)` : ''}
-                        {' '}
-                        {lastMappedCmd.verified ? '(已验证)' : '(未现场验证)'}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* 实时状态 */}
-            {rtState && (
-              <div className="vehicle-704-section">
-                <div className="vehicle-704-section__title">实时车辆状态 {rtState.note ? `(${rtState.note})` : ''}</div>
-                <div className="vehicle-704-parse-grid">
-                  <div className="vehicle-704-parse-item">
-                    <span className="vehicle-704-parse-label">速度</span>
-                    <span className="vehicle-704-parse-value">{rtState.velocityMs.toFixed(2)} m/s</span>
-                  </div>
-                  <div className="vehicle-704-parse-item">
-                    <span className="vehicle-704-parse-label">加速度</span>
-                    <span className="vehicle-704-parse-value">{rtState.accelerationMs2.toFixed(2)} m/s²</span>
-                  </div>
-                  <div className="vehicle-704-parse-item">
-                    <span className="vehicle-704-parse-label">位置</span>
-                    <span className="vehicle-704-parse-value">{rtState.positionM.toFixed(1)} m</span>
-                  </div>
-                  <div className="vehicle-704-parse-item">
-                    <span className="vehicle-704-parse-label">模式</span>
-                    <span className="vehicle-704-parse-value">{rtState.mode}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* raw hex */}
-            {p704Status?.lastRawHex && (
-              <div className="vehicle-704-section">
-                <div className="vehicle-704-section__title">最近原始帧 (hex)</div>
-                <div className="vehicle-704-raw-hex">{p704Status.lastRawHex}</div>
-              </div>
-            )}
-
-            {/* 最近日志 */}
-            {p704Status?.recentLogs && p704Status.recentLogs.length > 0 && (
-              <div className="vehicle-704-section">
-                <div className="vehicle-704-section__title">最近日志 (最近{p704Status.recentLogs.length}条)</div>
-                <div className="vehicle-704-log-list">
-                  {p704Status.recentLogs.slice(-20).reverse().map((log, i) => (
-                    <div key={i} className={`vehicle-704-log-item ${log.source === 'TEST_FRAME' ? 'vehicle-704-log-item--test' : ''}`}>
-                      <span className="vehicle-704-log-time">{formatTime(log.timestamp)}</span>
-                      <span className={`vehicle-704-log-source ${log.source === 'TEST_FRAME' ? 'vehicle-704-text-blue' : 'vehicle-704-text-green'}`}>
-                        {log.source === 'TEST_FRAME' ? '测试帧' : '硬件帧'}
-                      </span>
-                      <span className="vehicle-704-log-port">端口:{log.port || '-'}</span>
-                      <span className="vehicle-704-log-len">{log.frameLength}B</span>
-                      <span className="vehicle-704-log-cmd">{log.mappedCommand?.command ?? '-'}</span>
-                      {log.note && <span className="vehicle-704-log-note">{log.note}</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
+      {/* 主内容区 */}
       <div className="vehicle-main-area">
         <DriverCabView
-          status={status}
+          status={ai.status}
           currentState={viewState}
           startPosition={0}
           targetStopPosition={targetStopPosition}
           speedLimit={speedLimitValue}
-          stopResult={result?.stopResult ?? null}
-          safetyEventCount={allSafetyEvents.length}
-          isPaused={isPaused}
-          stationStops={result?.stationStops}
-          externalDriveMode={drivingMode}
-          onRequestManual={handleRequestManual}
-          onTractionLevel={handleTractionLevel}
-          onBrakeLevel={handleBrakeLevel}
-          onCoast={handleCoast}
-          onEmergencyBrake={handleEmergencyBrake}
-          onRequestAto={handleRequestAto}
-          onResetEmergency={handleResetEmergency}
+          stopResult={ai.result?.stopResult ?? null}
+          safetyEventCount={ai.allSafetyEvents.length}
+          isPaused={ai.isPaused}
+          stationStops={ai.result?.stationStops}
+          externalDriveMode={ai.drivingMode}
+          onRequestManual={() => handleRequestManual(activeTrainId)}
+          onTractionLevel={(level, percent) => handleTractionLevel(activeTrainId, level, percent)}
+          onBrakeLevel={(level, decel, percent) => handleBrakeLevel(activeTrainId, level, decel, percent)}
+          onCoast={() => handleCoast(activeTrainId)}
+          onEmergencyBrake={() => handleEmergencyBrake(activeTrainId)}
+          onRequestAto={() => handleRequestAto(activeTrainId)}
+          onResetEmergency={() => handleResetEmergency(activeTrainId)}
           canResetEmergency={canResetEmergency}
-          handleResetToken={handleResetToken}
+          handleResetToken={ai.handleResetToken}
         />
         <LineRunView
-          status={status}
+          trainId={activeTrainId}
+          status={ai.status}
           currentState={viewState}
           startPosition={0}
           targetStopPosition={targetStopPosition}
           speedLimit={speedLimitValue}
-          stopResult={result?.stopResult ?? null}
+          stopResult={ai.result?.stopResult ?? null}
           positionOffset={lineStartPosition}
-          stationStops={result?.stationStops}
+          stationStops={ai.result?.stationStops}
         />
       </div>
 

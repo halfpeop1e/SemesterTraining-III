@@ -417,6 +417,7 @@ public class VehicleSimulationService {
         DrivingMode inputMode = request.getCurrentMode();
         String commandStr = cmd.getCommand() != null ? cmd.getCommand().toLowerCase() : "";
         boolean isEB = "emergency_brake".equals(commandStr);
+        boolean isAtpEB = "atp_emergency_brake".equals(commandStr);
         boolean isResumeAto = "resume_ato".equals(commandStr);
         boolean isResetEmergency = "reset_emergency".equals(commandStr);
 
@@ -462,7 +463,7 @@ public class VehicleSimulationService {
         }
 
         DrivingMode effectiveMode;
-        if (isEB) {
+        if (isEB || isAtpEB) {
             effectiveMode = DrivingMode.EMERGENCY;
         } else if (isResumeAto) {
             // resume_ato：MANUAL/ATO → ATO；EMERGENCY 不能直接恢复 ATO，需先停稳复位到人工。
@@ -514,7 +515,8 @@ public class VehicleSimulationService {
             brakingTriggered = true;
             brakeTriggerPosition = localPos;
             brakeResponseRemaining = train.getBrakeResponseTime();
-            String reason = isEB ? "DRIVER_EMERGENCY_BRAKE" : "EMERGENCY_MODE_ENGAGED";
+            String reason = isAtpEB ? "ATP_EMERGENCY_BRAKE"
+                    : isEB ? "DRIVER_EMERGENCY_BRAKE" : "EMERGENCY_MODE_ENGAGED";
             safetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
                     reason, t, currentCumulativePos, v, "emergency_brake"));
         }

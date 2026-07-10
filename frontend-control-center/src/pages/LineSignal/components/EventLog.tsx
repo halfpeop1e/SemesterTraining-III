@@ -23,7 +23,7 @@ const CATEGORY_LABEL: Record<SignalEventItem['category'], string> = {
 
 export default function EventLog({ events, loading }: EventLogProps) {
   return (
-    <Card size="small" title="实时事件" className="h-full" bodyStyle={{ padding: 0 }}>
+    <Card size="small" title="实时事件" className="h-full" styles={{ body: { padding: 0 } }}>
       {events.length === 0 ? (
         <div className="p-4"><Empty description="暂无事件" image={Empty.PRESENTED_IMAGE_SIMPLE} /></div>
       ) : (

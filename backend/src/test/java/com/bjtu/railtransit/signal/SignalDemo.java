@@ -10,7 +10,6 @@ import com.bjtu.railtransit.signal.service.MaConfig;
 import com.bjtu.railtransit.signal.service.MovingAuthorityService;
 
 import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -93,7 +92,8 @@ public class SignalDemo {
         followSim(synth, cfg, 12, 1.0, 1000, 20, "合成单线");
 
         // (B) 真实线路数据
-        String path = "D:/Code/aaaSemesterTraining-III/SemesterTraining-III/backend/src/main/resources/line-profile.json";
+        String path = java.nio.file.Path.of("src", "main", "resources", "line-profile.json")
+                .toAbsolutePath().normalize().toString();
         LineProfile real = new LineProfileLoader().loadFromJsonFile(path);
         System.out.println("  真实线路总长 = " + real.getTotalLengthM() + " m，里程索引覆盖 Seg 数 = "
                 + (real.getSegmentMileage() != null ? real.getSegmentMileage().size() : 0));

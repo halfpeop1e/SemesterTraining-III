@@ -27,6 +27,9 @@ Thumbs.db
 
 # Large binary / raw data (must not be committed)
 data/
+
+# 后端资源中的小数据文件允许提交（客流CSV + 人口密度JSON）
+!backend/src/main/resources/data/
 线路数据*.xls
 704系统协议汇总.docx
 
@@ -36,3 +39,4 @@ backend/body.json
 backend/**/body.json
 
 .fake
+frontend-control-center/test-results/

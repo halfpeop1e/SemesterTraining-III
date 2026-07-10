@@ -5,7 +5,6 @@ import com.bjtu.railtransit.domain.model.SimulationLog;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 多车供电峰值检测器
@@ -58,7 +57,7 @@ public class PeakPowerDetector {
         PeakPowerResult result = new PeakPowerResult();
         result.setMaxPeakKw(maxPeak);
         result.setTimeOfPeak(peakTime);
-        result.setVehiclesAtPeak(new ArrayList<>(vehiclesAtPeak.keySet()));
+        result.setVehiclesAtPeak(vehiclesAtPeak != null ? new ArrayList<>(vehiclesAtPeak.keySet()) : Collections.emptyList());
         return result;
     }
 }

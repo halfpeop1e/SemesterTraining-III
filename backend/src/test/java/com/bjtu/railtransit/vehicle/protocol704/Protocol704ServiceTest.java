@@ -104,4 +104,14 @@ public class Protocol704ServiceTest {
         assertNotNull(status.getLastRawHex());
         assertFalse(status.getRecentLogs().isEmpty());
     }
+
+    @Test
+    public void testRealtimeStateUsesRequestedTrainIdAndIsIsolated() {
+        Protocol704Status first = service.getStatus("OB1");
+        Protocol704Status second = service.getStatus("OB2");
+
+        assertEquals("OB1", first.getRealtimeVehicleState().getTrainId());
+        assertEquals("OB2", second.getRealtimeVehicleState().getTrainId());
+        assertNotSame(first.getRealtimeVehicleState(), second.getRealtimeVehicleState());
+    }
 }

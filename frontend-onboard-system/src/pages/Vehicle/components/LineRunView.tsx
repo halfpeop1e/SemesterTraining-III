@@ -4,6 +4,7 @@ import type { StationStop, StopResult, TrainState } from '../../../types/vehicle
 import './LineRunView.css';
 
 export interface LineRunViewProps {
+  trainId: string;
   status: 'idle' | 'loading' | 'playing' | 'finished' | 'error';
   currentState: TrainState | null;
   startPosition: number;
@@ -180,6 +181,7 @@ function formatEta(etaS: number | null): string {
 }
 
 function LineRunView({
+  trainId,
   status,
   currentState,
   startPosition,
@@ -495,7 +497,7 @@ function LineRunView({
           <circle className="line-run-view__train-ring" cx="0" cy="0" r="24" />
           <path className="line-run-view__train-body" d="M-28,-12 L12,-12 Q30,-12 36,0 Q30,12 12,12 L-28,12 Q-36,12 -36,4 L-36,-4 Q-36,-12 -28,-12 Z" />
           <path className="line-run-view__train-nose" d="M14,-7 L29,0 L14,7 Z" />
-          <text x="0" y="-36">{currentState ? currentState.trainId : 'T1'}</text>
+          <text x="0" y="-36">{currentState?.trainId ?? trainId}</text>
         </g>
       </svg>
 

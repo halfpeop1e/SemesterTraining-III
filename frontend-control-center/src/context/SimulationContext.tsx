@@ -2,12 +2,11 @@ import {
   createContext,
   useContext,
   useState,
-  useEffect,
-  useRef,
   useCallback,
   type ReactNode,
 } from 'react';
-import { startSimulation, stepSimulation, getSnapshot } from '../api/dispatch';
+import { startSimulation, resetSimulation, pauseSimulation } from '../api/dispatch';
+import { useSimulationWS } from '../hooks/useSimulationWS';
 import type { SimulationSnapshot } from '../types/dispatch';
 
 export const SPEED_OPTIONS = [
@@ -26,6 +25,7 @@ interface SimulationContextValue {
   start: () => Promise<void>;
   stop: () => void;
   step: () => Promise<void>;
+  reset: () => Promise<void>;
   setSpeed: (i: number) => void;
   setError: (msg: string) => void;
 }
@@ -34,102 +34,80 @@ const SimulationContext = createContext<SimulationContextValue | null>(null);
 
 /**
  * 仿真运行时提升到 App 层级。
- * 因为 App 用 module 状态硬切换页面（Dispatch/LineSignal 互相卸载），
- * 若把 step 循环放在 Dispatch 内部，切走即卸载 → 仿真冻结。
- * Provider 位于页面切换层之上，interval 跨页面存活，两个页面共用同一份实时快照。
+ * 数据流: 后端 @Scheduled authoritativeTick → WebSocket 推送 → useSimulationWS → context
+ * 前端不驱动仿真步进，仅通过 HTTP API 控制启停/重置。
  */
 export function SimulationProvider({ children }: { children: ReactNode }) {
-  const [snapshot, setSnapshot] = useState<SimulationSnapshot | null>(null);
+  // ── WebSocket 实时快照 ──
+  const ws = useSimulationWS();
+
   const [isRunning, setIsRunning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [speedIndex, setSpeedIndex] = useState(0);
-  const autoRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // 用 ref 持有最新速度，避免 speedIndex 变化时重建 interval
-  const speedRef = useRef(speedIndex);
-  speedRef.current = speedIndex;
-
-  const refresh = useCallback(async () => {
-    try {
-      setError('');
-      setSnapshot(await getSnapshot());
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, []);
 
   const start = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       await startSimulation(3600);
-      await refresh();
+      // 初次启动后立即刷新一次确保有初始数据
+      await ws.refresh();
       setIsRunning(true);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [refresh]);
+  }, [ws.refresh]);
 
-  // 推进循环：仅在 provider 挂载期间运行，跨页面切换不中断
-  useEffect(() => {
-    if (!isRunning) return;
-    if (autoRef.current) clearInterval(autoRef.current);
-    autoRef.current = setInterval(async () => {
-      try {
-        await stepSimulation(SPEED_OPTIONS[speedRef.current].steps);
-        setSnapshot(await getSnapshot());
-      } catch {
-        /* 单步失败不中断循环，下一拍继续 */
-      }
-    }, 500);
-    return () => {
-      if (autoRef.current) {
-        clearInterval(autoRef.current);
-        autoRef.current = null;
-      }
-    };
-  }, [isRunning]);
-
-  useEffect(
-    () => () => {
-      if (autoRef.current) clearInterval(autoRef.current);
-    },
-    [],
-  );
-
-  const stop = useCallback(() => {
-    if (autoRef.current) {
-      clearInterval(autoRef.current);
-      autoRef.current = null;
-    }
+  const stop = useCallback(async () => {
     setIsRunning(false);
+    try {
+      await pauseSimulation();
+    } catch {
+      // 暂停失败不阻塞 UI
+    }
   }, []);
 
   const step = useCallback(async () => {
+    // 仿真时钟由后端驱动，手动步进仅刷新快照
     setLoading(true);
     try {
-      await stepSimulation(1);
-      await refresh();
+      await ws.refresh();
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [refresh]);
+  }, [ws.refresh]);
+
+  const reset = useCallback(async () => {
+    setIsRunning(false);
+    setLoading(true);
+    try {
+      await resetSimulation();
+      ws.clear();
+      setError('');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [ws.clear]);
 
   const setSpeed = useCallback((i: number) => setSpeedIndex(i), []);
 
   const value: SimulationContextValue = {
-    snapshot,
+    snapshot: ws.snapshot,
     isRunning,
     loading,
-    error,
+    error: error || ws.error,
     speedIndex,
     start,
     stop,
     step,
+    reset,
     setSpeed,
     setError,
   };

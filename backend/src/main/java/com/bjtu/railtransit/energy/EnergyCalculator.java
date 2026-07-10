@@ -44,15 +44,25 @@ public class EnergyCalculator {
             double sumPowerKw = 0;
             int tractionSteps = 0;
 
-            for (SimulationLog log : trainLogs) {
+            for (int i = 0; i < trainLogs.size(); i++) {
+                SimulationLog log = trainLogs.get(i);
+
+                // 计算时间步长：用相邻两条日志的时间差，默认 1.0s
+                double deltaTimeS = 1.0;
+                if (i + 1 < trainLogs.size()) {
+                    long currentTs = log.getTimestamp();
+                    long nextTs = trainLogs.get(i + 1).getTimestamp();
+                    long diffMs = nextTs - currentTs;
+                    if (diffMs > 0 && diffMs <= 5000) {
+                        deltaTimeS = diffMs / 1000.0;
+                    }
+                }
                 // 牵引工况：计算牵引功率和能耗
                 if ("traction".equals(log.getTractiveBrakeCmd()) && log.getTractionForce() > 0 && log.getSpeed() > 0) {
                     // 功率 (W) = 力 (N) × 速度 (m/s)
                     double powerW = log.getTractionForce() * log.getSpeed();
                     // 考虑牵引效率
                     double powerKw = powerW / (tractionEfficiency * 1000.0);
-                    // 假设时间步长 100ms = 0.1s（与接口协议100ms周期一致）
-                    double deltaTimeS = log.getTimestamp() > 0 ? 0.1 : 0.1;
                     totalTractionEnergyJ += powerW * deltaTimeS / tractionEfficiency;
 
                     maxPowerKw = Math.max(maxPowerKw, powerKw);
@@ -63,7 +73,6 @@ public class EnergyCalculator {
                 // 制动工况：计算再生制动
                 if ("brake".equals(log.getTractiveBrakeCmd()) && log.getBrakeForce() > 0 && log.getSpeed() > 0) {
                     double brakePowerW = log.getBrakeForce() * log.getSpeed();
-                    double deltaTimeS = 0.1;
                     totalRegenEnergyJ += brakePowerW * regenEfficiency * deltaTimeS;
                 }
             }

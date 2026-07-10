@@ -144,7 +144,7 @@ export default function Visualization3D({ snapshot, stations }: Props) {
         </div>
       )}
 
-      <div className="absolute top-3 right-4 z-10 flex flex-col gap-1 py-2 px-3 rounded-md bg-[#0d1520]/85 backdrop-blur-[8px] border border-slate-400/[0.12] pointer-events-none">
+      <div className="absolute top-3 right-4 z-10 flex flex-col gap-1 py-2 px-3 rounded-md bg-[#0d1520]/85 backdrop-blur-sm border border-slate-400/12 pointer-events-none">
         {[
           ["#22c55e", "运行中"],
           ["#f59e0b", "进站中"],
@@ -179,7 +179,7 @@ function Hud({
 }) {
   return (
     <div
-      className="flex items-center gap-2 px-2.5 py-1 rounded backdrop-blur-[8px]"
+      className="flex items-center gap-2 px-2.5 py-1 rounded backdrop-blur-sm"
       style={{
         background: "rgba(13,21,32,0.85)",
         border: `1px solid ${color}22`,

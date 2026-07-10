@@ -5,6 +5,12 @@ spring:
   application:
     name: rail-transit-sim
 
+rail:
+  signal:
+    # true: educational simulator uses teacher static topology with simulated clear aspects.
+    # false: laboratory/HIL mode; missing live signal aspects remain fail-safe.
+    simulated-interlocking: true
+
 vehicle:
   protocol704:
     host: 192.168.100.123

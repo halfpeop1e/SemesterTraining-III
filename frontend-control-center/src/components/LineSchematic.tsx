@@ -14,7 +14,7 @@ import type {
   SpeedLimitZone,
   GradientInfo,
   TrainState,
-} from "../../types/dispatch";
+} from "../types/dispatch";
 
 /* ============================================================
    LineSchematic Pro — 全功能轨道交通线路示意图

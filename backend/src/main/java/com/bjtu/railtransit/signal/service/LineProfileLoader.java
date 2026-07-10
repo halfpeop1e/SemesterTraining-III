@@ -28,6 +28,23 @@ import java.util.Map;
 public class LineProfileLoader {
 
     private final ObjectMapper mapper = new ObjectMapper();
+    private volatile LineProfile cachedProfile;
+
+    /** 获取缓存的 LineProfile（首次调用从 classpath 加载） */
+    public LineProfile getLineProfile() {
+        if (cachedProfile == null) {
+            synchronized (this) {
+                if (cachedProfile == null) {
+                    try {
+                        cachedProfile = loadFromClasspath("line-profile.json");
+                    } catch (IOException e) {
+                        throw new RuntimeException("Failed to load line-profile.json", e);
+                    }
+                }
+            }
+        }
+        return cachedProfile;
+    }
 
     public LineProfile loadFromJsonFile(String path) throws IOException {
         try (InputStream in = new FileInputStream(path)) {
