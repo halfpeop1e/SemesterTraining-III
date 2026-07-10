@@ -152,3 +152,26 @@ export const clearFault = (trainId: string, faultType: string) =>
 
 export const getSystemStates = () =>
   request<SystemStatesResponse>('/dispatch/states');
+
+// 站点进站客流数据
+export interface StationEntryFlowItem {
+  stationId: number;
+  stationName: string;
+  dailyEntryTotal: number;
+  hourSlot: string;
+  entryCount: number;
+  isPeak: boolean;
+}
+
+export const getStationEntryFlow = () =>
+  request<StationEntryFlowItem[]>('/dispatch/station-entry-flow');
+
+// 人口密度数据点
+export interface PopulationDensityPoint {
+  lat: number;
+  lng: number;
+  density: number;
+}
+
+export const getPopulationDensity = () =>
+  request<PopulationDensityPoint[]>('/dispatch/population-density');
