@@ -556,7 +556,7 @@ public class VehicleSimulationService {
      * <ul>
      *   <li>ATO + 普通 brake → 拒绝，保持 ATO 自动续算（不切换模式）。</li>
      *   <li>MANUAL + brake → targetDecel 约束在 [0, normalBrakeDeceleration]，真实续算。</li>
-     *   <li>任意模式 + emergency_brake → EMERGENCY，使用 emergencyBrakeDeceleration，中断多站任务。</li>
+     *   <li>任意模式 + emergency_brake / atp_emergency_brake → EMERGENCY，使用 emergencyBrakeDeceleration，中断多站任务。</li>
      *   <li>ATO → MANUAL 模式切换（coast 指令）→ 切换模式，但按 ATO 自动策略续算轨迹。</li>
      * </ul>
      */
@@ -581,10 +581,11 @@ public class VehicleSimulationService {
         DrivingMode inputMode = request.getCurrentMode();
         String commandStr = cmd.getCommand() != null ? cmd.getCommand().toLowerCase() : "";
         boolean isEB = "emergency_brake".equals(commandStr);
+        boolean isAtpEB = "atp_emergency_brake".equals(commandStr);
 
         // 确定实际执行模式
         DrivingMode effectiveMode;
-        if (isEB) {
+        if (isEB || isAtpEB) {
             effectiveMode = DrivingMode.EMERGENCY;
         } else if (inputMode == DrivingMode.ATO && "brake".equals(commandStr)) {
             // ATO 下普通 brake 被拒绝，保持 ATO
@@ -622,7 +623,8 @@ public class VehicleSimulationService {
             brakingTriggered = true;
             brakeTriggerPosition = localPos;
             brakeResponseRemaining = train.getBrakeResponseTime();
-            String reason = isEB ? "DRIVER_EMERGENCY_BRAKE" : "EMERGENCY_MODE_ENGAGED";
+            String reason = isAtpEB ? "ATP_EMERGENCY_BRAKE"
+                    : isEB ? "DRIVER_EMERGENCY_BRAKE" : "EMERGENCY_MODE_ENGAGED";
             safetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
                     reason, t, currentCumulativePos, v, "emergency_brake"));
         }

@@ -124,7 +124,7 @@ export default function IntegrationPanel({
           setMessage("总控已批准恢复ATO");
           onDispatchRecovery();
         } else {
-          setMessage("总控已确认保持停车");
+          setMessage("总控触发 ATP 制动：降至零速后保持停车");
           onDispatchHold();
         }
       })

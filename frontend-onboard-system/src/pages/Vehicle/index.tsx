@@ -24,9 +24,13 @@ interface InstanceState {
   status: PageStatus;
   errorMessage: string | null;
   result: SimulationResult | null;
+  /** Increments whenever a continuation replaces the remaining trajectory. */
+  trajectoryVersion: number;
   frameIndex: number;
   timerId: number | null;  // setInterval ID
   isPaused: boolean;
+  /** A dispatch HOLD is braking the train; pause only after its speed reaches zero. */
+  holdAfterBraking: boolean;
   departureAuthorized: boolean;
   speedMultiplier: SpeedMultiplier;
   fromStationId: number;
@@ -61,9 +65,11 @@ function createInstance(trainId: string): InstanceState {
     status: 'idle',
     errorMessage: null,
     result: null,
+    trajectoryVersion: 0,
     frameIndex: 0,
     timerId: null,
     isPaused: false,
+    holdAfterBraking: false,
     departureAuthorized: false,
     speedMultiplier: 1,
     fromStationId: 1,
@@ -176,7 +182,19 @@ function Vehicle() {
         const nextIdx = cur.frameIndex + 1;
         if (nextIdx >= totalFrames - 1) {
           window.clearInterval(timerId);
-          next.set(trainId, { ...cur, frameIndex: totalFrames - 1, status: 'finished', timerId: null });
+          // A safety HOLD first plays the ATP braking trajectory.  It becomes a
+          // held train only after the simulated speed has reached zero.
+          if (cur.holdAfterBraking) {
+            next.set(trainId, {
+              ...cur,
+              frameIndex: totalFrames - 1,
+              isPaused: true,
+              holdAfterBraking: false,
+              timerId: null,
+            });
+          } else {
+            next.set(trainId, { ...cur, frameIndex: totalFrames - 1, status: 'finished', timerId: null });
+          }
           return next;
         }
         next.set(trainId, { ...cur, frameIndex: nextIdx, timerId: timerId as unknown as number });
@@ -233,7 +251,7 @@ function Vehicle() {
   // ── 定时器管理：检查所有实例，确保该跑的跑、该停的停 ──
   // 序列化与定时器相关的字段（不含 timerId 本身），避免 restart loop
   const timerDigest = Array.from(instances.entries())
-    .map(([id, inst]) => `${id}:${inst.status}:${inst.isPaused}:${inst.speedMultiplier}`)
+    .map(([id, inst]) => `${id}:${inst.status}:${inst.isPaused}:${inst.speedMultiplier}:${inst.trajectoryVersion}`)
     .join('|');
 
   useEffect(() => {
@@ -272,8 +290,10 @@ function Vehicle() {
       status: 'loading',
       errorMessage: null,
       result: null,
+      trajectoryVersion: 0,
       frameIndex: 0,
       isPaused: true,
+      holdAfterBraking: false,
       departureAuthorized: false,
       speedMultiplier: 1,
       drivingMode: 'ato',
@@ -346,6 +366,7 @@ function Vehicle() {
             stationStops: controlResult.stationStops,
           },
           allSafetyEvents: [...cur.allSafetyEvents, ...(controlResult.safetyEvents ?? [])],
+          trajectoryVersion: cur.trajectoryVersion + 1,
           drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
           status: 'playing',
         };
@@ -361,8 +382,10 @@ function Vehicle() {
       status: 'idle',
       errorMessage: null,
       result: null,
+      trajectoryVersion: 0,
       frameIndex: 0,
       isPaused: false,
+      holdAfterBraking: false,
       departureAuthorized: false,
       speedMultiplier: 1,
       drivingMode: 'ato',
@@ -386,11 +409,20 @@ function Vehicle() {
   }, [updateInstance]);
 
   const handleDispatchHold = useCallback((trainId: string) => {
-    updateInstance(trainId, (cur) => ({ ...cur, isPaused: true }));
-  }, [updateInstance]);
+    const refs = instanceRefs.current.get(trainId);
+    if (!refs?.stateRef || refs.stateRef.velocity <= 0.05) {
+      updateInstance(trainId, (cur) => ({ ...cur, isPaused: true, holdAfterBraking: false }));
+      return;
+    }
+
+    // Do not freeze a moving train.  The safety command replaces the remaining
+    // local trajectory with an ATP emergency-brake curve, then holds at zero.
+    updateInstance(trainId, (cur) => ({ ...cur, holdAfterBraking: true, isPaused: false }));
+    handleControl(trainId, 'atp_emergency_brake', 0, refs.drivingModeRef);
+  }, [updateInstance, handleControl]);
 
   const handleDispatchRecovery = useCallback((trainId: string) => {
-    updateInstance(trainId, (cur) => ({ ...cur, drivingMode: 'ato', isPaused: false, status: 'playing' }));
+    updateInstance(trainId, (cur) => ({ ...cur, drivingMode: 'ato', isPaused: false, holdAfterBraking: false, status: 'playing' }));
     handleControl(trainId, 'traction', 0, 'ato');
   }, [updateInstance, handleControl]);
 
