@@ -55,6 +55,10 @@ public class SimulationService {
     private boolean simulationRunning = false;
     private double simulationTimeSeconds = 0;
     private final Map<String, TrainState> trains = new LinkedHashMap<>();
+    /** Last StatusFusion revision consumed for each onboard-driven train. */
+    private final Map<String, Long> fusedOnboardReportRevisions = new LinkedHashMap<>();
+    /** Last ATS departure authorization per direction; keeps depot departures evenly spaced. */
+    private final Map<String, Double> lastDepartureAuthorizationByDirection = new LinkedHashMap<>();
     private LineProfile lineProfile;
 
     // ── CBTC 执行层: 牵引/制动系统状态 ──
@@ -98,6 +102,10 @@ public class SimulationService {
     // ── 物理常量 ──
     private static final double EBRAKE_KMH_PER_S = 4.68; // 紧急制动 km/h/s (≈1.3 m/s²)
     private static final double CRUISE_SPEED = 70.0; // 默认巡航速度 km/h
+    /** Minimum scheduled headway for the teaching simulation (same direction). */
+    private static final double MIN_DEPARTURE_HEADWAY_SECONDS = 120.0;
+    /** Leading train must have cleared this distance before the next depot departure. */
+    private static final double MIN_DEPARTURE_CLEARANCE_METERS = 350.0;
 
     public SimulationService(LineDataService lineDataService, DispatchEngine dispatchEngine,
             EnergyOptimizer energyOptimizer, PredictiveController predictiveController,
@@ -151,6 +159,8 @@ public class SimulationService {
         totalAuxEnergyKwh = 0;
         totalCruisingEnergyKwh = 0;
         simulationLogs.clear();
+        fusedOnboardReportRevisions.clear();
+        lastDepartureAuthorizationByDirection.clear();
         tractionStates.clear();
         brakeStates.clear();
         lastSampleTime = -10;
@@ -305,6 +315,7 @@ public class SimulationService {
             train.setTrainLengthMeters(6 * 19.0);
             train.setLoadFactor(0);
             train.setStateSource("ONBOARD_REPORTED");
+            train.setActiveCommand("WAITING_DEPARTURE");
             train.setLastReportTimeSeconds(-1);
             train.setMinDwellSeconds(30);
             train.setTripId(tid + "-U1");
@@ -335,10 +346,15 @@ public class SimulationService {
         // ── 对所有已注册列车，融合最新车载报告 ──
         for (TrainState train : trains.values()) {
             StatusReport report = statusFusion.latest(train.getTrainId());
-            if (report == null || report.getTimestampSeconds() <= train.getLastReportTimeSeconds())
+            long revision = statusFusion.revision(train.getTrainId());
+            if (report == null || revision == 0
+                    || revision <= fusedOnboardReportRevisions.getOrDefault(train.getTrainId(), 0L))
                 continue;
-            if (report.getTimestampSeconds() > simulationTimeSeconds + 2)
-                continue;
+
+            // StatusReport.timestampSeconds belongs to the vehicle's local playback
+            // timeline.  It can legitimately lead, lag or reset relative to the
+            // control-centre clock, so do not use it as a cross-system freshness gate.
+            // The server-assigned revision above is the ordering authority.
 
             // 车载上报的位置/速度覆盖后端仿真值（仅HMI驱动列车）
             if ("ONBOARD_REPORTED".equals(train.getStateSource())) {
@@ -351,7 +367,10 @@ public class SimulationService {
                 train.setCurrentSegmentId(report.getCurrentSegmentId());
             }
             train.setDelaySeconds(report.getDelaySeconds());
-            train.setLastReportTimeSeconds(report.getTimestampSeconds());
+            // Keep this field on the control-centre timebase for network-health
+            // calculations; the raw vehicle timestamp remains available in report.
+            train.setLastReportTimeSeconds(simulationTimeSeconds);
+            fusedOnboardReportRevisions.put(train.getTrainId(), revision);
 
             // 追踪车站索引变化（到站检测）
             int reportedStationIdx = parseStationIndex(report.getCurrentStationId());
@@ -387,6 +406,13 @@ public class SimulationService {
                     }
                     // 补录到站记录到stationArrivalMap（HMI列车跳过atoTrainStep，需在此记录）
                     recordHmiStationArrival(train, stations);
+                }
+
+                // A departure command is complete once the onboard system has
+                // actually left READY_TO_DEPART.  This prevents ATS from
+                // repeatedly superseding the same command every simulation tick.
+                if (!"READY_TO_DEPART".equals(reportPhase) && !"PAUSED".equals(reportPhase)) {
+                    integrationCommandBus.completeOpenCommands(train.getTrainId(), "DEPART", simulationTimeSeconds);
                 }
             }
 
@@ -478,7 +504,7 @@ public class SimulationService {
                 boolean timeToDepart = tEntry != null && simulationTimeSeconds >= tEntry.plannedDeparture;
                 boolean hasDepartCmd = hasDepartCommand(tid);
 
-                if (timeToDepart || hasDepartCmd) {
+                if ((timeToDepart || hasDepartCmd) && canAuthorizeOnboardDeparture(train)) {
                     removeDepartCommand(tid);
                     train.setActualDepartureFromStation(simulationTimeSeconds);
                     int nsIdx = train.getNextStationIndex();
@@ -486,9 +512,10 @@ public class SimulationService {
                         train.setNextStationKm(stations.get(nsIdx).getKm());
                     }
                     commandLog.add(buildDepartLog(tid));
-                    // 通过CommandBus下发DEPART指令，HMI通过 /api/onboard/{trainId}/snapshot 获取
-                    integrationCommandBus.issue(tid, "DEPART", 0, "调度授权发车",
-                            100, "ATS", simulationTimeSeconds);
+                    issueDepartIfNeeded(tid, "ATS 发车授权：满足计划时刻、追踪间隔与前车净距");
+                    train.setActiveCommand("DEPART");
+                } else if (timeToDepart || hasDepartCmd) {
+                    train.setActiveCommand("WAITING_DEPARTURE_HEADWAY");
                 }
                 continue;
             }
@@ -507,12 +534,15 @@ public class SimulationService {
                 boolean hasDepartCmd = hasDepartCommand(tid);
 
                 if (minDwellMet && (plannedTimeReached || hasDepartCmd)) {
-                    removeDepartCommand(tid);
-                    train.setActualDepartureFromStation(simulationTimeSeconds);
-                    commandLog.add(buildDepartLog(tid));
-                    // 通过CommandBus下发DEPART指令，HMI可获取
-                    integrationCommandBus.issue(tid, "DEPART", 0, "调度授权发车",
-                            100, "ATS", simulationTimeSeconds);
+                    if (canAuthorizeOnboardDeparture(train)) {
+                        removeDepartCommand(tid);
+                        train.setActualDepartureFromStation(simulationTimeSeconds);
+                        commandLog.add(buildDepartLog(tid));
+                        issueDepartIfNeeded(tid, "ATS 站台发车授权：满足停站、追踪间隔与前车净距");
+                        train.setActiveCommand("DEPART");
+                    } else {
+                        train.setActiveCommand("WAITING_DEPARTURE_HEADWAY");
+                    }
                 }
                 continue;
             }
@@ -522,6 +552,39 @@ public class SimulationService {
     private boolean hasDepartCommand(String trainId) {
         SimulationSnapshot.TrainCommand cmd = activeCommands.get(trainId);
         return cmd != null && "DEPART".equals(cmd.getCommandType());
+    }
+
+    /**
+     * ATS departure gate.  Dispatch timing is primary; signal/ATP remains the
+     * independent safety backstop after the train enters the line.
+     */
+    private boolean canAuthorizeOnboardDeparture(TrainState candidate) {
+        String direction = "DOWN".equals(candidate.getDirection()) ? "DOWN" : "UP";
+        double last = lastDepartureAuthorizationByDirection.getOrDefault(direction, Double.NEGATIVE_INFINITY);
+        if (simulationTimeSeconds - last < MIN_DEPARTURE_HEADWAY_SECONDS) return false;
+
+        int sign = candidate.getDirectionSign();
+        boolean leaderTooClose = trains.values().stream()
+                .filter(other -> !other.getTrainId().equals(candidate.getTrainId()))
+                .filter(TrainState::occupiesTrack)
+                .filter(other -> direction.equals(other.getDirection()))
+                .anyMatch(other -> {
+                    double separation = sign > 0
+                            ? other.getPositionMeters() - candidate.getPositionMeters()
+                            : candidate.getPositionMeters() - other.getPositionMeters();
+                    return separation >= 0 && separation < MIN_DEPARTURE_CLEARANCE_METERS;
+                });
+        if (leaderTooClose) return false;
+
+        lastDepartureAuthorizationByDirection.put(direction, simulationTimeSeconds);
+        return true;
+    }
+
+    private void issueDepartIfNeeded(String trainId, String reason) {
+        if (!integrationCommandBus.hasOpenCommand(trainId, "DEPART")) {
+            integrationCommandBus.issue(trainId, "DEPART", 0, reason,
+                    100, "ATS", simulationTimeSeconds);
+        }
     }
 
     private void removeDepartCommand(String trainId) {
@@ -2409,6 +2472,8 @@ public class SimulationService {
         simulationRunning = false;
         simulationTimeSeconds = 0;
         trains.clear();
+        fusedOnboardReportRevisions.clear();
+        lastDepartureAuthorizationByDirection.clear();
         activeCommands.clear();
         commandLog.clear();
         delayEventLog.clear();

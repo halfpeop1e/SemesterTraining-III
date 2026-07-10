@@ -12,6 +12,13 @@ public class StatusFusion {
     private final Map<String, StatusReport> deviceReports = new LinkedHashMap<>();
     private final Map<String, Long> deviceReceivedAtMillis = new LinkedHashMap<>();
     private final Map<String, Long> trainReceivedAtMillis = new LinkedHashMap<>();
+    /**
+     * Server-assigned report revision.  A vehicle's local playback clock may be
+     * paused, accelerated or restarted, so it must not be used to order reports
+     * received by the control centre.
+     */
+    private final Map<String, Long> trainRevisions = new LinkedHashMap<>();
+    private long nextRevision = 0;
 
     public synchronized void accept(StatusReport report) {
         if (report == null || report.getTrainId() == null || report.getTrainId().isBlank()) {
@@ -20,6 +27,7 @@ public class StatusFusion {
         long now = System.currentTimeMillis();
         reports.put(report.getTrainId(), report);
         trainReceivedAtMillis.put(report.getTrainId(), now);
+        trainRevisions.put(report.getTrainId(), ++nextRevision);
         String deviceKey = report.getDeviceId() == null || report.getDeviceId().isBlank()
             ? "LEGACY-" + report.getTrainId()
             : report.getDeviceId();
@@ -28,6 +36,8 @@ public class StatusFusion {
     }
     public synchronized List<StatusReport> reports() { return new ArrayList<>(reports.values()); }
     public synchronized StatusReport latest(String trainId) { return reports.get(trainId); }
+    /** Monotonically increases on every server-received report for this train. */
+    public synchronized long revision(String trainId) { return trainRevisions.getOrDefault(trainId, 0L); }
 
     public synchronized List<Map<String, Object>> monitoring() {
         long now = System.currentTimeMillis();

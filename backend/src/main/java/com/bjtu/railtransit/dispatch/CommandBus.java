@@ -66,6 +66,23 @@ public class CommandBus {
         return commands.values().stream().filter(c -> trainId.equals(c.getTrainId()))
             .filter(c -> !TERMINAL.contains(c.getStatus())).toList();
     }
+
+    /** True while a command has been issued and has not reached a terminal state. */
+    public synchronized boolean hasOpenCommand(String trainId, String type) {
+        return commands.values().stream().anyMatch(c -> trainId.equals(c.getTrainId())
+                && type.equals(c.getCommandType()) && !TERMINAL.contains(c.getStatus()));
+    }
+
+    /** Marks outstanding commands of a type complete after the train reports execution. */
+    public synchronized void completeOpenCommands(String trainId, String type, double now) {
+        commands.values().stream()
+                .filter(c -> trainId.equals(c.getTrainId()) && type.equals(c.getCommandType()))
+                .filter(c -> !TERMINAL.contains(c.getStatus()))
+                .forEach(c -> {
+                    c.setStatus("COMPLETED");
+                    c.setCompletedTimeSeconds(now);
+                });
+    }
     public synchronized List<TrainCommand> all() { return new ArrayList<>(commands.values()); }
     public synchronized List<TrainCommand> pendingConfirmations() {
         return commands.values().stream().filter(c -> "CONFIRM_REQUIRED".equals(c.getStatus())).toList();

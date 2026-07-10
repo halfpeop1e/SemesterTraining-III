@@ -81,6 +81,7 @@ public class TrainState {
         if (status == null) return false;
         switch (status) {
             case "DEPOT_WAITING":
+            case "READY_TO_DEPART":
             case "FINISHED":
                 return false;
             default:
