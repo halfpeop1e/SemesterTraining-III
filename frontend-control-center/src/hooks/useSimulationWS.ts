@@ -110,12 +110,26 @@ export function useSimulationWS(): UseSimulationWSReturn {
     }
   }, [stopPolling, startPolling]);
 
+  // 标签页切回前台时强制重连，解决浏览器后台节流导致 WebSocket 断开问题
+  const handleVisibilityChange = useCallback(() => {
+    if (document.visibilityState === 'visible') {
+      reconnectDelay.current = 2000; // 重置退避
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        connect();
+      }
+      // 即使 WebSocket 未断也要刷新一次数据
+      pollOnce();
+    }
+  }, [connect, pollOnce]);
+
   useEffect(() => {
     mountedRef.current = true;
     connect();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       mountedRef.current = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
         reconnectTimer.current = null;
@@ -127,7 +141,7 @@ export function useSimulationWS(): UseSimulationWSReturn {
         wsRef.current = null;
       }
     };
-  }, [connect, stopPolling]);
+  }, [connect, stopPolling, handleVisibilityChange]);
 
   const refresh = useCallback(async () => {
     await pollOnce();

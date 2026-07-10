@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Alert, Spin } from "antd";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import "leaflet.heat";
 import ReactEChartsCore from "echarts-for-react/lib/core";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
@@ -26,13 +27,16 @@ import {
   injectFault,
   clearFault,
   getSystemStates,
+  getStationEntryFlow,
+  getPopulationDensity,
+  type StationEntryFlowItem,
+  type PopulationDensityPoint,
 } from "../../api/dispatch";
 import { useSimulation } from "../../context/SimulationContext";
 import type {
   StationGeo,
   TrainState,
   TrainPositionPoint,
-  TrainCommand,
   TractionSystemState,
   BrakingSystemState,
 } from "../../types/dispatch";
@@ -377,10 +381,30 @@ function MapView({
   stations,
   trains,
   tileMode,
+  showHeatmap,
+  passengerFlow,
+  stationEntryFlow,
+  stationDailyFlow,
+  showPopulationHeatmap,
+  popDensityPoints,
 }: {
   stations: StationGeo[];
   trains: TrainState[];
   tileMode: TileMode;
+  showHeatmap: boolean;
+  passengerFlow: {
+    sectionFlows: {
+      fromStationId: number;
+      toStationId: number;
+      boarding: number;
+      alighting: number;
+      load: number;
+    }[];
+  } | null;
+  stationEntryFlow: Record<number, number>;
+  stationDailyFlow: Record<number, number>;
+  showPopulationHeatmap: boolean;
+  popDensityPoints: { lat: number; lng: number; density: number }[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -390,6 +414,8 @@ function MapView({
   const carMrkRef = useRef<L.CircleMarker[]>([]);
   const lineRef = useRef<L.Polyline | null>(null);
   const glowRef = useRef<L.Polyline | null>(null);
+  const heatLayerRef = useRef<L.CircleMarker[]>([]);
+  const popHeatLayerRef = useRef<any>(null);
   const fitDone = useRef(false);
 
   useEffect(() => {
@@ -557,6 +583,124 @@ function MapView({
       });
   }, [trains, stations]);
 
+  // Passenger heat layer
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    heatLayerRef.current.forEach((m) => m.remove());
+    heatLayerRef.current = [];
+
+    if (!showHeatmap || stations.length === 0) return;
+
+    // Determine flow data source: stationEntryFlow (CSV) > passengerFlow (simulation)
+    let stationFlow: Record<number, number> = {};
+
+    if (Object.keys(stationEntryFlow).length > 0) {
+      // Use CSV station entry flow data
+      stationFlow = { ...stationEntryFlow };
+    } else if (passengerFlow?.sectionFlows?.length) {
+      // Fallback: aggregate boarding+alighting per station from simulation
+      passengerFlow.sectionFlows.forEach((sf) => {
+        stationFlow[sf.fromStationId] =
+          (stationFlow[sf.fromStationId] ?? 0) + sf.boarding;
+        stationFlow[sf.toStationId] =
+          (stationFlow[sf.toStationId] ?? 0) + sf.alighting;
+      });
+    }
+
+    const values = Object.values(stationFlow);
+    if (values.length === 0) return;
+    const maxFlow = Math.max(...values, 1);
+
+    // Color gradient: green (#06d6a0) → yellow (#f7b731) → red (#fc5c65)
+    const heatColor = (ratio: number) => {
+      if (ratio < 0.5) {
+        const t = ratio / 0.5;
+        const r = Math.round(6 + t * (247 - 6));
+        const g = Math.round(214 + t * (183 - 214));
+        const b = Math.round(160 + t * (49 - 160));
+        return `rgba(${r},${g},${b},0.55)`;
+      }
+      const t = (ratio - 0.5) / 0.5;
+      const r = Math.round(247 + t * (252 - 247));
+      const g = Math.round(183 + t * (92 - 183));
+      const b = Math.round(49 + t * (101 - 49));
+      return `rgba(${r},${g},${b},0.55)`;
+    };
+
+    Object.entries(stationFlow).forEach(([sidStr, flow]) => {
+      const sid = Number(sidStr);
+      const station = stations.find((s) => s.id === sid);
+      if (!station) return;
+
+      const ratio = flow / maxFlow;
+      const radius = 8 + ratio * 20; // 8 ~ 28 px
+
+      const m = L.circleMarker([station.latitude, station.longitude], {
+        radius,
+        fillColor: heatColor(ratio),
+        fillOpacity: 0.6,
+        color: heatColor(ratio),
+        weight: 2,
+        opacity: 0.8,
+      }).addTo(map);
+
+      m.bindTooltip(
+        `<div style="text-align:center;font-weight:700;font-size:12px;color:#e2e8f0;">${station.name}</div>
+         <div style="font-size:10px;color:#f7b731;margin-top:2px;">客流量 ${flow.toFixed(0)} 人次/h</div>`,
+        { direction: "top", offset: [0, -10], className: "d-tooltip" },
+      );
+      heatLayerRef.current.push(m);
+    });
+  }, [showHeatmap, passengerFlow, stationEntryFlow, stations]);
+
+  // Population density heat layer (leaflet.heat) — WorldPop real data
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (popHeatLayerRef.current) {
+      map.removeLayer(popHeatLayerRef.current);
+      popHeatLayerRef.current = null;
+    }
+    if (!showPopulationHeatmap || popDensityPoints.length === 0) return;
+
+    const densities = popDensityPoints.map((p) => p.density);
+    const maxDensity = Math.max(...densities, 1);
+
+    // Densify: each 1km cell → 3×3 sub-points for visibility at all zoom levels
+    const CELL_LAT = 0.00417; // ~0.46km half-width at this latitude
+    const CELL_LNG = 0.005; // ~0.43km
+
+    const heatPoints: [number, number, number][] = [];
+    popDensityPoints.forEach((p) => {
+      const intensity = p.density / maxDensity;
+      for (let di = -1; di <= 1; di++) {
+        for (let dj = -1; dj <= 1; dj++) {
+          heatPoints.push([
+            p.lat + di * CELL_LAT,
+            p.lng + dj * CELL_LNG,
+            intensity,
+          ]);
+        }
+      }
+    });
+
+    // @ts-expect-error leaflet.heat extends L global
+    popHeatLayerRef.current = L.heatLayer(heatPoints, {
+      radius: 35,
+      blur: 18,
+      maxZoom: 17,
+      max: 0.35,
+      gradient: {
+        0.0: "#0f0",
+        0.25: "#af0",
+        0.5: "#fd0",
+        0.75: "#f60",
+        1.0: "#c00",
+      },
+    }).addTo(map);
+  }, [showPopulationHeatmap, popDensityPoints]);
+
   return <div ref={containerRef} className="d-map-inner" />;
 }
 
@@ -583,6 +727,104 @@ export default function Dispatch() {
   const [rightTab, setRightTab] = useState<
     "trains" | "arrivals" | "commands" | "flow" | "deviation"
   >("trains");
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [realTime, setRealTime] = useState(
+    new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+  );
+  const [stationEntryFlow, setStationEntryFlow] = useState<
+    Record<number, number>
+  >({});
+  const [stationDailyFlow, setStationDailyFlow] = useState<
+    Record<number, number>
+  >({});
+  const [showPopulationHeatmap, setShowPopulationHeatmap] = useState(false);
+  const [popDensityPoints, setPopDensityPoints] = useState<
+    PopulationDensityPoint[]
+  >([]);
+  const [rawEntryFlowData, setRawEntryFlowData] = useState<
+    StationEntryFlowItem[]
+  >([]);
+  const currentHourRef = useRef(new Date().getHours());
+  const lastMinuteBinRef = useRef(Math.floor(new Date().getMinutes() / 2));
+  const residentialRef = useRef<Record<number, number>>({});
+
+  // Compute residential index per station from population density data
+  const residentialIndex = useMemo(() => {
+    if (popDensityPoints.length === 0 || stations.length === 0)
+      return {} as Record<number, number>;
+    // Aggregate density per station (nearest grid point → station)
+    const stationDensity: Record<number, number> = {};
+    const stationCounts: Record<number, number> = {};
+    popDensityPoints.forEach((p) => {
+      let nearestId = -1;
+      let minDist = Infinity;
+      stations.forEach((s) => {
+        const d = Math.sqrt(
+          (p.lat - s.latitude) ** 2 + (p.lng - s.longitude) ** 2,
+        );
+        if (d < minDist) {
+          minDist = d;
+          nearestId = s.id;
+        }
+      });
+      if (nearestId > 0) {
+        stationDensity[nearestId] =
+          (stationDensity[nearestId] ?? 0) + p.density;
+        stationCounts[nearestId] = (stationCounts[nearestId] ?? 0) + 1;
+      }
+    });
+    const meanDensity: Record<number, number> = {};
+    stations.forEach((s) => {
+      meanDensity[s.id] =
+        (stationDensity[s.id] ?? 5000) / (stationCounts[s.id] ?? 1);
+    });
+    const maxDensity = Math.max(...Object.values(meanDensity), 1);
+    const index: Record<number, number> = {};
+    stations.forEach((s) => {
+      index[s.id] = Math.max(
+        0,
+        Math.min(1, 1 - meanDensity[s.id] / maxDensity),
+      );
+    });
+    residentialRef.current = index;
+    return index;
+  }, [popDensityPoints, stations]);
+
+  // Derive modulated hourly station entry flow from raw data, on hour or 2-min change
+  const updateHourlyFlow = useCallback(
+    (data: StationEntryFlowItem[], hour: number) => {
+      const now = new Date();
+      const minute = now.getMinutes();
+      const hourSlot = `${hour}-${hour + 1}`;
+      const resIdx = residentialRef.current;
+      const keys = Object.keys(resIdx);
+      const peakDir =
+        hour >= 7 && hour <= 9 ? 1 : hour >= 17 && hour <= 19 ? -1 : 0;
+      const intraSin =
+        0.85 + 0.15 * Math.pow(Math.sin((Math.PI * minute) / 60), 2);
+
+      const flow: Record<number, number> = {};
+      data.forEach((item) => {
+        if (item.hourSlot === hourSlot) {
+          const idx = resIdx[item.stationId] ?? 0.5;
+          const resMod = 1 + (idx - 0.5) * peakDir * 0.4;
+          flow[item.stationId] =
+            (flow[item.stationId] ?? 0) + item.entryCount * resMod * intraSin;
+        }
+      });
+      // Fallback: no density data loaded yet, apply only intra-hour smoothing
+      if (keys.length === 0) {
+        data.forEach((item) => {
+          if (item.hourSlot === hourSlot) {
+            flow[item.stationId] =
+              (flow[item.stationId] ?? 0) + item.entryCount * intraSin;
+          }
+        });
+      }
+      setStationEntryFlow(flow);
+    },
+    [],
+  );
 
   useEffect(() => {
     getLineMap()
@@ -591,6 +833,50 @@ export default function Dispatch() {
         else setError("failed load line");
       })
       .catch((e) => setError("Line load: " + (e?.message || "network")));
+  }, []);
+
+  useEffect(() => {
+    getStationEntryFlow()
+      .then((data) => {
+        setRawEntryFlowData(data);
+        updateHourlyFlow(data, currentHourRef.current);
+        // Extract daily totals (same for all hour slots per station)
+        const daily: Record<number, number> = {};
+        data.forEach((item) => {
+          if (!daily[item.stationId]) {
+            daily[item.stationId] = item.dailyEntryTotal;
+          }
+        });
+        setStationDailyFlow(daily);
+      })
+      .catch(() => {
+        // CSV data not available
+      });
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      setRealTime(now.toLocaleTimeString("zh-CN", { hour12: false }));
+      const h = now.getHours();
+      const mBin = Math.floor(now.getMinutes() / 2);
+      if (h !== currentHourRef.current || mBin !== lastMinuteBinRef.current) {
+        currentHourRef.current = h;
+        lastMinuteBinRef.current = mBin;
+        if (rawEntryFlowData.length > 0) {
+          updateHourlyFlow(rawEntryFlowData, h);
+        }
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [rawEntryFlowData, updateHourlyFlow]);
+
+  useEffect(() => {
+    getPopulationDensity()
+      .then(setPopDensityPoints)
+      .catch(() => {
+        // population density data unavailable
+      });
   }, []);
 
   const doStrategy = useCallback(
@@ -711,22 +997,7 @@ export default function Dispatch() {
       <DispatcherWorkstationPanel />
       {/* ── CBTC 故障注入面板 (浮动) ── */}
       {showFaultPanel && (
-        <div
-          style={{
-            position: "fixed",
-            top: 80,
-            right: 20,
-            zIndex: 9999,
-            background: "rgba(15,23,42,0.97)",
-            border: "1px solid rgba(239,68,68,0.3)",
-            borderRadius: 10,
-            padding: 16,
-            width: 280,
-            maxHeight: "80vh",
-            overflow: "auto",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-          }}
-        >
+        <div className="fixed top-20 right-5 z-9999 bg-[rgba(15,23,42,0.97)] border border-solid border-[rgba(239,68,68,0.3)] rounded-[10px] p-4 w-70 max-h-[80vh] overflow-auto shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-red-400 font-bold text-xs">故障注入</span>
             <button
@@ -861,6 +1132,10 @@ export default function Dispatch() {
                 {snapshot ? fmtTime(snapshot.simulationTime) : "00:00:00"}
               </span>
             </div>
+            <div className="d-tb-clock ml-6">
+              <span className="d-tb-clock-lbl">REAL TIME</span>
+              <span className="d-tb-clock-val">{realTime}</span>
+            </div>
           </div>
           <div className="d-tb-right">
             {error && <span className="d-tb-err">{error}</span>}
@@ -889,6 +1164,22 @@ export default function Dispatch() {
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              className={`d-mode-btn${showHeatmap ? " active" : ""}`}
+              onClick={() => setShowHeatmap((v) => !v)}
+              title="客流热力图"
+            >
+              客流
+            </button>
+            <button
+              type="button"
+              className={`d-mode-btn${showPopulationHeatmap ? " active" : ""}`}
+              onClick={() => setShowPopulationHeatmap((v) => !v)}
+              title="人口密度热力图"
+            >
+              密度
+            </button>
             <button
               type="button"
               className="d-btn d-btn-start"
@@ -938,12 +1229,11 @@ export default function Dispatch() {
             )}
             <button
               type="button"
-              className="d-btn"
-              style={{
-                background: showFaultPanel ? "#ef444420" : "#1e293b",
-                border: "1px solid #334155",
-                fontSize: 11,
-              }}
+              className={`d-btn text-[11px] border border-solid ${
+                showFaultPanel
+                  ? "bg-[#ef444420] border-[#ef444440]"
+                  : "bg-[#1e293b] border-[#334155]"
+              }`}
               onClick={() => setShowFaultPanel(!showFaultPanel)}
               title="故障注入"
             >
@@ -957,10 +1247,9 @@ export default function Dispatch() {
           <div className="pt-2 px-3">
             <Alert
               type="warning"
-              message={error}
+              title={error}
               showIcon
-              closable
-              onClose={() => setError("")}
+              closable={{ onClose: () => setError("") }}
               className="rounded-lg text-xs"
             />
           </div>
@@ -1045,6 +1334,12 @@ export default function Dispatch() {
                   stations={stations}
                   trains={trains}
                   tileMode={tileMode}
+                  showHeatmap={showHeatmap}
+                  passengerFlow={flow}
+                  stationEntryFlow={stationEntryFlow}
+                  stationDailyFlow={stationDailyFlow}
+                  showPopulationHeatmap={showPopulationHeatmap}
+                  popDensityPoints={popDensityPoints}
                 />
               </div>
               <div className="d-map-stats">
@@ -1163,13 +1458,12 @@ export default function Dispatch() {
                               </td>
                               <td>
                                 <span
+                                  className="font-semibold text-[10px]"
                                   style={{
                                     color:
                                       t.direction === "DOWN"
                                         ? "#f7b731"
                                         : "#06d6a0",
-                                    fontWeight: 600,
-                                    fontSize: 10,
                                   }}
                                 >
                                   {t.direction === "DOWN" ? "↓下行" : "↑上行"}
@@ -1212,17 +1506,19 @@ export default function Dispatch() {
                                 ) : null}
                                 {recoveryMap.has(t.trainId) && (
                                   <span
-                                    className="text-[8px] px-[3px] rounded-sm ml-1 font-bold"
-                                    style={{
-                                      background:
-                                        RECOVERY_COLOR[
-                                          recoveryMap.get(t.trainId)!
-                                        ] + "20",
-                                      color:
-                                        RECOVERY_COLOR[
-                                          recoveryMap.get(t.trainId)!
-                                        ],
-                                    }}
+                                    className="text-[8px] px-0.75 rounded-sm ml-1 font-bold"
+                                    style={
+                                      {
+                                        background:
+                                          RECOVERY_COLOR[
+                                            recoveryMap.get(t.trainId)!
+                                          ] + "20",
+                                        color:
+                                          RECOVERY_COLOR[
+                                            recoveryMap.get(t.trainId)!
+                                          ],
+                                      } as React.CSSProperties
+                                    }
                                   >
                                     {
                                       RECOVERY_LABEL[
@@ -1256,10 +1552,14 @@ export default function Dispatch() {
                               </td>
                               <td
                                 className="d-mono"
-                                style={{
-                                  color:
-                                    t.turnbackCount > 0 ? "#f7b731" : "#374151",
-                                }}
+                                style={
+                                  {
+                                    color:
+                                      t.turnbackCount > 0
+                                        ? "#f7b731"
+                                        : "#374151",
+                                  } as React.CSSProperties
+                                }
                               >
                                 {t.turnbackCount > 0 ? t.turnbackCount : "—"}
                               </td>
@@ -1696,7 +1996,7 @@ export default function Dispatch() {
                       峰值 {flow.peakSectionFlow.toFixed(0)} p/h
                     </span>
                   </div>
-                  <div style={{ padding: "10px 12px" }}>
+                  <div className="px-3 py-2.5">
                     <div className="flex items-center gap-2 text-[11px] text-slate-300">
                       最大压力断面位于站点{" "}
                       <b className="text-red-500">
@@ -1716,7 +2016,7 @@ export default function Dispatch() {
                       断面客流累加模型
                     </span>
                   </div>
-                  <div className="d-tbl-scroll" style={{ maxHeight: 400 }}>
+                  <div className="d-tbl-scroll max-h-100">
                     <table className="d-tbl">
                       <thead>
                         <tr>
@@ -1749,10 +2049,8 @@ export default function Dispatch() {
                           return (
                             <tr
                               key={i}
-                              style={
-                                isPeak
-                                  ? { background: "rgba(252,92,101,0.06)" }
-                                  : undefined
+                              className={
+                                isPeak ? "bg-[rgba(252,92,101,0.06)]" : ""
                               }
                             >
                               <td className="font-semibold text-slate-200">
@@ -1771,18 +2069,17 @@ export default function Dispatch() {
                               </td>
                               <td className="d-mono font-bold">
                                 <span
+                                  className="px-1.5 py-0.5 rounded-sm"
                                   style={{
                                     background: `linear-gradient(90deg,${barColor}22 0%,${barColor}66 ${Math.min(lf * 100, 100)}%,transparent ${Math.min(lf * 100, 100)}%)`,
-                                    padding: "2px 6px",
-                                    borderRadius: 3,
                                   }}
                                 >
                                   {sf.load.toFixed(0)}
                                 </span>
                               </td>
                               <td
-                                className="d-mono"
-                                style={{ color: barColor, fontWeight: 600 }}
+                                className="d-mono font-semibold"
+                                style={{ color: barColor }}
                               >
                                 {(lf * 100).toFixed(0)}%
                               </td>
@@ -1813,7 +2110,7 @@ export default function Dispatch() {
                       晚点
                     </span>
                   </div>
-                  <div style={{ padding: "10px 12px" }}>
+                  <div className="px-3 py-2.5">
                     <div className="flex items-center gap-3 text-[11px] text-slate-300">
                       <span>Δ = 实绩 - 计划</span>
                       <span className="text-[#617088] text-[10px]">
@@ -1830,7 +2127,7 @@ export default function Dispatch() {
                       到站/发车偏差明细
                     </span>
                   </div>
-                  <div className="d-tbl-scroll" style={{ maxHeight: 420 }}>
+                  <div className="d-tbl-scroll max-h-105">
                     <table className="d-tbl">
                       <thead>
                         <tr>
@@ -1889,8 +2186,8 @@ export default function Dispatch() {
                                     {fmtTime(d.arrivalTimeSeconds)}
                                   </td>
                                   <td
-                                    className="d-mono"
-                                    style={{ color: arrColor, fontWeight: 600 }}
+                                    className="d-mono font-semibold"
+                                    style={{ color: arrColor }}
                                   >
                                     {d.arrivalDeviation > 0 ? "+" : ""}
                                     {d.arrivalDeviation.toFixed(0)}s
@@ -1902,8 +2199,8 @@ export default function Dispatch() {
                                     {fmtTime(d.departureTimeSeconds)}
                                   </td>
                                   <td
-                                    className="d-mono"
-                                    style={{ color: depColor, fontWeight: 600 }}
+                                    className="d-mono font-semibold"
+                                    style={{ color: depColor }}
                                   >
                                     {d.departureDeviation > 0 ? "+" : ""}
                                     {d.departureDeviation.toFixed(0)}s
