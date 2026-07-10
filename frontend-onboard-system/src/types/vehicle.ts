@@ -124,8 +124,10 @@ export interface SimulationControlRequest {
   currentState: TrainState;
   currentMode: DrivingMode;
   controlCommand: {
-    command: string;      // traction / coast / brake / emergency_brake
+    // 牵引/惰行/制动/紧急制动；模式恢复：resume_ato（MANUAL→ATO）、reset_emergency（EMERGENCY→MANUAL）
+    command: string;      // traction / coast / brake / emergency_brake / resume_ato / reset_emergency
     targetDecel: number;  // m/s2
+    levelPercent?: number; // 0~100，牵引/制动级位百分比
   };
   /** 本次仿真从 fromStation 到 toStation 的总目标距离，= stopResult.targetStopPosition。 */
   totalTargetPosition: number;

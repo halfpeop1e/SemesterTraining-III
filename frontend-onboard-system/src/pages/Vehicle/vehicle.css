@@ -4,8 +4,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  height: 100%;
-  min-height: 0;
+  min-height: 100%;
 }
 
 .vehicle-page__header {
@@ -37,13 +36,13 @@
   flex-wrap: nowrap;
 }
 
-/* 主内容区：左右并排，填满剩余高度 */
+/* 主内容区：左右并排，稳定高度不塌缩 */
 .vehicle-main-area {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   gap: 8px;
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: clamp(420px, 58vh, 680px);
 }
 
 .vehicle-error {
@@ -788,4 +787,342 @@
   padding: 1px 6px;
   font-family: monospace;
   font-size: 10px;
+}
+
+/* ===== 704 面板样式 ===== */
+.vehicle-704-panel {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.vehicle-704-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+  user-select: none;
+}
+
+.vehicle-704-panel__body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: clamp(180px, 30vh, 320px);
+  overflow-y: auto;
+}
+
+.vehicle-704-expand-icon {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-left: 4px;
+}
+
+.vehicle-704-badge {
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+  color: white;
+}
+
+.vehicle-704-badge--connected {
+  background: #10b981;
+}
+
+.vehicle-704-badge--connecting {
+  background: #f59e0b;
+}
+
+.vehicle-704-badge--disconnected {
+  background: #9ca3af;
+}
+
+.vehicle-704-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: white;
+  color: #334155;
+}
+
+.vehicle-704-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.vehicle-704-btn:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+/* 分区 */
+.vehicle-704-section {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.vehicle-704-section__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+/* 端口网格 */
+.vehicle-704-port-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.vehicle-704-port-card {
+  background: #f9fafb;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+
+.vehicle-704-port-card--connected {
+  border-color: #10b981;
+  background: #ecfdf5;
+}
+
+.vehicle-704-port-card--connecting {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.vehicle-704-port-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.vehicle-704-port-card__port {
+  font-weight: bold;
+  color: #1e293b;
+}
+
+.vehicle-704-port-card__status {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.vehicle-704-port-card__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.vehicle-704-port-card__error {
+  margin-top: 4px;
+  color: #dc2626;
+  font-size: 11px;
+  word-break: break-all;
+  background: #fef2f2;
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+
+/* 测试帧区域 */
+.vehicle-704-test-section {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.vehicle-704-test-warning {
+  font-size: 11px;
+  color: #f59e0b;
+  font-weight: normal;
+  margin-left: 6px;
+}
+
+.vehicle-704-test-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vehicle-704-test-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  background: white;
+  color: #1e40af;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.vehicle-704-test-btn:hover:not(:disabled) {
+  background: #dbeafe;
+}
+
+.vehicle-704-test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.vehicle-704-test-btn--traction {
+  border-color: #10b981;
+  color: #065f46;
+}
+
+.vehicle-704-test-btn--traction:hover:not(:disabled) {
+  background: #d1fae5;
+}
+
+.vehicle-704-test-btn--brake {
+  border-color: #f59e0b;
+  color: #92400e;
+}
+
+.vehicle-704-test-btn--brake:hover:not(:disabled) {
+  background: #fef3c7;
+}
+
+.vehicle-704-test-btn--eb {
+  border-color: #dc2626;
+  color: #991b1b;
+  font-weight: 700;
+}
+
+.vehicle-704-test-btn--eb:hover:not(:disabled) {
+  background: #fee2e2;
+}
+
+/* 解析字段网格 */
+.vehicle-704-parse-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px;
+  font-size: 12px;
+}
+
+.vehicle-704-parse-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
+  background: #f9fafb;
+  border-radius: 3px;
+}
+
+.vehicle-704-parse-item--full {
+  grid-column: 1 / -1;
+}
+
+.vehicle-704-parse-label {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.vehicle-704-parse-value {
+  font-weight: 600;
+  color: #1e293b;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+}
+
+/* raw hex */
+.vehicle-704-raw-hex {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #334155;
+  background: #f1f5f9;
+  padding: 8px;
+  border-radius: 4px;
+  word-break: break-all;
+  max-height: 80px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+
+/* 日志列表 */
+.vehicle-704-log-list {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vehicle-704-log-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 4px 8px;
+  background: #f9fafb;
+  border-radius: 3px;
+  font-size: 11px;
+  align-items: center;
+  border-left: 3px solid #10b981;
+}
+
+.vehicle-704-log-item--test {
+  border-left-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.vehicle-704-log-time {
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.vehicle-704-log-source {
+  font-weight: 600;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.vehicle-704-log-port {
+  color: #64748b;
+}
+
+.vehicle-704-log-len {
+  color: #64748b;
+}
+
+.vehicle-704-log-cmd {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.vehicle-704-log-note {
+  color: #6b7280;
+  font-size: 10px;
+  width: 100%;
+}
+
+/* 颜色工具 */
+.vehicle-704-text-green {
+  color: #059669 !important;
+}
+
+.vehicle-704-text-red {
+  color: #dc2626 !important;
+}
+
+.vehicle-704-text-yellow {
+  color: #d97706 !important;
+}
+
+.vehicle-704-text-blue {
+  color: #3b82f6 !important;
+  background: #dbeafe;
 }

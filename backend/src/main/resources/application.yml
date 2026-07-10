@@ -4,3 +4,11 @@ server:
 spring:
   application:
     name: rail-transit-sim
+
+vehicle:
+  protocol704:
+    host: 192.168.100.123
+    ports: 8001,8002,8003
+    connect-timeout-ms: 3000
+    read-timeout-ms: 1000
+    auto-start: false

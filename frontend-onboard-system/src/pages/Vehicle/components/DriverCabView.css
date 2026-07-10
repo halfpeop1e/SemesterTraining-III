@@ -32,13 +32,25 @@
   min-height: 0;
 }
 
-/* 右列：状态面板 + 控制面板，不允许滚动 */
+/* 右列：状态面板 + 控制面板，内容超高时内部纵向滚动，不挤压左列驾驶台 */
 .driver-cab-view__right-col {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  padding-right: 2px;
+}
+
+.driver-cab-view__right-col::-webkit-scrollbar {
+  width: 5px;
+}
+
+.driver-cab-view__right-col::-webkit-scrollbar-thumb {
+  background: rgba(156, 172, 180, 0.28);
+  border-radius: 3px;
 }
 
 .driver-cab-view__viewport {
@@ -754,9 +766,14 @@
 }
 
 .dcp-bottom-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+.dcp-bottom-row .dcp-section {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* 紧急制动 */
@@ -852,6 +869,93 @@
   min-width: 0;
 }
 
+/* 牵引手柄 */
+.dcp-section--traction-handle {
+  min-width: 0;
+}
+
+.dcp-traction-levels {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.dcp-traction-level-btn {
+  flex: 1;
+  height: 26px;
+  color: #9aaab2;
+  font-size: 12px;
+  font-weight: 900;
+  background: #182024;
+  border: 1px solid rgba(156,172,180,0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dcp-traction-level-btn.is-active {
+  color: #fff;
+  background: #14532d;
+  border-color: rgba(134,239,172,0.54);
+}
+
+.dcp-traction-level-btn.is-zero {
+  color: #78716c;
+}
+
+.dcp-traction-level-btn.is-active.is-zero {
+  color: #fef3c7;
+  background: #78350f;
+  border-color: rgba(251,191,36,0.48);
+}
+
+.dcp-traction-levels.is-disabled .dcp-traction-level-btn {
+  color: #3a4a50;
+  background: #0e1315;
+  border-color: rgba(156,172,180,0.08);
+  cursor: not-allowed;
+}
+
+/* 手柄状态指示条 */
+.dcp-handle-status {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  padding: 5px 6px;
+  background: #0e1315;
+  border: 1px solid rgba(156,172,180,0.12);
+  border-radius: 5px;
+}
+
+.dcp-handle-status__row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.dcp-handle-status__label {
+  color: #6b7f87;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dcp-handle-status__value {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dcp-handle-status__value--manual { color: #fbbf24; }
+.dcp-handle-status__value--ato { color: #2dd4bf; }
+.dcp-handle-status__value--emergency { color: #fb7185; }
+.dcp-handle-status__value--traction { color: #86efac; }
+.dcp-handle-status__value--brake { color: #fb7185; }
+.dcp-handle-status__value--coast { color: #fde68a; }
+
 .dcp-brake-levels {
   display: flex;
   gap: 3px;
@@ -874,6 +978,16 @@
   color: #fff;
   background: #991b1b;
   border-color: rgba(248,113,113,0.54);
+}
+
+.dcp-brake-level-btn.is-zero {
+  color: #78716c;
+}
+
+.dcp-brake-level-btn.is-active.is-zero {
+  color: #fef3c7;
+  background: #78350f;
+  border-color: rgba(251,191,36,0.48);
 }
 
 .dcp-brake-levels.is-disabled .dcp-brake-level-btn {
@@ -1098,4 +1212,79 @@
   font-size: 12px;
   font-weight: 900;
   color: #67e8f9;
+}
+
+/* ---- 手柄提示条：停稳后可继续牵引 ---- */
+.dcp-handle-hint {
+  margin-top: 2px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.3;
+  border-radius: 5px;
+  background: #182024;
+  border: 1px solid rgba(156, 172, 180, 0.18);
+  color: #9aaab2;
+}
+
+.dcp-handle-hint--can-traction {
+  color: #bbf7d0;
+  background: rgba(2, 44, 30, 0.5);
+  border-color: rgba(134, 239, 172, 0.3);
+}
+
+/* ---- 恢复 ATO 按钮（MANUAL → ATO，调用后端 resume_ato）---- */
+.dcp-section--ato-resume {
+  min-width: 0;
+}
+
+.dcp-ato-resume-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  color: #e8faf7;
+  font-size: 12px;
+  font-weight: 900;
+  background: #0c2e2a;
+  border: 1px solid rgba(45, 212, 191, 0.46);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.dcp-ato-resume-btn:hover {
+  background: #13443d;
+  border-color: rgba(45, 212, 191, 0.7);
+}
+
+.dcp-ato-resume-btn:active {
+  background: #082723;
+}
+
+/* ---- EB 复位到人工按钮（EMERGENCY → MANUAL，调用后端 reset_emergency）---- */
+.dcp-section--reset-emergency {
+  min-width: 0;
+}
+
+.dcp-reset-emergency-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  color: #fff7e8;
+  font-size: 12px;
+  font-weight: 900;
+  background: #2a1a08;
+  border: 1px solid rgba(251, 191, 36, 0.48);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.dcp-reset-emergency-btn:hover {
+  background: #3d270d;
+  border-color: rgba(251, 191, 36, 0.72);
+}
+
+.dcp-reset-emergency-btn:active {
+  background: #1f1305;
 }
