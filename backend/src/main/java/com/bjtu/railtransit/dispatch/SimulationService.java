@@ -57,7 +57,10 @@ public class SimulationService {
     private final Map<String, TrainState> trains = new LinkedHashMap<>();
     /** Last StatusFusion revision consumed for each onboard-driven train. */
     private final Map<String, Long> fusedOnboardReportRevisions = new LinkedHashMap<>();
-    /** Last ATS departure authorization per direction; keeps depot departures evenly spaced. */
+    /**
+     * Last ATS departure authorization per direction; keeps depot departures evenly
+     * spaced.
+     */
     private final Map<String, Double> lastDepartureAuthorizationByDirection = new LinkedHashMap<>();
     private LineProfile lineProfile;
 
@@ -104,7 +107,10 @@ public class SimulationService {
     private static final double CRUISE_SPEED = 70.0; // 默认巡航速度 km/h
     /** Minimum scheduled headway for the teaching simulation (same direction). */
     private static final double MIN_DEPARTURE_HEADWAY_SECONDS = 120.0;
-    /** Leading train must have cleared this distance before the next depot departure. */
+    /**
+     * Leading train must have cleared this distance before the next depot
+     * departure.
+     */
     private static final double MIN_DEPARTURE_CLEARANCE_METERS = 350.0;
 
     public SimulationService(LineDataService lineDataService, DispatchEngine dispatchEngine,
@@ -352,7 +358,7 @@ public class SimulationService {
                 continue;
 
             // StatusReport.timestampSeconds belongs to the vehicle's local playback
-            // timeline.  It can legitimately lead, lag or reset relative to the
+            // timeline. It can legitimately lead, lag or reset relative to the
             // control-centre clock, so do not use it as a cross-system freshness gate.
             // The server-assigned revision above is the ordering authority.
 
@@ -413,7 +419,7 @@ public class SimulationService {
                 }
 
                 // A departure command is complete once the onboard system has
-                // actually left READY_TO_DEPART.  This prevents ATS from
+                // actually left READY_TO_DEPART. This prevents ATS from
                 // repeatedly superseding the same command every simulation tick.
                 if (!"READY_TO_DEPART".equals(reportPhase) && !"PAUSED".equals(reportPhase)) {
                     integrationCommandBus.completeOpenCommands(train.getTrainId(), "DEPART", simulationTimeSeconds);
@@ -559,13 +565,14 @@ public class SimulationService {
     }
 
     /**
-     * ATS departure gate.  Dispatch timing is primary; signal/ATP remains the
+     * ATS departure gate. Dispatch timing is primary; signal/ATP remains the
      * independent safety backstop after the train enters the line.
      */
     private boolean canAuthorizeOnboardDeparture(TrainState candidate) {
         String direction = "DOWN".equals(candidate.getDirection()) ? "DOWN" : "UP";
         double last = lastDepartureAuthorizationByDirection.getOrDefault(direction, Double.NEGATIVE_INFINITY);
-        if (simulationTimeSeconds - last < MIN_DEPARTURE_HEADWAY_SECONDS) return false;
+        if (simulationTimeSeconds - last < MIN_DEPARTURE_HEADWAY_SECONDS)
+            return false;
 
         int sign = candidate.getDirectionSign();
         boolean leaderTooClose = trains.values().stream()
@@ -578,7 +585,8 @@ public class SimulationService {
                             : candidate.getPositionMeters() - other.getPositionMeters();
                     return separation >= 0 && separation < MIN_DEPARTURE_CLEARANCE_METERS;
                 });
-        if (leaderTooClose) return false;
+        if (leaderTooClose)
+            return false;
 
         lastDepartureAuthorizationByDirection.put(direction, simulationTimeSeconds);
         return true;
@@ -689,154 +697,180 @@ public class SimulationService {
         // 不参与追踪的: DEPOT_WAITING, FINISHED
         List<TrainState> active = trains.values().stream()
                 .filter(TrainState::occupiesTrack)
-                .sorted(Comparator.comparingDouble(TrainState::getPositionMeters))
                 .collect(Collectors.toList());
 
-        for (int i = 0; i < active.size() - 1; i++) {
-            TrainState following = active.get(i);
-            TrainState leading = active.get(i + 1);
+        // 按方向分组: 上行和下行列车各自独立做前后车安全间隔判断
+        // 排序: 上行按位置升序(后方→前方), 下行按位置降序(后方→前方)
+        Map<String, List<TrainState>> byDirection = active.stream()
+                .collect(Collectors.groupingBy(t -> t.isUpDirection() ? "UP" : "DOWN"));
 
-            // DWELLING/TERMINAL_DWELL/TURNING_BACK 列车仍占用线路, 必须参与MA计算
-            // 仅跳过未上线的DEPOT_WAITING列车
-            if ("DEPOT_WAITING".equals(following.getStatus()))
+        for (Map.Entry<String, List<TrainState>> entry : byDirection.entrySet()) {
+            String dir = entry.getKey();
+            List<TrainState> dirTrains = entry.getValue();
+            if (dirTrains.size() < 2) {
+                // 单列车或无列车: 仍需要为每列车设置MA(无前车则MA=线路端点)
+                for (TrainState t : dirTrains) {
+                    t.setMovementAuthority("UP".equals(dir) ? 16049.0 : 0.0);
+                }
                 continue;
-
-            // G8: 信号 runCycle 已写入权威 MA 时禁止覆盖；仅 Registry 无结果时 fallback
-            com.bjtu.railtransit.signal.domain.MovingAuthority signalMa =
-                    movementAuthorityRegistry.get(following.getTrainId());
-            if (signalMa == null) {
-                double maFallback = dispatchEngine.calcMovementAuthority(leading, following);
-                following.setMovementAuthority(maFallback);
             }
 
-            // ── HMI列车：用HOLD/EMERGENCY_RECOVERY控制间距 ──
-            // HMI列车由车载仿真器自主驱动，不响应SLOW/EMERGENCY_BRAKE指令
-            // 安全间距不足时暂停播放(HOLD)，恢复时通知继续(EMERGENCY_RECOVERY)
-            if ("ONBOARD_REPORTED".equals(following.getStateSource())) {
-                int dirSign = following.getDirectionSign();
-                double gap = dirSign > 0
-                        ? leading.getPositionMeters() - following.getPositionMeters()
-                        : following.getPositionMeters() - leading.getPositionMeters();
-                double safeDist = dispatchEngine.calcSafeDistance(following.getSpeed() / 3.6);
+            // 同向排序: 上行升序(后方→前方位置递增), 下行降序(后方→前方位置递减)
+            boolean isUp = "UP".equals(dir);
+            dirTrains.sort(isUp
+                    ? Comparator.comparingDouble(TrainState::getPositionMeters)
+                    : Comparator.comparingDouble(TrainState::getPositionMeters).reversed());
 
-                // 带滞回的间距控制: 低于30%安全距触发HOLD, 高于70%恢复
-                if (gap < safeDist * 0.3 && gap >= 0) {
-                    SimulationSnapshot.TrainCommand existingHold = activeCommands.get(following.getTrainId());
-                    if (existingHold == null || !"HOLD".equals(existingHold.getCommandType())) {
-                        SimulationSnapshot.TrainCommand holdCmd = new SimulationSnapshot.TrainCommand();
-                        holdCmd.setTrainId(following.getTrainId());
-                        holdCmd.setCommandType("HOLD");
-                        holdCmd.setReason(String.format(
-                                "ATP安全间距不足: 距前车%s %.0fm (安全%.0fm), HMI列车暂停",
-                                leading.getTrainId(), gap, safeDist));
-                        applyCommand(holdCmd);
+            // 同向列车做前后车配对安全检查
+            for (int i = 0; i < dirTrains.size() - 1; i++) {
+                TrainState following = dirTrains.get(i);
+                TrainState leading = dirTrains.get(i + 1);
+
+                // DWELLING/TERMINAL_DWELL/TURNING_BACK 列车仍占用线路, 必须参与MA计算
+                // 仅跳过未上线的DEPOT_WAITING列车
+                if ("DEPOT_WAITING".equals(following.getStatus()))
+                    continue;
+
+                // 计算移动授权 (CBTC Movement Authority) — 方向感知
+                double ma = dispatchEngine.calcMovementAuthority(leading, following);
+                following.setMovementAuthority(ma);
+
+                // G8: 信号 runCycle 已写入权威 MA 时优先使用 Registry 值
+                com.bjtu.railtransit.signal.domain.MovingAuthority sigMa = movementAuthorityRegistry
+                        .get(following.getTrainId());
+                if (sigMa != null) {
+                    ma = sigMa.getEndOfAuthorityM();
+                }
+
+                // ── HMI列车：用HOLD/EMERGENCY_RECOVERY控制间距 ──
+                // HMI列车由车载仿真器自主驱动，不响应SLOW/EMERGENCY_BRAKE指令
+                // 安全间距不足时暂停播放(HOLD)，恢复时通知继续(EMERGENCY_RECOVERY)
+                if ("ONBOARD_REPORTED".equals(following.getStateSource())) {
+                    int dirSign = following.getDirectionSign();
+                    double gap = dirSign > 0
+                            ? leading.getPositionMeters() - following.getPositionMeters()
+                            : following.getPositionMeters() - leading.getPositionMeters();
+                    double safeDist = dispatchEngine.calcSafeDistance(following.getSpeed() / 3.6);
+
+                    // 带滞回的间距控制: 低于30%安全距触发HOLD, 高于70%恢复
+                    if (gap < safeDist * 0.3 && gap >= 0) {
+                        SimulationSnapshot.TrainCommand existingHold = activeCommands.get(following.getTrainId());
+                        if (existingHold == null || !"HOLD".equals(existingHold.getCommandType())) {
+                            SimulationSnapshot.TrainCommand holdCmd = new SimulationSnapshot.TrainCommand();
+                            holdCmd.setTrainId(following.getTrainId());
+                            holdCmd.setCommandType("HOLD");
+                            holdCmd.setReason(String.format(
+                                    "ATP安全间距不足: 距前车%s %.0fm (安全%.0fm), HMI列车暂停",
+                                    leading.getTrainId(), gap, safeDist));
+                            applyCommand(holdCmd);
+                        }
+                    } else if (gap >= safeDist * 0.7) {
+                        SimulationSnapshot.TrainCommand existingHold = activeCommands.get(following.getTrainId());
+                        if (existingHold != null && "HOLD".equals(existingHold.getCommandType())) {
+                            activeCommands.remove(following.getTrainId());
+                            SimulationSnapshot.TrainCommand recoveryCmd = new SimulationSnapshot.TrainCommand();
+                            recoveryCmd.setTrainId(following.getTrainId());
+                            recoveryCmd.setCommandType("EMERGENCY_RECOVERY");
+                            recoveryCmd.setReason(String.format(
+                                    "ATP安全间距恢复: 距前车%s %.0fm (安全%.0fm)",
+                                    leading.getTrainId(), gap, safeDist));
+                            applyCommand(recoveryCmd);
+                        }
                     }
-                } else if (gap >= safeDist * 0.7) {
-                    SimulationSnapshot.TrainCommand existingHold = activeCommands.get(following.getTrainId());
+                    following.setMaxSpeedLimit(CRUISE_SPEED);
+                    continue; // HMI列车跳过常规ATP逻辑
+                }
+
+                // 紧急制动判断: 后车即使立即EB也会侵入MA
+                if (dispatchEngine.needsEmergencyBrake(following, ma)) {
+                    if (!following.isEmergencyBraking()) {
+                        following.setEmergencyBraking(true);
+                        following.setAcceleration(-EBRAKE_KMH_PER_S);
+
+                        SimulationSnapshot.TrainCommand ebCmd = new SimulationSnapshot.TrainCommand();
+                        ebCmd.setTrainId(following.getTrainId());
+                        ebCmd.setCommandType("EMERGENCY_BRAKE");
+                        ebCmd.setReason(String.format(
+                                "ATP紧急制动! 前车%s(状态:%s)位置%.0fm, MA=%.0fm, 本车%.0fm (%dkm/h)",
+                                leading.getTrainId(), leading.getStatus(), leading.getPositionMeters(),
+                                ma, following.getPositionMeters(), (int) following.getSpeed()));
+                        applyCommand(ebCmd);
+                    }
+                } else if (following.isEmergencyBraking()) {
+                    // 危险解除
+                    following.setEmergencyBraking(false);
+                }
+
+                // 安全间距预警 → SLOW 指令 (仅对运动中的列车)
+                // 核心要求: 30秒内将间距恢复到安全距离
+                if (!"DWELLING".equals(following.getStatus())
+                        && !"TERMINAL_DWELL".equals(following.getStatus())
+                        && !"TURNING_BACK".equals(following.getStatus())) {
+                    int dirSign = following.getDirectionSign();
+                    double gap = dirSign > 0
+                            ? leading.getPositionMeters() - following.getPositionMeters()
+                            : following.getPositionMeters() - leading.getPositionMeters();
+                    double safeDist = dispatchEngine.calcSafeDistance(following.getSpeed() / 3.6);
+
+                    if (gap < safeDist && gap > 0 && !following.isEmergencyBraking()) {
+                        // ── 30秒内恢复到安全距离 ──
+                        // gap + (v_lead - v_follow_ltd) * 30s / 3.6 >= safeDist
+                        // → v_follow_ltd <= v_lead - (safeDist - gap) * 3.6 / 30
+                        double gapDeficit = safeDist - gap; // 距安全距离还差多少米
+                        double leadSpeed = leading.getSpeed();
+                        // 计算30秒内消除差距需要的速度差
+                        double requiredSpeedDelta = gapDeficit * 3.6 / 30.0; // km/h
+                        double limitedSpeed = Math.max(leadSpeed - requiredSpeedDelta, 0);
+
+                        // 安全下限: 不低于当前速度的40%且不低于20km/h
+                        double floorSpeed = Math.max(20, following.getSpeed() * 0.4);
+                        if (limitedSpeed < floorSpeed) {
+                            limitedSpeed = floorSpeed;
+                        }
+                        // 上限: 不超过当前速度 (不能加速逼近)
+                        limitedSpeed = Math.min(limitedSpeed, following.getSpeed());
+
+                        following.setMaxSpeedLimit(limitedSpeed);
+
+                        SimulationSnapshot.TrainCommand slowCmd = activeCommands.get(following.getTrainId());
+                        if (slowCmd == null || !"SLOW".equals(slowCmd.getCommandType())
+                                || Math.abs(slowCmd.getTargetValue() - limitedSpeed) > 2) {
+                            slowCmd = new SimulationSnapshot.TrainCommand();
+                            slowCmd.setTrainId(following.getTrainId());
+                            slowCmd.setCommandType("SLOW");
+                            slowCmd.setTargetValue(limitedSpeed);
+                            double estRecovery = gapDeficit / Math.max(0.1, leadSpeed - limitedSpeed) * 3.6;
+                            slowCmd.setReason(String.format(
+                                    "ATP限速 %.0fkm/h (前车%.0fkm/h), 间距%.0fm差%.0fm到安全距%.0fm, 预计%.0fs恢复",
+                                    limitedSpeed, leadSpeed, gap, gapDeficit, safeDist, estRecovery));
+                            applyCommand(slowCmd);
+                        }
+                    } else if (gap >= safeDist && !following.isEmergencyBraking()) {
+                        // 间距已安全 → 清除限速
+                        following.setMaxSpeedLimit(CRUISE_SPEED);
+                        SimulationSnapshot.TrainCommand existingSlow = activeCommands.get(following.getTrainId());
+                        if (existingSlow != null && "SLOW".equals(existingSlow.getCommandType())) {
+                            activeCommands.remove(following.getTrainId());
+                        }
+                    }
+                }
+            }
+
+            // ── HMI列车：确保同向最前方列车不被扣车，可前行拉开间距 ──
+            if (!dirTrains.isEmpty()) {
+                int lastIdx = dirTrains.size() - 1;
+                TrainState frontmost = dirTrains.get(lastIdx);
+                if ("ONBOARD_REPORTED".equals(frontmost.getStateSource())
+                        && !"DEPOT_WAITING".equals(frontmost.getStatus())) {
+                    SimulationSnapshot.TrainCommand existingHold = activeCommands.get(frontmost.getTrainId());
                     if (existingHold != null && "HOLD".equals(existingHold.getCommandType())) {
-                        activeCommands.remove(following.getTrainId());
+                        activeCommands.remove(frontmost.getTrainId());
                         SimulationSnapshot.TrainCommand recoveryCmd = new SimulationSnapshot.TrainCommand();
-                        recoveryCmd.setTrainId(following.getTrainId());
+                        recoveryCmd.setTrainId(frontmost.getTrainId());
                         recoveryCmd.setCommandType("EMERGENCY_RECOVERY");
-                        recoveryCmd.setReason(String.format(
-                                "ATP安全间距恢复: 距前车%s %.0fm (安全%.0fm)",
-                                leading.getTrainId(), gap, safeDist));
+                        recoveryCmd.setReason("ATP队列车头: 前方无车，恢复运行以拉开间距");
                         applyCommand(recoveryCmd);
                     }
-                }
-                following.setMaxSpeedLimit(CRUISE_SPEED);
-                continue; // HMI列车跳过常规ATP逻辑
-            }
-
-            // 紧急制动判断: 后车即使立即EB也会侵入MA
-            double currentMa = following.getMovementAuthority();
-            if (dispatchEngine.needsEmergencyBrake(following, currentMa)) {
-                if (!following.isEmergencyBraking()) {
-                    following.setEmergencyBraking(true);
-                    following.setAcceleration(-EBRAKE_KMH_PER_S);
-
-                    SimulationSnapshot.TrainCommand ebCmd = new SimulationSnapshot.TrainCommand();
-                    ebCmd.setTrainId(following.getTrainId());
-                    ebCmd.setCommandType("EMERGENCY_BRAKE");
-                    ebCmd.setReason(String.format(
-                            "ATP紧急制动! 前车%s(状态:%s)位置%.0fm, MA=%.0fm, 本车%.0fm (%dkm/h)",
-                            leading.getTrainId(), leading.getStatus(), leading.getPositionMeters(),
-                            currentMa, following.getPositionMeters(), (int) following.getSpeed()));
-                    applyCommand(ebCmd);
-                }
-            } else if (following.isEmergencyBraking()) {
-                // 危险解除
-                following.setEmergencyBraking(false);
-            }
-
-            // 安全间距预警 → SLOW 指令 (仅对运动中的列车)
-            // 核心要求: 30秒内将间距恢复到安全距离
-            if (!"DWELLING".equals(following.getStatus())
-                    && !"TERMINAL_DWELL".equals(following.getStatus())
-                    && !"TURNING_BACK".equals(following.getStatus())) {
-                int dirSign = following.getDirectionSign();
-                double gap = dirSign > 0
-                        ? leading.getPositionMeters() - following.getPositionMeters()
-                        : following.getPositionMeters() - leading.getPositionMeters();
-                double safeDist = dispatchEngine.calcSafeDistance(following.getSpeed() / 3.6);
-
-                if (gap < safeDist && gap > 0 && !following.isEmergencyBraking()) {
-                    // ── 30秒内恢复到安全距离 ──
-                    // gap + (v_lead - v_follow_ltd) * 30s / 3.6 >= safeDist
-                    // → v_follow_ltd <= v_lead - (safeDist - gap) * 3.6 / 30
-                    double gapDeficit = safeDist - gap; // 距安全距离还差多少米
-                    double leadSpeed = leading.getSpeed();
-                    // 计算30秒内消除差距需要的速度差
-                    double requiredSpeedDelta = gapDeficit * 3.6 / 30.0; // km/h
-                    double limitedSpeed = Math.max(leadSpeed - requiredSpeedDelta, 0);
-
-                    // 安全下限: 不低于当前速度的40%且不低于20km/h
-                    double floorSpeed = Math.max(20, following.getSpeed() * 0.4);
-                    if (limitedSpeed < floorSpeed) {
-                        limitedSpeed = floorSpeed;
-                    }
-                    // 上限: 不超过当前速度 (不能加速逼近)
-                    limitedSpeed = Math.min(limitedSpeed, following.getSpeed());
-
-                    following.setMaxSpeedLimit(limitedSpeed);
-
-                    SimulationSnapshot.TrainCommand slowCmd = activeCommands.get(following.getTrainId());
-                    if (slowCmd == null || !"SLOW".equals(slowCmd.getCommandType())
-                            || Math.abs(slowCmd.getTargetValue() - limitedSpeed) > 2) {
-                        slowCmd = new SimulationSnapshot.TrainCommand();
-                        slowCmd.setTrainId(following.getTrainId());
-                        slowCmd.setCommandType("SLOW");
-                        slowCmd.setTargetValue(limitedSpeed);
-                        double estRecovery = gapDeficit / Math.max(0.1, leadSpeed - limitedSpeed) * 3.6;
-                        slowCmd.setReason(String.format(
-                                "ATP限速 %.0fkm/h (前车%.0fkm/h), 间距%.0fm差%.0fm到安全距%.0fm, 预计%.0fs恢复",
-                                limitedSpeed, leadSpeed, gap, gapDeficit, safeDist, estRecovery));
-                        applyCommand(slowCmd);
-                    }
-                } else if (gap >= safeDist && !following.isEmergencyBraking()) {
-                    // 间距已安全 → 清除限速
-                    following.setMaxSpeedLimit(CRUISE_SPEED);
-                    SimulationSnapshot.TrainCommand existingSlow = activeCommands.get(following.getTrainId());
-                    if (existingSlow != null && "SLOW".equals(existingSlow.getCommandType())) {
-                        activeCommands.remove(following.getTrainId());
-                    }
-                }
-            }
-        }
-
-        // ── HMI列车：确保最前方列车不被扣车，可前行拉开间距 ──
-        if (!active.isEmpty()) {
-            TrainState frontmost = active.get(active.size() - 1);
-            if ("ONBOARD_REPORTED".equals(frontmost.getStateSource())
-                    && !"DEPOT_WAITING".equals(frontmost.getStatus())) {
-                SimulationSnapshot.TrainCommand existingHold = activeCommands.get(frontmost.getTrainId());
-                if (existingHold != null && "HOLD".equals(existingHold.getCommandType())) {
-                    activeCommands.remove(frontmost.getTrainId());
-                    SimulationSnapshot.TrainCommand recoveryCmd = new SimulationSnapshot.TrainCommand();
-                    recoveryCmd.setTrainId(frontmost.getTrainId());
-                    recoveryCmd.setCommandType("EMERGENCY_RECOVERY");
-                    recoveryCmd.setReason("ATP队列车头: 前方无车，恢复运行以拉开间距");
-                    applyCommand(recoveryCmd);
                 }
             }
         }
@@ -1648,24 +1682,33 @@ public class SimulationService {
             dispatchEngine.logDelayEvents(delayResult.events);
         }
 
-        // ── 晚点传播评估 (每步执行) ──
-        List<TrainState> activeMoving = trains.values().stream()
+        // ── 晚点传播评估 (每步执行, 按方向分组) ──
+        Map<String, List<TrainState>> byDir = trains.values().stream()
                 .filter(TrainState::occupiesTrack)
                 .filter(t -> !"DWELLING".equals(t.getStatus()))
                 .filter(t -> !"TERMINAL_DWELL".equals(t.getStatus()))
                 .filter(t -> !"TURNING_BACK".equals(t.getStatus()))
-                .sorted(Comparator.comparingDouble(TrainState::getPositionMeters))
-                .collect(Collectors.toList());
+                .collect(Collectors.groupingBy(t -> t.isUpDirection() ? "UP" : "DOWN"));
 
-        DispatchEngine.DelayResult propResult = dispatchEngine.evaluateDelayPropagation(activeMoving,
-                simulationTimeSeconds);
-        for (SimulationSnapshot.TrainCommand cmd : propResult.commands) {
-            applyCommand(cmd);
+        for (List<TrainState> dirTrains : byDir.values()) {
+            if (dirTrains.size() < 2)
+                continue;
+            boolean isUp = dirTrains.get(0).isUpDirection();
+            // 同向排序: 上行升序(后方→前方), 下行降序(后方→前方)
+            dirTrains.sort(isUp
+                    ? Comparator.comparingDouble(TrainState::getPositionMeters)
+                    : Comparator.comparingDouble(TrainState::getPositionMeters).reversed());
+
+            DispatchEngine.DelayResult propResult = dispatchEngine.evaluateDelayPropagation(dirTrains,
+                    simulationTimeSeconds);
+            for (SimulationSnapshot.TrainCommand cmd : propResult.commands) {
+                applyCommand(cmd);
+            }
+            for (SimulationSnapshot.DelayEvent evt : propResult.events) {
+                delayEventLog.add(evt);
+            }
+            dispatchEngine.logDelayEvents(propResult.events);
         }
-        for (SimulationSnapshot.DelayEvent evt : propResult.events) {
-            delayEventLog.add(evt);
-        }
-        dispatchEngine.logDelayEvents(propResult.events);
     }
 
     // ================================================================
@@ -2063,31 +2106,38 @@ public class SimulationService {
         }
         snapshot.setStationArrivals(arrivals);
 
-        // 车头时距 (方向感知)
-        List<TrainState> sortedTrains = trains.values().stream()
+        // 车头时距 (方向感知, 按方向分组计算)
+        Map<String, List<TrainState>> hwByDir = trains.values().stream()
                 .filter(TrainState::occupiesTrack)
-                .sorted(Comparator.comparingDouble(TrainState::getPositionMeters))
-                .collect(Collectors.toList());
+                .collect(Collectors.groupingBy(t -> t.isUpDirection() ? "UP" : "DOWN"));
         List<SimulationSnapshot.HeadwayInfo> headwayList = new ArrayList<>();
-        for (int i = 0; i < sortedTrains.size() - 1; i++) {
-            TrainState following = sortedTrains.get(i);
-            TrainState leading = sortedTrains.get(i + 1);
+        for (List<TrainState> dirTrains : hwByDir.values()) {
+            if (dirTrains.size() < 2)
+                continue;
+            boolean isUp = dirTrains.get(0).isUpDirection();
+            dirTrains.sort(isUp
+                    ? Comparator.comparingDouble(TrainState::getPositionMeters)
+                    : Comparator.comparingDouble(TrainState::getPositionMeters).reversed());
+            for (int i = 0; i < dirTrains.size() - 1; i++) {
+                TrainState following = dirTrains.get(i);
+                TrainState leading = dirTrains.get(i + 1);
 
-            int dirSign = following.getDirectionSign();
-            double gap = dirSign > 0
-                    ? leading.getPositionMeters() - following.getPositionMeters()
-                    : following.getPositionMeters() - leading.getPositionMeters();
-            double safeDist = dispatchEngine.calcSafeDistance(following.getSpeed() / 3.6);
+                int dirSign = following.getDirectionSign();
+                double gap = dirSign > 0
+                        ? leading.getPositionMeters() - following.getPositionMeters()
+                        : following.getPositionMeters() - leading.getPositionMeters();
+                double safeDist = dispatchEngine.calcSafeDistance(following.getSpeed() / 3.6);
 
-            SimulationSnapshot.HeadwayInfo hw = new SimulationSnapshot.HeadwayInfo();
-            hw.setFromTrainId(following.getTrainId());
-            hw.setToTrainId(leading.getTrainId());
-            hw.setDistanceMeters(gap);
-            hw.setSafetyDistanceMeters(safeDist);
-            hw.setTimeSeconds(following.getSpeed() > 0 ? Math.abs(gap) / (following.getSpeed() / 3.6) : 999);
-            hw.setStatus(gap < safeDist * 0.5 ? "DANGER"
-                    : gap < safeDist * 0.8 ? "WARNING" : gap < safeDist ? "CAUTION" : "SAFE");
-            headwayList.add(hw);
+                SimulationSnapshot.HeadwayInfo hw = new SimulationSnapshot.HeadwayInfo();
+                hw.setFromTrainId(following.getTrainId());
+                hw.setToTrainId(leading.getTrainId());
+                hw.setDistanceMeters(gap);
+                hw.setSafetyDistanceMeters(safeDist);
+                hw.setTimeSeconds(following.getSpeed() > 0 ? Math.abs(gap) / (following.getSpeed() / 3.6) : 999);
+                hw.setStatus(gap < safeDist * 0.5 ? "DANGER"
+                        : gap < safeDist * 0.8 ? "WARNING" : gap < safeDist ? "CAUTION" : "SAFE");
+                headwayList.add(hw);
+            }
         }
         snapshot.setHeadways(headwayList);
 
