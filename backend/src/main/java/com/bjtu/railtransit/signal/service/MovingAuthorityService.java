@@ -89,6 +89,11 @@ public class MovingAuthorityService {
             return degraded(self, AuthorityBasis.LINE_LIMIT, SignalEvent.DEGRADED, null, null);
         }
 
+        // fail-safe（0c）：定位丢失 / 完整性丢失（协议 A9/A10）→ 收紧
+        if (self.isPositionLost() || self.isIntegrityLost()) {
+            return degraded(self, AuthorityBasis.LINE_LIMIT, SignalEvent.POSITION_LOSS, null, null);
+        }
+
         // fail-safe（1）：本车 MA 过期 → 收紧至当前位置
         if (!Double.isNaN(nowSec)
                 && (Double.isNaN(self.getTimestamp()) || self.getTimestamp() < nowSec - cfg.maValiditySec)) {
@@ -166,14 +171,24 @@ public class MovingAuthorityService {
         }
 
         double eoa = (dir == Direction.UP) ? Math.max(pos, best.eoa) : Math.min(pos, best.eoa);
-        double maxSpeed = constraints.speedLimitAt(line, eoa, dir, pos);
+        double lineLimit = constraints.speedLimitAt(line, eoa, dir, pos);
+        double maxSpeed = lineLimit;
+        // A6：每车故障限速参与 min（NaN / 负值忽略）
+        double fault = self.getFaultSpeedLimitKmh();
+        SignalEvent event = best.event;
+        if (!Double.isNaN(fault) && fault >= 0) {
+            maxSpeed = Math.min(maxSpeed, fault);
+            if (fault < lineLimit - 1e-9 && event == SignalEvent.NONE) {
+                event = SignalEvent.SPEED_RESTRICTION;
+            }
+        }
 
         MovingAuthority ma = new MovingAuthority();
         ma.setTrainId(self.getTrainId());
         ma.setEndOfAuthorityM(eoa);
         ma.setMaxSpeedKmh(maxSpeed);
         ma.setBasis(best.basis);
-        ma.setEvent(best.event);
+        ma.setEvent(event);
         ma.setCapSignalId(best.capSignalId);
         ma.setRouteId(best.routeId);
         ma.setTimestamp(self.getTimestamp());

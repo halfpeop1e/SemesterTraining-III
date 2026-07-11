@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Button,
   Spin,
@@ -8,10 +8,9 @@ import {
   message,
   Alert,
   Card,
-  Segmented,
   Select,
-} from "antd";
-import { ReloadOutlined, GlobalOutlined, AimOutlined } from "@ant-design/icons";
+} from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import {
   getLine,
   computeMa,
@@ -21,42 +20,40 @@ import {
   buildRoute,
   cancelRoute,
   openSignal,
+  getBuiltRoutes,
+  assignRoute,
+  unassignRoute,
+  getRouteBindings,
   setTsr,
   cancelTsr,
-} from "../../api/signal";
-import { useSimulation } from "../../context/SimulationContext";
+  getTsrs,
+  patchSignalAspect,
+  patchSwitchState,
+  patchRouteBuilt,
+} from '../../api/signal';
+import { useSimulation } from '../../context/SimulationContext';
 import type {
   LineProfile,
   MovingAuthority,
   TrainState,
-  SwitchState,
   SignalEventItem,
-} from "../../types/signal";
-import type { TrainState as DispatchTrainState } from "../../types/dispatch";
-import TrackDiagram, { type SelectedEntity } from "./components/TrackDiagram";
-import MaPanel from "./components/MaPanel";
-import ControlPanel from "./components/ControlPanel";
-import EventLog from "./components/EventLog";
-import Legend from "./components/Legend";
+  SwitchState,
+  SignalAspect,
+  TemporarySpeedRestriction,
+  EventLevel,
+  EventCategory,
+} from '../../types/signal';
+import type { TrainState as DispatchTrainState } from '../../types/dispatch';
+import type { SelectedEntity } from './components/TrackDiagram';
+import RealStationDiagram from './components/RealStationDiagram';
+import OperationsDock from './components/OperationsDock';
+import MaPanel from './components/MaPanel';
+import EventLog from './components/EventLog';
+import { pickDefaultStationId, sortedStations, stationIdForRoute, stationIdForSignal, nearestStationId } from './data/mileage';
 
-// ===== 降级测试用列车（NaN 位置，用于验证 fail-safe 收紧） =====
-const DEGRADED_TRAIN: TrainState = {
-  trainId: "T_BAD",
-  positionM: NaN,
-  speedKmh: 0,
-  accelerationMps2: 0,
-  lengthM: 140,
-  direction: "INVALID",
-  timestamp: 100,
-};
-
-// 调度仿真列车 → 信号模块列车（喂给后端 compute(...) 算真实 MA）
-function mapDispatchTrains(
-  src: DispatchTrainState[],
-  simTime: number,
-): TrainState[] {
+function mapDispatchTrains(src: DispatchTrainState[], simTime: number): TrainState[] {
   return src
-    .filter((t) => t.status !== "FINISHED")
+    .filter((t) => t.status !== 'FINISHED')
     .map((t) => ({
       trainId: t.trainId,
       positionM: t.positionMeters,
@@ -76,167 +73,305 @@ function LineSignal() {
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showDegraded, setShowDegraded] = useState(false);
-  const [viewMode, setViewMode] = useState<"overview" | "station">("overview");
-  const [selectedStationId, setSelectedStationId] = useState<string | null>(
-    null,
-  );
+  const [stationId, setStationId] = useState<string | null>(null);
+  const [leftMenu, setLeftMenu] = useState<'route' | 'switch' | 'signal' | 'tsr' | 'status'>('route');
+  const [builtRouteIds, setBuiltRouteIds] = useState<Set<number>>(new Set());
+  const [routeBindings, setRouteBindings] = useState<Record<string, number>>({});
+  const [tsrs, setTsrs] = useState<TemporarySpeedRestriction[]>([]);
+  const [lastMessage, setLastMessage] = useState('系统待命');
+
+  const pushLocalEvent = useCallback((msg: string, level: EventLevel = 'INFO') => {
+    const item: SignalEventItem = {
+      id: `local-${Date.now()}`,
+      timestamp: Date.now(),
+      level,
+      category: 'SIGNAL' as EventCategory,
+      message: msg,
+    };
+    setEvents((prev) => [item, ...prev].slice(0, 100));
+    setLastMessage(msg);
+  }, []);
 
   const loadLine = useCallback(async () => {
     try {
-      setLineProfile(await getLine());
+      const lp = await getLine();
+      setLineProfile(lp);
+      setStationId((prev) => prev || pickDefaultStationId(lp));
+      return lp;
     } catch (e: any) {
-      setError(e.message);
-      message.error("加载线路数据失败: " + e.message);
+      message.error('加载线路失败: ' + e.message);
+      return null;
+    }
+  }, []);
+
+  const loadBuilt = useCallback(async () => {
+    try {
+      const list = await getBuiltRoutes();
+      setBuiltRouteIds((prev) => {
+        if (list.length > 0) {
+          return new Set(list.map((r) => Number(r.id)));
+        }
+        // 远程空：保留本地已建（乐观/mock），避免闪回 0
+        return prev.size > 0 ? prev : new Set();
+      });
+    } catch {
+      /* keep */
+    }
+  }, []);
+
+  const loadBindings = useCallback(async () => {
+    try {
+      const bindings = await getRouteBindings();
+      setRouteBindings(bindings || {});
+    } catch {
+      /* keep */
+    }
+  }, []);
+
+  const loadTsrs = useCallback(async () => {
+    try {
+      const list = await getTsrs();
+      setTsrs(list || []);
+    } catch {
+      /* keep */
     }
   }, []);
 
   const loadEvents = useCallback(async () => {
     try {
-      setEvents(await getEvents());
+      const remote = await getEvents();
+      if (remote?.length) {
+        setEvents((prev) => {
+          const local = prev.filter((e) => String(e.id).startsWith('local-'));
+          return [...local, ...remote].slice(0, 100);
+        });
+      }
     } catch (e: any) {
       console.error(e);
     }
   }, []);
 
-  // 首次加载
   useEffect(() => {
-    loadLine();
-    loadEvents();
-  }, [loadLine, loadEvents]);
+    void (async () => {
+      await loadLine();
+      await loadBuilt();
+      await loadBindings();
+      await loadTsrs();
+      await loadEvents();
+    })();
+  }, [loadLine, loadBuilt, loadBindings, loadTsrs, loadEvents]);
 
-  // 默认选中第一个车站作为站场详图
-  useEffect(() => {
-    if (lineProfile && !selectedStationId) {
-      const first = lineProfile.stations.find((s) => s.positionM > 0);
-      if (first) setSelectedStationId(first.id);
-    }
-  }, [lineProfile, selectedStationId]);
-
-  // 从共享 SimulationProvider 读取实时仿真快照（被动只读，不控制仿真）
-  const { snapshot } = useSimulation();
+  const { snapshot, isRunning } = useSimulation();
   const [simTime, setSimTime] = useState(0);
   const [simNotStarted, setSimNotStarted] = useState(false);
+  const maInflight = useRef(false);
+  const lastMaAt = useRef(0);
+  const lastFollowKey = useRef('');
 
-  // 调度快照列车 → 信号模块列车（含降级注入），喂给后端 compute(...) 算真实 MA
   const contextTrains = useMemo(() => {
-    if (!snapshot) return [];
-    let mapped = mapDispatchTrains(snapshot.trains, snapshot.simulationTime);
-    if (showDegraded) mapped = [...mapped, DEGRADED_TRAIN];
-    return mapped;
-  }, [snapshot, showDegraded]);
+    if (!snapshot?.trains?.length) return [] as TrainState[];
+    return mapDispatchTrains(snapshot.trains, snapshot.simulationTime ?? 0);
+  }, [snapshot]);
 
-  // 快照/降级变化即重算 MA（仿真在调度页推进，这里随快照实时刷新）
-  const recomputeMa = useCallback(async () => {
-    if (!lineProfile) return;
-    setLoading(true);
-    try {
-      setTrains(contextTrains);
-      setSimTime(snapshot?.simulationTime ?? 0);
-      setSimNotStarted(contextTrains.length === 0);
-      const authoritative = showDegraded ? {} : await getLatestMa();
-      const result =
-        Object.keys(authoritative).length > 0
-          ? authoritative
-          : await computeMa({
-              lineProfile,
-              trains: contextTrains,
-              nowSec: snapshot?.simulationTime,
-            });
-      setMaMap(result);
-      await loadEvents();
-    } catch (e: any) {
-      setTrains([]);
-      setMaMap({});
-      setSimNotStarted(true);
-    }
-    setLoading(false);
-  }, [lineProfile, loadEvents, contextTrains, snapshot]);
-
+  // 快照列车立刻上图（不等 MA 请求）
   useEffect(() => {
-    recomputeMa();
-  }, [recomputeMa]);
+    setTrains(contextTrains);
+    setSimTime(snapshot?.simulationTime ?? 0);
+    setSimNotStarted(!isRunning && contextTrains.length === 0 && (snapshot?.simulationTime ?? 0) <= 1);
+  }, [contextTrains, snapshot?.simulationTime, isRunning]);
 
-  // 控制操作
-  const handleOperateSwitch = useCallback(
-    async (switchId: string, position: SwitchState) => {
-      setActionLoading(true);
-      try {
-        const res = await operateSwitch({ switchId, position });
-        message.success(res.message);
-        await loadLine();
-        await loadEvents();
-      } catch (e: any) {
-        message.error(e.message);
+  // 仿真中：优先跟「速度>0 或位置最靠前」的车切站，避免卡在空窗
+  // 用 effectiveRunning：后端已在跑但本地未点启动时也要跟站
+  useEffect(() => {
+    if (!lineProfile || contextTrains.length === 0) return;
+    const simActive =
+      isRunning ||
+      snapshot?.running === true ||
+      (contextTrains.length > 0 && (snapshot?.simulationTime ?? 0) > 1);
+    if (!simActive) return;
+    const ranked = contextTrains
+      .filter((x) => Number.isFinite(x.positionM) && x.direction !== 'INVALID')
+      .slice()
+      .sort((a, b) => {
+        const ma = (b.speedKmh || 0) - (a.speedKmh || 0);
+        if (Math.abs(ma) > 0.1) return ma;
+        return b.positionM - a.positionM;
+      });
+    const t = ranked[0];
+    if (!t) return;
+    const sid = nearestStationId(lineProfile, t.positionM);
+    if (!sid) return;
+    // 按站切，不绑死 trainId@sid，避免同一站多车不更新
+    const key = `${sid}@${Math.round(t.positionM / 50)}`;
+    if (lastFollowKey.current === key) return;
+    lastFollowKey.current = key;
+    setStationId((prev) => (prev === sid ? prev : sid));
+  }, [lineProfile, isRunning, contextTrains, snapshot?.running, snapshot?.simulationTime]);
+
+  // 顶栏/绿条用的有效运行态
+  const simLive =
+    isRunning ||
+    snapshot?.running === true ||
+    (trains.length > 0 && simTime > 1);
+
+  const recomputeMa = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!lineProfile) return;
+    const quiet = opts?.quiet ?? false;
+    const now = Date.now();
+    // 仿真高频：节流 400ms + 防重入
+    if (quiet && (maInflight.current || now - lastMaAt.current < 400)) return;
+    maInflight.current = true;
+    if (!quiet) setLoading(true);
+    try {
+      const trainsNow = contextTrains;
+      let result: Record<string, MovingAuthority> = {};
+      // 仿真运行：优先后端权威 registry（SignalCycle 每 tick 写入）
+      if (isRunning || trainsNow.length > 0) {
+        try {
+          result = await getLatestMa();
+        } catch {
+          result = {};
+        }
       }
-      setActionLoading(false);
-    },
-    [loadLine, loadEvents],
-  );
+      if (Object.keys(result).length === 0 && trainsNow.length > 0) {
+        result = await computeMa({
+          lineProfile,
+          trains: trainsNow,
+          nowSec: snapshot?.simulationTime ?? simTime,
+        });
+      }
+      setMaMap(result);
+      lastMaAt.current = Date.now();
+      if (!quiet) await loadEvents();
+    } catch {
+      // 不把 trains 清空：车位仍可显示
+      if (!quiet) setMaMap({});
+    } finally {
+      maInflight.current = false;
+      if (!quiet) setLoading(false);
+    }
+  }, [lineProfile, contextTrains, snapshot?.simulationTime, simTime, isRunning, loadEvents]);
+
+  // 线路变化：完整重算
+  useEffect(() => {
+    void recomputeMa({ quiet: false });
+  }, [lineProfile]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 仿真快照节流刷新 MA
+  useEffect(() => {
+    if (!lineProfile) return;
+    if (!isRunning && contextTrains.length === 0) {
+      setMaMap({});
+      return;
+    }
+    void recomputeMa({ quiet: true });
+  }, [snapshot?.simulationTime, contextTrains.length, isRunning, lineProfile]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refreshAll = useCallback(async () => {
+    setActionLoading(true);
+    await loadLine();
+    await loadBuilt();
+    await loadBindings();
+    await loadTsrs();
+    await recomputeMa({ quiet: false });
+    setActionLoading(false);
+  }, [loadLine, loadBuilt, loadBindings, loadTsrs, recomputeMa]);
 
   const handleBuildRoute = useCallback(
-    async (startSignalId: number, endSignalId: number) => {
+    async (routeId: number, trainId?: string) => {
       setActionLoading(true);
       try {
-        const res = await buildRoute({ startSignalId, endSignalId });
-        message.success(res.message);
-        await loadLine();
-        await loadEvents();
+        const res = await buildRoute({ routeId }, trainId);
+        message.success(res.message || `进路 ${routeId} 已办理`);
+        pushLocalEvent(res.message || `进路 #${routeId} 办理`, 'INFO');
+        setLineProfile((lp) => {
+          if (!lp) return lp;
+          const next = patchRouteBuilt(lp, routeId, true);
+          const jump = stationIdForRoute(next, routeId);
+          if (jump) setStationId(jump);
+          return next;
+        });
+        setBuiltRouteIds((prev) => new Set(prev).add(routeId));
+        // 绑定结果刷新
+        if (trainId) {
+          await loadBindings();
+        }
+        await refreshAll();
       } catch (e: any) {
-        message.error(e.message);
+        message.error(e.message || '办理失败');
+        pushLocalEvent(e.message || '办理失败', 'ERROR');
       }
       setActionLoading(false);
     },
-    [loadLine, loadEvents],
+    [pushLocalEvent, refreshAll, loadBindings],
   );
 
-  const handleCancelRoute = useCallback(
-    async (routeId: string) => {
+  const handleAssignRoute = useCallback(
+    async (trainId: string, routeId: number) => {
       setActionLoading(true);
       try {
-        const res = await cancelRoute(routeId);
-        message.success(res.message);
-        await loadLine();
-        await loadEvents();
+        const res = await assignRoute(trainId, routeId);
+        if (res.success) {
+          message.success(res.message || `列车 ${trainId} 已绑定进路 ${routeId}`);
+          pushLocalEvent(res.message || `列车 ${trainId} 绑定进路 ${routeId}`, 'INFO');
+        } else {
+          message.warning(res.message || '绑定失败');
+          pushLocalEvent(res.message || `绑定失败: ${trainId} → ${routeId}`, 'WARN');
+        }
+        await loadBindings();
+        await refreshAll();
       } catch (e: any) {
-        message.error(e.message);
+        message.error(e.message || '绑定失败');
+        pushLocalEvent(e.message || '绑定失败', 'ERROR');
       }
       setActionLoading(false);
     },
-    [loadLine, loadEvents],
+    [pushLocalEvent, refreshAll, loadBindings],
   );
 
-  const handleOpenSignal = useCallback(
-    async (signalId: number) => {
+  const handleUnassignRoute = useCallback(
+    async (trainId: string) => {
       setActionLoading(true);
       try {
-        const res = await openSignal({ signalId });
-        message.success(res.message);
-        await loadLine();
-        await loadEvents();
+        const res = await unassignRoute(trainId);
+        if (res.success) {
+          message.success(res.message || `列车 ${trainId} 已解绑`);
+          pushLocalEvent(res.message || `列车 ${trainId} 解绑`, 'INFO');
+        } else {
+          message.warning(res.message || '解绑失败');
+        }
+        await loadBindings();
+        await refreshAll();
       } catch (e: any) {
-        message.error(e.message);
+        message.error(e.message || '解绑失败');
+        pushLocalEvent(e.message || '解绑失败', 'ERROR');
       }
       setActionLoading(false);
     },
-    [loadLine, loadEvents],
+    [pushLocalEvent, refreshAll, loadBindings],
   );
 
   const handleSetTsr = useCallback(
-    async (startM: number, endM: number, speedLimitKmh: number) => {
+    async (startM: number, endM: number, speedLimitKmh: number, active: boolean) => {
       setActionLoading(true);
       try {
-        const res = await setTsr({ startM, endM, speedLimitKmh, active: true });
-        message.success(res.message);
-        await loadLine();
-        await loadEvents();
+        const res = await setTsr({ startM, endM, speedLimitKmh, active });
+        if (res.success) {
+          message.success(res.message || `限速已设置`);
+          pushLocalEvent(res.message || `TSR ${speedLimitKmh}km/h ${startM}-${endM}m`, 'WARN');
+        } else {
+          message.warning(res.message || '设置限速失败');
+          pushLocalEvent(res.message || '设置限速失败', 'WARN');
+        }
+        await loadTsrs();
+        await refreshAll();
       } catch (e: any) {
-        message.error(e.message);
+        message.error(e.message || '设置限速失败');
+        pushLocalEvent(e.message || '设置限速失败', 'ERROR');
       }
       setActionLoading(false);
     },
-    [loadLine, loadEvents],
+    [pushLocalEvent, refreshAll, loadTsrs],
   );
 
   const handleCancelTsr = useCallback(
@@ -244,288 +379,312 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await cancelTsr(tsrId);
-        message.success(res.message);
-        await loadLine();
-        await loadEvents();
+        if (res.success) {
+          message.success(res.message || `限速 ${tsrId} 已取消`);
+          pushLocalEvent(res.message || `TSR ${tsrId} 取消`, 'INFO');
+        } else {
+          message.warning(res.message || '取消限速失败');
+        }
+        await loadTsrs();
+        await refreshAll();
       } catch (e: any) {
-        message.error(e.message);
+        message.error(e.message || '取消限速失败');
+        pushLocalEvent(e.message || '取消限速失败', 'ERROR');
       }
       setActionLoading(false);
     },
-    [loadLine, loadEvents],
+    [pushLocalEvent, refreshAll, loadTsrs],
   );
+
+  const handleCancelRoute = useCallback(
+    async (routeId: number) => {
+      setActionLoading(true);
+      try {
+        const res = await cancelRoute(routeId);
+        message.success(res.message || `进路 ${routeId} 已取消`);
+        pushLocalEvent(res.message || `进路 #${routeId} 取消`, 'INFO');
+        setLineProfile((lp) => (lp ? patchRouteBuilt(lp, routeId, false) : lp));
+        setBuiltRouteIds((prev) => {
+          const n = new Set(prev);
+          n.delete(routeId);
+          return n;
+        });
+        // cancel 会清服务端绑定，必须刷新
+        await loadBindings();
+        await refreshAll();
+      } catch (e: any) {
+        message.error(e.message || '取消失败');
+        pushLocalEvent(e.message || '取消失败', 'ERROR');
+      }
+      setActionLoading(false);
+    },
+    [pushLocalEvent, refreshAll, loadBindings],
+  );
+
+  const handleOperateSwitch = useCallback(
+    async (switchId: string, position: SwitchState) => {
+      setActionLoading(true);
+      try {
+        const res = await operateSwitch({ switchId, position });
+        message.success(res.message || `道岔 ${switchId} → ${position}`);
+        pushLocalEvent(res.message || `道岔 ${switchId} → ${position}`, 'INFO');
+        setLineProfile((lp) => (lp ? patchSwitchState(lp, switchId, position) : lp));
+        await refreshAll();
+      } catch (e: any) {
+        message.error(e.message || '道岔操作失败');
+        pushLocalEvent(e.message || '道岔操作失败', 'ERROR');
+      }
+      setActionLoading(false);
+    },
+    [pushLocalEvent, refreshAll],
+  );
+
+  const handleSetSignal = useCallback(
+    async (signalId: number, aspect: SignalAspect) => {
+      setActionLoading(true);
+      try {
+        const res = await openSignal({ signalId, aspect });
+        message.success(res.message || `信号 ${signalId} → ${aspect}`);
+        pushLocalEvent(res.message || `信号 #${signalId} → ${aspect}`, 'INFO');
+        setLineProfile((lp) => {
+          if (!lp) return lp;
+          const next = patchSignalAspect(lp, signalId, aspect);
+          const jump = stationIdForSignal(next, signalId);
+          if (jump) setStationId(jump);
+          return next;
+        });
+        setSelected({ type: 'signal', id: signalId });
+        await refreshAll();
+      } catch (e: any) {
+        message.error(e.message || '信号设置失败');
+        pushLocalEvent(e.message || '信号设置失败', 'ERROR');
+      }
+      setActionLoading(false);
+    },
+    [pushLocalEvent, refreshAll],
+  );
+
+  const handleSelect = useCallback((entity: SelectedEntity | null) => {
+    setSelected(entity);
+    if (!entity) return;
+    if (entity.type === 'switch') setLeftMenu('switch');
+    else if (entity.type === 'signal') setLeftMenu('signal');
+    else if (entity.type === 'train') setLeftMenu('status');
+  }, []);
 
   const stationOptions = useMemo(() => {
     if (!lineProfile) return [];
-    return lineProfile.stations
-      .filter((s) => s.positionM > 0)
-      .sort((a, b) => a.positionM - b.positionM)
-      .map((s) => ({ label: s.name, value: s.id }));
+    return sortedStations(lineProfile).map((s) => ({
+      value: String(s.id),
+      label: `${s.name} (${(s.positionM / 1000).toFixed(2)} km)`,
+    }));
   }, [lineProfile]);
 
-  const activeStationName = useMemo(() => {
-    return (
-      lineProfile?.stations.find((s) => s.id === selectedStationId)?.name || ""
-    );
-  }, [lineProfile, selectedStationId]);
+  const builtRouteSignalIds = useMemo(() => {
+    const ids = new Set<number>();
+    if (!lineProfile) return ids;
+    for (const r of lineProfile.routes || []) {
+      if (!builtRouteIds.has(Number(r.id))) continue;
+      ids.add(r.startSignalId);
+      if (r.endSignalId) ids.add(r.endSignalId);
+    }
+    return ids;
+  }, [lineProfile, builtRouteIds]);
 
   const hasDegradedMa = useMemo(
     () =>
       Object.values(maMap).some(
         (ma) =>
-          ma.event === "DEGRADED" ||
-          ma.event === "MA_EXPIRED" ||
-          ma.event === "POSITION_LOSS",
+          ma.event === 'DEGRADED' ||
+          ma.event === 'MA_EXPIRED' ||
+          ma.event === 'POSITION_LOSS',
       ),
     [maMap],
   );
 
+  const maSummary = useMemo(() => {
+    const list = Object.values(maMap);
+    if (!list.length) return { count: 0, degraded: 0, avgSpeed: 0 };
+    const degraded = list.filter(
+      (m) => m.event === 'DEGRADED' || m.event === 'MA_EXPIRED',
+    ).length;
+    const avgSpeed =
+      list.reduce((s, m) => s + (Number.isFinite(m.maxSpeedKmh) ? m.maxSpeedKmh : 0), 0) /
+      list.length;
+    return { count: list.length, degraded, avgSpeed: Math.round(avgSpeed) };
+  }, [maMap]);
+
   if (!lineProfile) {
     return (
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          height: "100%",
-        }}
-      >
+      <div className="flex h-full items-center justify-center">
         <Spin description="加载线路数据..." />
       </div>
     );
   }
 
+  const activeStationId = stationId || pickDefaultStationId(lineProfile);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "12px 16px",
-          borderBottom: "1px solid rgba(148,163,184,0.08)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 16, color: "#f1f5f9" }}>
-            线路信号 -{" "}
-            {viewMode === "overview"
-              ? "全线概览"
-              : `${activeStationName} 站场详图`}
-          </h3>
-          <span
-            style={{
-              fontSize: 11,
-              color: "#64748b",
-              fontFamily: "JetBrains Mono, monospace",
-              paddingLeft: 4,
-            }}
-          >
-            仿真 {Math.floor(simTime)}s
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/40 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="m-0 text-base text-slate-100">线路信号 · 联锁上位机</h3>
+          <span className="font-mono text-[11px] text-slate-500">
+            {lineProfile.lineId || 'line'} · {simLive ? '运行' : '停止'} · t=
+            {Math.floor(simTime)}s · 车 {trains.length} · 已建 {builtRouteIds.size} · MA降级{' '}
+            {maSummary.degraded}
           </span>
-          <Segmented
+          <Select
             size="small"
-            value={viewMode}
-            onChange={(v) => setViewMode(v as "overview" | "station")}
-            options={[
-              {
-                label: (
-                  <span>
-                    <GlobalOutlined /> 全线概览
-                  </span>
-                ),
-                value: "overview",
-              },
-              {
-                label: (
-                  <span>
-                    <AimOutlined /> 站场详图
-                  </span>
-                ),
-                value: "station",
-              },
-            ]}
+            style={{ width: 160 }}
+            value={activeStationId || undefined}
+            options={stationOptions}
+            onChange={(v) => setStationId(v)}
+            placeholder="选择车站"
           />
-          {viewMode === "station" && (
-            <Select
-              size="small"
-              value={selectedStationId}
-              onChange={(v) => {
-                setSelectedStationId(v);
-                setSelected(null);
-              }}
-              options={stationOptions}
-              style={{ width: 140 }}
-              placeholder="选择车站"
-            />
-          )}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Button
-            size="small"
-            onClick={() => setShowDegraded((v) => !v)}
-            type={showDegraded ? "primary" : "default"}
-            danger={showDegraded}
-          >
-            {showDegraded ? "降级测试ON" : "降级测试OFF"}
-          </Button>
+        <div className="flex gap-2">
           <Button
             type="primary"
-            icon={<ReloadOutlined />}
-            loading={loading}
-            onClick={recomputeMa}
             size="small"
+            icon={<ReloadOutlined />}
+            loading={loading || actionLoading}
+            onClick={() => void refreshAll()}
           >
-            刷新 MA
+            刷新 line/MA
           </Button>
         </div>
       </div>
 
-      {/* 降级告警条 */}
       {hasDegradedMa && (
         <Alert
           type="error"
+          banner
+          showIcon
           message="MA 降级告警"
           description="存在列车 MA 降级或过期，要求制动（fail-safe 收紧）"
-          showIcon
-          banner
         />
       )}
 
-      {/* 仿真未启动提示（线路信号为只读视图） */}
-      {simNotStarted && trains.length === 0 && (
+      {simNotStarted && trains.length === 0 && !simLive && (
         <Alert
           type="info"
-          message="仿真未启动"
-          description="线路信号页为只读视图，列车数据来自调度控制页的仿真。请先到「调度控制」页点击「启动」。"
-          showIcon
           banner
+          showIcon
+          message="仿真未启动"
+          description="请到「调度控制」点启动。启动后本页自动跟车、刷新 MA 与占用。"
+        />
+      )}
+      {simLive && (
+        <Alert
+          type="success"
+          banner
+          showIcon
+          message={`仿真运行中 · t=${Math.floor(simTime)}s · 在线车 ${trains.length} · MA ${maSummary.count}`}
         />
       )}
 
-      {/* 统计栏 */}
-      <div style={{ padding: "12px 16px" }}>
-        <Row gutter={[16, 16]}>
+      <div className="px-4 py-2">
+        <Row gutter={[12, 12]}>
           <Col xs={12} sm={6}>
-            <Card
-              variant="borderless"
-              styles={{ body: { padding: "16px 20px" } }}
-            >
-              <Statistic
-                title="站点"
-                value={lineProfile.stations?.length || 0}
-                suffix="个"
-                styles={{
-                  content: { color: "#f1f5f9", fontSize: 24, fontWeight: 700 },
-                }}
-              />
+            <Card size="small" variant="borderless">
+              <Statistic title="MA 列车" value={maSummary.count} suffix="列" />
             </Card>
           </Col>
           <Col xs={12} sm={6}>
-            <Card
-              variant="borderless"
-              styles={{ body: { padding: "16px 20px" } }}
-            >
+            <Card size="small" variant="borderless">
               <Statistic
-                title="信号机"
-                value={lineProfile.signals?.length || 0}
-                suffix="个"
-                styles={{
-                  content: { color: "#f1f5f9", fontSize: 24, fontWeight: 700 },
-                }}
-              />
-            </Card>
-          </Col>
-          <Col xs={12} sm={6}>
-            <Card bordered={false} bodyStyle={{ padding: "16px 20px" }}>
-              <Statistic
-                title="道岔"
-                value={lineProfile.switches?.length || 0}
-                suffix="个"
-                valueStyle={{ color: "#f1f5f9", fontSize: 24, fontWeight: 700 }}
-              />
-            </Card>
-          </Col>
-          <Col xs={12} sm={6}>
-            <Card bordered={false} bodyStyle={{ padding: "16px 20px" }}>
-              <Statistic
-                title="总里程"
-                value={(lineProfile.totalLengthM / 1000).toFixed(2)}
-                suffix="km"
-                valueStyle={{ color: "#f1f5f9", fontSize: 24, fontWeight: 700 }}
+                title="真进路/已建"
+                value={(lineProfile.routes || []).length}
+                suffix={`/ ${builtRouteIds.size}`}
               />
             </Card>
           </Col>
         </Row>
       </div>
 
-      {/* 主区：平面图 + 控制/事件 */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: "flex",
-          gap: 12,
-          padding: "0 16px 16px",
-        }}
-      >
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            position: "relative",
-            borderRadius: 12,
-            overflow: "hidden",
-            border: "1px solid rgba(148,163,184,0.08)",
-          }}
-        >
-          <TrackDiagram
-            lineProfile={lineProfile}
-            maMap={maMap}
-            trains={trains}
-            selectedEntity={selected}
-            onSelect={(entity) => {
-              setSelected(entity);
-              if (entity?.type === "station" && viewMode === "overview") {
-                setViewMode("station");
-                setSelectedStationId(String(entity.id));
-              }
-            }}
-            mode={viewMode}
-            stationId={selectedStationId}
-          />
-          <Legend />
-        </div>
-        <div
-          style={{
-            width: 320,
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-          }}
-        >
-          <div style={{ flexShrink: 0 }}>
-            <ControlPanel
+      <div className="flex min-h-0 flex-1 gap-3 px-4 pb-4">
+          <div className="w-[380px] shrink-0 min-h-0">
+            <OperationsDock
               lineProfile={lineProfile}
-              selectedEntity={selected}
-              loading={actionLoading}
-              onOperateSwitch={handleOperateSwitch}
-              onBuildRoute={handleBuildRoute}
-              onCancelRoute={handleCancelRoute}
-              onOpenSignal={handleOpenSignal}
-              onSetTsr={handleSetTsr}
-              onCancelTsr={handleCancelTsr}
+              builtRouteIds={builtRouteIds}
+              routeBindings={routeBindings}
+              trains={trains}
+              tsrs={tsrs}
+              activeMenu={leftMenu}
+              onMenuChange={setLeftMenu}
+              loading={actionLoading || loading}
+              lastMessage={lastMessage}
+              onBuildRoute={(id, tid) => void handleBuildRoute(id, tid)}
+              onCancelRoute={(id) => void handleCancelRoute(id)}
+              onAssignRoute={(tid, rid) => void handleAssignRoute(tid, rid)}
+              onUnassignRoute={(tid) => void handleUnassignRoute(tid)}
+              onOperateSwitch={(id, pos) => void handleOperateSwitch(id, pos)}
+              onSetSignal={(id, asp) => void handleSetSignal(id, asp)}
+              onSetTsr={(s, e, sp, a) => void handleSetTsr(s, e, sp, a)}
+              onCancelTsr={(id) => void handleCancelTsr(id)}
+              onRefresh={() => void refreshAll()}
             />
           </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <EventLog events={events} loading={loading} />
+          <div className="flex min-w-0 min-h-0 flex-1 flex-col gap-2">
+            <div className="min-h-0 flex-1">
+              {activeStationId ? (
+                <RealStationDiagram
+                  lineProfile={lineProfile}
+                  stationId={activeStationId}
+                  trains={trains}
+                  maMap={maMap}
+                  selectedEntity={selected}
+                  onSelect={handleSelect}
+                  builtRouteSignalIds={builtRouteSignalIds}
+                />
+              ) : null}
+            </div>
+            <div className="h-24 shrink-0 overflow-hidden rounded-xl border border-slate-700/50">
+              <EventLog events={events} loading={loading} />
+            </div>
+          </div>
+          <div className="hidden w-56 shrink-0 overflow-y-auto xl:block">
+            <Card size="small" title="MA 授权" className="h-full">
+              {Object.keys(maMap).length === 0 ? (
+                <div className="text-xs text-slate-500">暂无 MA（启动仿真后刷新）</div>
+              ) : (
+                <div className="space-y-2">
+                  {Object.values(maMap).map((ma) => {
+                    const bad =
+                      ma.event === 'DEGRADED' ||
+                      ma.event === 'MA_EXPIRED' ||
+                      ma.event === 'POSITION_LOSS';
+                    return (
+                      <div
+                        key={ma.trainId}
+                        className={`cursor-pointer rounded border px-2 py-1.5 text-xs ${
+                          bad
+                            ? 'border-red-500/50 bg-red-500/10'
+                            : 'border-slate-700 bg-slate-800/40'
+                        }`}
+                        onClick={() => handleSelect({ type: 'train', id: ma.trainId })}
+                      >
+                        <div className="font-medium text-slate-100">{ma.trainId}</div>
+                        <div className="text-slate-400">
+                          EoA{' '}
+                          {Number.isFinite(ma.endOfAuthorityM)
+                            ? ma.endOfAuthorityM.toFixed(0)
+                            : '—'}{' '}
+                          m
+                        </div>
+                        <div className="text-slate-400">
+                          {ma.maxSpeedKmh} km/h · {ma.event}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
           </div>
         </div>
-      </div>
 
-      {/* 详情面板 */}
       <MaPanel
         entity={selected}
         lineProfile={lineProfile}

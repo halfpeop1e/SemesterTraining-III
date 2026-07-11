@@ -23,6 +23,12 @@ SPRING_WEB=$(find \
   "$M2/org/springframework/spring-webmvc" \
   -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' 2>/dev/null | tr '\n' ';')
 
+# Spring WebSocket + Messaging (应用使用 WebSocket 推送仿真状态)
+SPRING_WS=$(find \
+  "$M2/org/springframework/spring-websocket" \
+  "$M2/org/springframework/spring-messaging" \
+  -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' 2>/dev/null | tr '\n' ';')
+
 # Spring Boot (only needed ones, exclude maven-plugin, buildpack, loader-tools, devtools, reactive)
 SPRING_BOOT=$(find \
   "$M2/org/springframework/boot/spring-boot" \
@@ -60,7 +66,7 @@ MICROMETER=$(find \
   "$M2/io/micrometer/context-propagation" \
   -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' 2>/dev/null | tr '\n' ';')
 
-CP="$CLASSES;$RESOURCES;$SPRING_CORE;$SPRING_WEB;$SPRING_BOOT;$JACKSON;$LOGBACK;$SLF4J;$LOG4J_BRIDGE;$JAKARTA;$TOMCAT;$YAML;$MICROMETER"
+CP="$CLASSES;$RESOURCES;$SPRING_CORE;$SPRING_WEB;$SPRING_WS;$SPRING_BOOT;$JACKSON;$LOGBACK;$SLF4J;$LOG4J_BRIDGE;$JAKARTA;$TOMCAT;$YAML;$MICROMETER"
 
 echo -n "$CP" > "$ARGFILE"
 echo "Classpath entries: $(echo "$CP" | tr ';' '\n' | wc -l)"

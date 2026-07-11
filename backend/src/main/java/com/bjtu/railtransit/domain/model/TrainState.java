@@ -72,6 +72,14 @@ public class TrainState {
     private String stateSource;         // 状态来源: DISPATCH_ESTIMATED / ONBOARD_REPORTED
     private double minDwellSeconds;     // 本站最小停站时间 (站点类型决定)
 
+    // ── P2 安全字段（司机台协议 A6/A9/A10）──
+    /** 故障限速 km/h；NaN=无故障限速 */
+    private double faultSpeedLimitKmh = Double.NaN;
+    /** 定位丢失 → MA POSITION_LOSS */
+    private boolean positionLost;
+    /** 完整性丢失 → MA POSITION_LOSS */
+    private boolean integrityLost;
+
     // ── CBTC 执行层: 牵引/制动系统实时状态 ──
     private TractionSystemState tractionState;
     private BrakingSystemState brakeState;
@@ -247,6 +255,14 @@ public class TrainState {
 
     public double getMinDwellSeconds() { return minDwellSeconds; }
     public void setMinDwellSeconds(double v) { this.minDwellSeconds = v; }
+
+    // ── P2 安全字段 ──
+    public double getFaultSpeedLimitKmh() { return faultSpeedLimitKmh; }
+    public void setFaultSpeedLimitKmh(double v) { this.faultSpeedLimitKmh = v; }
+    public boolean isPositionLost() { return positionLost; }
+    public void setPositionLost(boolean v) { this.positionLost = v; }
+    public boolean isIntegrityLost() { return integrityLost; }
+    public void setIntegrityLost(boolean v) { this.integrityLost = v; }
 
     // ── CBTC 执行层状态 ──
     public TractionSystemState getTractionState() { return tractionState; }

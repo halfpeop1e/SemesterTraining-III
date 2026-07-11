@@ -58,6 +58,33 @@ public final class TrainStateAdapter {
      */
     public static TrainState fromAbsolute(String trainId, double positionM, double speedKmh,
                                           Direction direction, double lengthM, double timestamp) {
+        return fromAbsolute(trainId, positionM, speedKmh, direction, lengthM, timestamp,
+                Double.NaN, false, false);
+    }
+
+    /**
+     * 绝对里程入口 + P2 协议字段（故障限速 / 定位丢失 / 完整性丢失）。
+     *
+     * @param faultSpeedLimitKmh 故障限速 km/h；{@link Double#NaN} 表示无
+     */
+    public static TrainState fromAbsolute(String trainId, double positionM, double speedKmh,
+                                          Direction direction, double lengthM, double timestamp,
+                                          double faultSpeedLimitKmh,
+                                          boolean positionLost, boolean integrityLost) {
+        return fromAbsolute(trainId, positionM, speedKmh, direction, lengthM, timestamp,
+                faultSpeedLimitKmh, positionLost, integrityLost, Double.NaN);
+    }
+
+    /**
+     * 绝对里程入口 + P2 协议字段 + A4 载重系数。
+     *
+     * @param loadFactor 满载率 0.0~1.0；{@link Double#NaN} 表示未知（按额定计算）
+     */
+    public static TrainState fromAbsolute(String trainId, double positionM, double speedKmh,
+                                          Direction direction, double lengthM, double timestamp,
+                                          double faultSpeedLimitKmh,
+                                          boolean positionLost, boolean integrityLost,
+                                          double loadFactor) {
         TrainState t = new TrainState();
         t.setTrainId(trainId);
         t.setPositionM(positionM);
@@ -66,6 +93,10 @@ public final class TrainStateAdapter {
         t.setLengthM(lengthM);
         t.setDirection(direction);
         t.setTimestamp(timestamp);
+        t.setFaultSpeedLimitKmh(faultSpeedLimitKmh);
+        t.setPositionLost(positionLost);
+        t.setIntegrityLost(integrityLost);
+        t.setLoadFactor(loadFactor);
         return t;
     }
 }

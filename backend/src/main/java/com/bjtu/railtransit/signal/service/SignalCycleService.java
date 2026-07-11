@@ -5,6 +5,7 @@ import com.bjtu.railtransit.signal.domain.Direction;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
 import com.bjtu.railtransit.signal.domain.SignalAspect;
 import com.bjtu.railtransit.signal.domain.SignalEvent;
+import com.bjtu.railtransit.signal.model.AxleCounterSection;
 import com.bjtu.railtransit.signal.model.LineProfile;
 import com.bjtu.railtransit.signal.model.Route;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,26 +31,57 @@ public class SignalCycleService {
     private final MovementAuthorityRegistry registry;
     private final LineProfile lineProfile;
     private final boolean simulatedInterlocking;
+    private final SignalInterlockingService interlockingService;
+    private final SignalEventLog eventLog;
     private final Map<String, Route> activeRoutes = new java.util.concurrent.ConcurrentHashMap<>();
 
     public SignalCycleService(MovingAuthorityService movingAuthorityService,
                               MovementAuthorityRegistry registry,
                               LineProfileLoader loader,
+                              SignalInterlockingService interlockingService,
+                              SignalEventLog eventLog,
                               @Value("${rail.signal.simulated-interlocking:true}") boolean simulatedInterlocking)
             throws IOException {
         this.movingAuthorityService = movingAuthorityService;
         this.registry = registry;
-        this.lineProfile = loader.loadFromClasspath("line-profile.json");
+        this.interlockingService = interlockingService;
+        this.eventLog = eventLog;
+        // 必须与联锁/GET /line 共用同一 LineProfile，否则扳道/设灯不影响 MA 周期
+        this.lineProfile = loader.getLineProfile();
         this.simulatedInterlocking = simulatedInterlocking;
         if (simulatedInterlocking) {
-            // Explicit laboratory-simulation bootstrap. In physical-lab mode this is disabled,
-            // and an absent signal aspect remains fail-safe (non-proceed).
-            this.lineProfile.getSignals().forEach(s -> s.setAspect(SignalAspect.GREEN));
+            // 实验室默认：未人工干预前信号绿灯；之后以联锁操作为准
+            this.lineProfile.getSignals().forEach(s -> {
+                if (s.getAspect() == null) {
+                    s.setAspect(SignalAspect.GREEN);
+                }
+            });
         }
     }
 
     public synchronized Map<String, MovingAuthority> runCycle(
             Iterable<TrainState> runtimeTrains, double nowSeconds) {
+        // G1: 从联锁同步 trainId→Route 绑定到 activeRoutes（MA 只读）
+        Map<String, Integer> bindings = interlockingService.getRouteBindings();
+        // 清除不再绑定的车
+        activeRoutes.keySet().removeIf(tid -> !bindings.containsKey(tid));
+        // 写入/更新绑定的 Route
+        for (Map.Entry<String, Integer> entry : bindings.entrySet()) {
+            String trainId = entry.getKey();
+            int routeId = entry.getValue();
+            Route route = interlockingService.getBuiltRoutes().stream()
+                    .filter(r -> r.getId() == routeId)
+                    .findFirst().orElse(null);
+            if (route != null) {
+                activeRoutes.put(trainId, route);
+            } else {
+                activeRoutes.remove(trainId);
+            }
+        }
+
+        // G2: 按车 positionM 刷新 axleSections.occupied（compute 前生效）
+        refreshAxleOccupancy(runtimeTrains);
+
         List<com.bjtu.railtransit.signal.domain.TrainState> signalTrains = new ArrayList<>();
         for (TrainState runtime : runtimeTrains) {
             if (!runtime.occupiesTrack()) continue;
@@ -66,7 +98,11 @@ public class SignalCycleService {
                             runtime.getSpeedKmh(),
                             direction,
                             runtime.getTrainLengthMeters(),
-                            nowSeconds);
+                            nowSeconds,
+                            runtime.getFaultSpeedLimitKmh(),
+                            runtime.isPositionLost(),
+                            runtime.isIntegrityLost(),
+                            runtime.getLoadFactor());
             signalTrain.setAccelerationMps2(runtime.getAccelerationMps2());
             signalTrains.add(signalTrain);
         }
@@ -78,7 +114,21 @@ public class SignalCycleService {
 
         for (TrainState runtime : runtimeTrains) {
             MovingAuthority ma = values.get(runtime.getTrainId());
-            if (ma != null) applyAtpConstraint(runtime, ma);
+            if (ma != null) {
+                applyAtpConstraint(runtime, ma);
+                // G4: MA 降级事件写入（5s 节流）
+                if (eventLog != null && ma.getEvent() != null) {
+                    SignalEvent ev = ma.getEvent();
+                    if (ev == SignalEvent.DEGRADED || ev == SignalEvent.MA_EXPIRED
+                            || ev == SignalEvent.POSITION_LOSS) {
+                        String level = (ev == SignalEvent.MA_EXPIRED) ? "ERROR" : "WARN";
+                        eventLog.addThrottled(level, "MA",
+                                "列车 " + runtime.getTrainId() + " MA 降级: " + ev,
+                                runtime.getTrainId(),
+                                runtime.getTrainId() + "|" + ev.name());
+                    }
+                }
+            }
         }
         return values;
     }
@@ -115,6 +165,63 @@ public class SignalCycleService {
     public LineProfile getLineProfile() { return lineProfile; }
     public boolean isSimulatedInterlocking() { return simulatedInterlocking; }
     public Map<String, Route> getActiveRoutes() { return Collections.unmodifiableMap(activeRoutes); }
+
+    /**
+     * G2: 按车 positionM 刷新 axleSections.occupied。
+     * 先全清 false，再遍历 occupiesTrack 的列车，车头/车尾落在区段里程范围内 → occupied=true。
+     * 在 compute 前调用，确保 eoaFromAxleOccupancy 读到的是当前 tick 的真实占用态。
+     */
+    private void refreshAxleOccupancy(Iterable<TrainState> runtimeTrains) {
+        if (lineProfile.getAxleSections() == null || lineProfile.getAxleSections().isEmpty())
+            return;
+        // 先全清
+        for (AxleCounterSection a : lineProfile.getAxleSections()) {
+            a.setOccupied(false);
+        }
+        // 按车 positionM 标记占用
+        for (TrainState t : runtimeTrains) {
+            if (!t.occupiesTrack())
+                continue;
+            double head = t.getPositionMeters();
+            double tail = head - t.getTrainLengthMeters();
+            double lo = Math.min(head, tail);
+            double hi = Math.max(head, tail);
+            for (AxleCounterSection a : lineProfile.getAxleSections()) {
+                double aStart = axleSectionStartM(a);
+                double aEnd = axleSectionEndM(a);
+                if (Double.isNaN(aStart) || Double.isNaN(aEnd))
+                    continue;
+                // 车体 [lo, hi] 与区段 [aStart, aEnd] 有交集 → occupied
+                if (hi >= aStart && lo <= aEnd) {
+                    a.setOccupied(true);
+                }
+            }
+        }
+    }
+
+    /** 计轴区段起点里程 m（委托 TrackConstraintService 的同款算法） */
+    private double axleSectionStartM(AxleCounterSection a) {
+        if (a.getSegIds() == null) return Double.NaN;
+        double min = Double.NaN;
+        for (Integer segId : a.getSegIds()) {
+            double sm = lineProfile.segStartM(String.valueOf(segId));
+            if (!Double.isNaN(sm) && (Double.isNaN(min) || sm < min))
+                min = sm;
+        }
+        return min;
+    }
+
+    /** 计轴区段终点里程 m */
+    private double axleSectionEndM(AxleCounterSection a) {
+        if (a.getSegIds() == null) return Double.NaN;
+        double max = Double.NaN;
+        for (Integer segId : a.getSegIds()) {
+            double em = lineProfile.segEndM(String.valueOf(segId));
+            if (!Double.isNaN(em) && (Double.isNaN(max) || em > max))
+                max = em;
+        }
+        return max;
+    }
     public void assignRoute(String trainId, Route route) {
         if (route == null) activeRoutes.remove(trainId);
         else activeRoutes.put(trainId, route);

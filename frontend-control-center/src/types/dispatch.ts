@@ -85,6 +85,8 @@ export interface SimulationSnapshot {
   simTimeFormatted: string;
   totalTrains: number;
   activeTrains: number;
+  /** 后端权威时钟是否在跑（与前端本地 isRunning 可能不一致，以本字段为准） */
+  running?: boolean;
   trains: TrainState[];
   headways: HeadwayInfo[];
   commands: TrainCommand[];

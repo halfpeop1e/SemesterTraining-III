@@ -12,13 +12,17 @@ import java.util.*;
 
 /**
  * 模拟联锁服务 —— 在不依赖真实 CI 系统的情况下，
- * 提供道岔单操、进路办理/取消、信号机灯色控制。
+ * 提供道岔单操、进路办理/取消、信号机灯色控制、进路绑定（车→进路）。
+ *
+ * <p>G1 双层分离：builtRoutes = 站场（灯/岔排好）；routeBindings = 车→进路（MA 只读 activeRoutes）。
  */
 @Service
 public class SignalInterlockingService {
 
     private final LineProfileLoader lineProfileLoader;
     private final Map<Integer, Route> builtRoutes = new LinkedHashMap<>();
+    /** G1: trainId → routeId 绑定。assign 仅允许已 built route；一车一条（覆盖）；一路一车（拒绝）。 */
+    private final Map<String, Integer> routeBindings = new LinkedHashMap<>();
 
     public SignalInterlockingService(LineProfileLoader lineProfileLoader) {
         this.lineProfileLoader = lineProfileLoader;
@@ -56,6 +60,9 @@ public class SignalInterlockingService {
         if (route == null)
             throw new NoSuchElementException("进路未建立: " + routeId);
 
+        // G1: cancel 统一清该 route 的所有绑定（服务端一处做，不靠前端记得 unassign）
+        routeBindings.values().removeIf(rid -> rid == routeId);
+
         // 恢复信号机为 RED
         setSignalAspect(String.valueOf(route.getStartSignalId()), SignalAspect.RED);
         if (route.getEndSignalId() > 0) {
@@ -87,6 +94,48 @@ public class SignalInterlockingService {
         Signal sig = findSignal(signalId);
         sig.setAspect(aspect);
         return sig;
+    }
+
+    // ═══ 进路绑定（G1: 车→进路）═══
+
+    /**
+     * G1: 将已建立进路绑定到列车（一车一条覆盖；一路一车拒绝）。
+     *
+     * @return 绑定的 Route
+     * @throws NoSuchElementException route 未建立
+     * @throws IllegalStateException 该进路已被其他列车占用
+     */
+    public Route assignRoute(String trainId, int routeId) {
+        if (trainId == null || trainId.isBlank())
+            throw new IllegalArgumentException("trainId 不能为空");
+        if (!builtRoutes.containsKey(routeId))
+            throw new NoSuchElementException("进路未建立，无法绑定: routeId=" + routeId);
+
+        // 一路一车：检查该 route 是否已被别的 train 占
+        for (Map.Entry<String, Integer> entry : routeBindings.entrySet()) {
+            if (entry.getValue() == routeId && !entry.getKey().equals(trainId)) {
+                throw new IllegalStateException(
+                        "进路 " + routeId + " 已被列车 " + entry.getKey() + " 占用");
+            }
+        }
+        // 一车一条（覆盖）：先清该 train 的旧绑定
+        routeBindings.remove(trainId);
+        routeBindings.put(trainId, routeId);
+        return builtRoutes.get(routeId);
+    }
+
+    /**
+     * G1: 解绑列车的进路（不影响 builtRoutes 站场状态）。
+     */
+    public void unassignRoute(String trainId) {
+        routeBindings.remove(trainId);
+    }
+
+    /**
+     * G1: 返回 trainId → routeId 绑定快照（调试/前端展示）。
+     */
+    public Map<String, Integer> getRouteBindings() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(routeBindings));
     }
 
     // ═══ 查询 ═══

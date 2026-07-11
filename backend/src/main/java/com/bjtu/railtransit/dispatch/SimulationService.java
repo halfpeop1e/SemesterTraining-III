@@ -367,6 +367,10 @@ public class SimulationService {
                 train.setCurrentSegmentId(report.getCurrentSegmentId());
             }
             train.setDelaySeconds(report.getDelaySeconds());
+            // P2 安全字段灌入（协议 A6/A9/A10）
+            train.setFaultSpeedLimitKmh(report.getFaultSpeedLimitKmh());
+            train.setPositionLost(report.isPositionLost());
+            train.setIntegrityLost(report.isIntegrityLost());
             // Keep this field on the control-centre timebase for network-health
             // calculations; the raw vehicle timestamp remains available in report.
             train.setLastReportTimeSeconds(simulationTimeSeconds);
@@ -697,9 +701,13 @@ public class SimulationService {
             if ("DEPOT_WAITING".equals(following.getStatus()))
                 continue;
 
-            // 计算移动授权 (CBTC Movement Authority) — 方向感知
-            double ma = dispatchEngine.calcMovementAuthority(leading, following);
-            following.setMovementAuthority(ma);
+            // G8: 信号 runCycle 已写入权威 MA 时禁止覆盖；仅 Registry 无结果时 fallback
+            com.bjtu.railtransit.signal.domain.MovingAuthority signalMa =
+                    movementAuthorityRegistry.get(following.getTrainId());
+            if (signalMa == null) {
+                double maFallback = dispatchEngine.calcMovementAuthority(leading, following);
+                following.setMovementAuthority(maFallback);
+            }
 
             // ── HMI列车：用HOLD/EMERGENCY_RECOVERY控制间距 ──
             // HMI列车由车载仿真器自主驱动，不响应SLOW/EMERGENCY_BRAKE指令
@@ -741,7 +749,8 @@ public class SimulationService {
             }
 
             // 紧急制动判断: 后车即使立即EB也会侵入MA
-            if (dispatchEngine.needsEmergencyBrake(following, ma)) {
+            double currentMa = following.getMovementAuthority();
+            if (dispatchEngine.needsEmergencyBrake(following, currentMa)) {
                 if (!following.isEmergencyBraking()) {
                     following.setEmergencyBraking(true);
                     following.setAcceleration(-EBRAKE_KMH_PER_S);
@@ -752,7 +761,7 @@ public class SimulationService {
                     ebCmd.setReason(String.format(
                             "ATP紧急制动! 前车%s(状态:%s)位置%.0fm, MA=%.0fm, 本车%.0fm (%dkm/h)",
                             leading.getTrainId(), leading.getStatus(), leading.getPositionMeters(),
-                            ma, following.getPositionMeters(), (int) following.getSpeed()));
+                            currentMa, following.getPositionMeters(), (int) following.getSpeed()));
                     applyCommand(ebCmd);
                 }
             } else if (following.isEmergencyBraking()) {
@@ -2182,7 +2191,7 @@ public class SimulationService {
         // ── 供电分区状态 ──
         snapshot.setPowerSections(PowerSectionStatus.createDefaultSections());
 
-        // ── 移动授权列表 ──
+        // ── 移动授权列表 (G8: 优先读 Registry 权威 MA，fallback 读 runtime 字段) ──
         List<SimulationSnapshot.MovementAuthorityInfo> maList = new ArrayList<>();
         for (TrainState t : trains.values()) {
             if (!t.occupiesTrack())
@@ -2190,7 +2199,8 @@ public class SimulationService {
             SimulationSnapshot.MovementAuthorityInfo maInfo = new SimulationSnapshot.MovementAuthorityInfo();
             maInfo.setTrainId(t.getTrainId());
             maInfo.setDirection(t.getDirection());
-            maInfo.setAuthorityEndMeters(t.getMovementAuthority());
+            com.bjtu.railtransit.signal.domain.MovingAuthority regMa = movementAuthorityRegistry.get(t.getTrainId());
+            maInfo.setAuthorityEndMeters(regMa != null ? regMa.getEndOfAuthorityM() : t.getMovementAuthority());
             maInfo.setPermittedSpeedKmh(t.getMaxSpeedLimit());
             maList.add(maInfo);
         }

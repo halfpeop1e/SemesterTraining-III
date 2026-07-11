@@ -29,8 +29,19 @@ public class MaConfig {
     public double signalStopMarginM = 10.0;
     /** fail-safe 降级时允许的最大速度 km/h（取 0 = 必须停车） */
     public double degradedSpeedKmh = 0.0;
-    /** MA 有效期 s：列车上报时间戳距 now 超过该值视为过期 → 降级（仅带 now 的重载生效） */
-    public double maValiditySec = 5.0;
+    /**
+     * MA 有效期 s：列车上报时间戳距 now 超过该值视为过期 → 降级（仅带 now 的重载生效）。
+     * 对齐协议 ATP 报文时效 1.6s（D3）；旧默认 5.0 偏松。
+     */
+    public double maValiditySec = 1.6;
+
+    /**
+     * A4 载重折减系数 k（0~1）。
+     * <p>有效制动减速度 aEff = aBrake * (1 - k * load) + g * permille/1000，
+     * load=0 时 aEff=aBrake（与旧公式一致），load=1 时 aEff=aBrake*(1-k)（重载 gap 更大）。
+     * <p>默认 0.2，避免 gap 爆炸；KISS——单一系数近似质量增大对制动距离的影响。
+     */
+    public double loadFactorK = 0.2;
 
     public MaConfig() {}
 
@@ -45,7 +56,8 @@ public class MaConfig {
         c.defaultLineSpeedKmh = 80.0;
         c.signalStopMarginM = 10.0;
         c.degradedSpeedKmh = 0.0;
-        c.maValiditySec = 5.0;
+        c.maValiditySec = 1.6;
+        c.loadFactorK = 0.2;
         return c;
     }
 }
