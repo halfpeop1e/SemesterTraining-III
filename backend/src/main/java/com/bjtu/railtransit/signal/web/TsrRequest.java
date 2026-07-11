@@ -1,24 +1,12 @@
-package com.bjtu.railtransit.signal.model;
+package com.bjtu.railtransit.signal.web;
 
-public class TemporarySpeedRestriction {
-    private String id;
+/** G3: TSR 创建请求体 */
+public class TsrRequest {
     private double startM;
     private double endM;
     private double speedLimitKmh;
     private boolean active;
 
-    public TemporarySpeedRestriction() {}
-
-    public TemporarySpeedRestriction(String id, double startM, double endM, double speedLimitKmh, boolean active) {
-        this.id = id;
-        this.startM = startM;
-        this.endM = endM;
-        this.speedLimitKmh = speedLimitKmh;
-        this.active = active;
-    }
-
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
     public double getStartM() { return startM; }
     public void setStartM(double startM) { this.startM = startM; }
     public double getEndM() { return endM; }

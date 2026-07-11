@@ -11,13 +11,15 @@
 
 这份协议里**和你强相关**的是「（一）信号系统」整节（3.3.1 输入、3.3.2 输出、3.3.3 加删车）+ 各节复用的**信号机/道岔/区段编码约定**。
 你当前代码**已对齐**的是：计轴占用、道岔非定位截断、UP/DOWN 镜像、坡度制动修正、fail-safe 默认收紧、compute 接口形态。
-**必须新增/修改**的是：① 信号机实时显示状态（核心，当前是 TODO）② 每车故障限速 ③ 定位丢失/完整性丢失 ④ 方向编码统一（你是方向定义权威）⑤ 输出无效哨兵约定 ⑥ MA 有效期与协议周期对齐。
+**历史必做项（均已落地）**：① 信号机 aspect ② 故障限速 ③ 定位/完整性 ④ 方向编码 ⑤ 哨兵合同 ⑥ maValidity=1.6。另：**对接闭环 G1–G5/G8/G4 + A4 已完成**（见 handoff §12）。
 **单位换算**（cm/s↔km/h、mm↔m）按你既定契约留在边界（周/郭的胶水层）做，MA 内部坚持 km/h、m。
 
 > **落地进度（2026-07-08，TASK-10，仅本模块 scope）**：用户明确"只做我模块里跟司机台冲突的部分，scope 外不管"。
 > 已落地 ✅：**D1 方向编解码**（`Direction.fromDriverConsole` + `INVALID` + compute 兜底）、**B1 信号机显示**（新增 `SignalAspect` 枚举 + `Signal.aspect` + `eoaFromSignals` 放行逻辑，消 TODO）。
 > 限速单位契约（C2）已在《MA模块与仿真引擎对接接口说明》§11 写明 MA 出 km/h，边界打包归郭，无需改代码。
-> 其余 P0/P1 项（A6 故障限速、A9/A10 定位/完整性、B2 道岔四开、C1 哨兵、D3 有效期）属 车辆/ATP 输入或合同类，**非"司机台协议"直接冲突**，按用户边界暂不做。详见各条状态标注。
+> **阶段 E / P2（2026-07-11）已落地**：A6 故障限速、A9/A10 定位/完整性丢失、B2 道岔 FAIL 枚举、D3 maValiditySec=1.6s、C1 哨兵合同。
+> **对接闭环（同日）**：G5 Cycle 灌入 P2；G1 进路 trainId 绑定；G2 计轴 occupied；G3 TSR REST；G4 events；G8 Registry 权威 MA；**A4 loadFactor→gap**。
+> 字段由上游填入，MA 消费。对接总表：`handoff/轨道线路与信号控制-交接文档.md`。
 >
 > **TASK-11 补充（非司机台协议项，顺带记录）**：为解决多模块"列车状态表示不一致"风险，新增 `TrainStateAdapter`（段相对+m/s→绝对 m+km/h 边界转换入口）并补 `computeOne` 本车状态 fail-safe（防本车 NaN 产出 NaN EoA）。详见 [`../../handoff/数据结构复用排查.md`](../../handoff/数据结构复用排查.md) 与 [`../../backend/backend-changelog-11.md`](../../backend/backend-changelog-11.md)。
 
@@ -50,17 +52,15 @@
   4. 提供 `SignalAspect.decode(byte)` 工具，供周锦泽的联锁状态灌入。
 - **归属**：黄豪（MA 信号约束维度，纯属你 scope）。
 
-#### A6. 每车故障限速
+#### A6. 每车故障限速 —— ✅ 已落地（阶段 E）
 - **协议**：3.3.1 `故障限速`，单位 **cm/s**。⚠️ **文档自相矛盾**：列车1 写 1 字节(0~0xFF)，列车 n 写 2 字节(0~0xFFFF)——需向周/协议作者确认。
-- **MA 现状**：`TrainState` 无此字段；`maxSpeedKmh` 只取线路/TSR/道岔侧向限速。
-- **对齐动作**：`TrainState` 加 `faultSpeedLimitKmh`；在输出 `maxSpeedKmh` 处 `min(线路限速, 故障限速)`。这是第六个限速约束维度，属你 scope。
-- **归属**：黄豪（限速维度）。
+- **落地现状（2026-07-11）**：`faultSpeedLimitKmh` 已入 signal `TrainState`；compute 取 min；**G5** 已由 `SignalCycleService`/StatusReport 灌入。
+- **归属**：黄豪（限速维度）；上游填字段。
 
-#### A9 / A10. 列车定位丢失 / 完整性丢失
+#### A9 / A10. 列车定位丢失 / 完整性丢失 —— ✅ 已落地（阶段 E）
 - **协议**：ATP 应用包 `列车定位丢失`(0初始/1未丢失/2丢失)、`列车完整性状态`(完整/不完整)。
-- **MA 现状**：仅 `timestamp` 过期会收紧；无定位/完整性输入。`SignalEvent` 已有 `POSITION_LOSS` 待用。
-- **对齐动作**：`TrainState` 加 `positionLost` / `integrityLost` 布尔；为 true 时该车 MA 收紧至当前位、`event=POSITION_LOSS`（或 `DEGRADED`）。fail-safe 必做。
-- **归属**：黄豪。
+- **落地现状（2026-07-11）**：`positionLost` / `integrityLost` → `POSITION_LOSS`；**G5 已灌入** Cycle。
+- **归属**：黄豪；上游填字段。
 
 #### D1. 方向编码统一（你是方向定义权威）—— ✅ 已落地（TASK-10）
 - **协议**：方向在 4 个子系统有 **4 套编码**——信号系统 `0x55上行/0xaa下行/0xff无效`；司机台信号屏 `0上行/1下行`；视景 `+1正/-1反`；车辆 `float 方向`。且正文明确"**线路的上行/下行方向由信号系统定义**"（§4 其他，line 278）——即 MA 模块就是权威。
@@ -76,28 +76,25 @@
 
 #### A4/A5/A7. 方向之外的安全输入（载重 / 降级制动）
 - **协议**：`列车载重`(kg)、`可用牵引数量`、`可用制动数量`(0~0xFF)。
-- **MA 现状**：`requiredGap` 只用固定 `aBrakeMps2` + 坡度，不读单车载重/制动能力。
-- **对齐动作（待你拍板）**：
-  - 载重：重载→制动距离更长。fail-safe 可取最坏（按最大载重算 gap，保守）；若要真实，加 `loadKg` 参与 `a_eff` 折算。
-  - 可用制动数量：部分制动失效→有效减速度下降→gap 放大。可加 `availableBrakeFraction` 缩放 `a_eff`（保守取较小 `a_eff`）。
-  - 建议：**本期先按 fail-safe 最坏假设（不新增字段），待周提供真实字段再消费**；但需在契约里写明"MA 当前假设额定载重/全制动"。
-- **归属**：黄豪（决策 + 可能改 `requiredGap`）。
+- **A4 载重（2026-07-11）✅**：`TrainState.loadFactor`（0~1，NaN=未知→额定）；`aEff = aBrake*(1-loadFactorK*load)+g*‰/1000`，`loadFactorK` 默认 0.2；Cycle 从 runtime 灌入。
+- **A5/A7 可用牵引/制动数量**：❌ 仍无字段，YAGNI；按额定全制动。
+- **归属**：黄豪（A4 已做）；A5/A7 待字段再开。
 
-#### B2. 道岔状态枚举对齐
+#### B2. 道岔状态枚举对齐 —— ✅ 已落地（阶段 E）
 - **协议**：`0x01定位 / 0x02反位 / 0x04四开`（3.3.2）。
-- **MA 现状**：`SwitchState{NORMAL, REVERSE}`，`state!=NORMAL`→截断（四开已被"非 NORMAL"覆盖，功能 OK）。
+- **MA 现状**：`SwitchState{NORMAL, REVERSE, FAIL}`，`state!=NORMAL`→截断；`fromProtocol/toProtocol` 对齐 0x01/0x02/0x04。
 - **对齐动作**：补 `FAIL(四开)` / `UNKNOWN(null)` 显式枚举，明确 `0x01→NORMAL / 0x02→REVERSE / 0x04→FAIL`，与协议字节一一对应（避免以后误判）。
 - **归属**：黄豪（小改）。
 
-#### C1. 输出无效哨兵约定
+#### C1. 输出无效哨兵约定 —— ✅ 合同已写死（阶段 E）
 - **协议**：ATP→DMI 速度/距离字段，`0xFFFF`(16bit)/`0xFFFFFFFF`(24/32bit) 表示无效；ATP 报文时效 **1.6s**。
 - **MA 现状**：输出 `km/h`、`m`，无"无效哨兵"概念（靠 `event` 表达降级）。
 - **对齐动作（合同，非 MA 代码）**：明确——当 `event==DEGRADED/MA_EXPIRED` 时，下游向 DMI/司机台发 `0xFFFF`(速度)/`0xFFFFFFFF`(距离)。把这条写进你的接口契约 §4/§7。
 - **归属**：黄豪（定义哨兵合同）/ 郭逸晨（转换下发）。
 
-#### D3. MA 有效期与协议周期对齐
+#### D3. MA 有效期与协议周期对齐 —— ✅ 已落地（阶段 E，默认 1.6s）
 - **协议周期**：总控→信号 100ms；信号→总控 250ms；ATP 160ms；司机台 PLC/HMI 100ms；视景 100ms；车辆 UDP 20ms；ATP 时效 **1.6s**。
-- **MA 现状**：`maValiditySec = 5.0`（偏松）。
+- **MA 现状**：`maValiditySec = 1.6`（对齐 ATP 时效）。
 - **对齐动作**：建议把 `maValiditySec` 收到与这些周期/1.6s 时效同量级（例如 ≤1.6s 或略大于 tick 间隔），避免过期判据过松导致"假安全"。属 `MaConfig` 配置项，你调。
 - **归属**：黄豪。
 
@@ -141,8 +138,8 @@
 ## 5. 建议落地顺序
 
 1. **B1 信号 aspect**（P0，核心，先加字段+解码+放行逻辑）
-2. **A6 故障限速 + A9/A10 定位/完整性**（P0，加 TrainState 字段，并入输出）
+2. ~~**A6 故障限速 + A9/A10**~~ ✅ 阶段 E
 3. **D1 方向编解码**（P0，权威定义，含 0xff 容错）
-4. **B2 道岔枚举 / D3 有效期 / C1 哨兵合同**（P1）
-5. **A4/A5/A7 载重/降级制动**（P1，先最坏假设，后消费）
-6. **P2 单位/ID 约定 + 与周/郭待确认项**（合同收口）
+4. ~~**B2 / D3 / C1**~~ ✅ 阶段 E
+5. ~~**A4 载重**~~ ✅；**A5/A7** 仍 YAGNI
+6. **单位/ID 约定 + 与周/郭待确认项**（合同收口；对接见 handoff）

@@ -8,7 +8,7 @@ interface ControlPanelProps {
   selectedEntity: SelectedEntity | null;
   loading: boolean;
   onOperateSwitch: (switchId: string, position: SwitchState) => void;
-  onBuildRoute: (startSignalId: number, endSignalId: number) => void;
+  onBuildRoute: (routeId: number) => void;
   onCancelRoute: (routeId: string) => void;
   onOpenSignal: (signalId: number) => void;
   onSetTsr: (startM: number, endM: number, speedLimitKmh: number, active: boolean) => void;
@@ -35,7 +35,7 @@ export default function ControlPanel({
   const [tsrEnd, setTsrEnd] = useState<number | undefined>(undefined);
   const [tsrSpeed, setTsrSpeed] = useState<number | undefined>(40);
 
-  const switchOptions = useMemo(() => lineProfile.switches.map((s) => ({ label: `道岔 ${s.id} (${s.state || '未接入'})`, value: s.id })), [lineProfile.switches]);
+  const switchOptions = useMemo(() => lineProfile.switches.map((s) => ({ label: `道岔 ${s.id} (${s.state || '未接入'})`, value: String(s.id) })), [lineProfile.switches]);
   const signalOptions = useMemo(() => lineProfile.signals.map((s) => ({ label: `${s.name} (#${s.id})`, value: s.id })), [lineProfile.signals]);
 
   useEffect(() => {
@@ -58,7 +58,15 @@ export default function ControlPanel({
   const handleBuildRoute = () => {
     if (!startSignal || !endSignal) { message.warning('请选择始端和终端信号机'); return; }
     if (startSignal === endSignal) { message.warning('始端与终端不能相同'); return; }
-    onBuildRoute(startSignal, endSignal);
+    // 旧面板：按始终端找真 routeId
+    const hit = lineProfile.routes.find(
+      (r) => r.startSignalId === startSignal && r.endSignalId === endSignal,
+    );
+    if (!hit) {
+      message.warning('无匹配进路（请用左侧联锁操作台按 routeId 办理）');
+      return;
+    }
+    onBuildRoute(Number(hit.id));
   };
 
   const handleOpenSignal = () => {
@@ -99,7 +107,7 @@ export default function ControlPanel({
         {lineProfile.routes.length === 0 ? <div className="text-xs text-slate-600">暂无</div> : lineProfile.routes.map((r) => (
           <div key={r.id} className="flex items-center justify-between text-xs bg-slate-800/40 rounded px-2 py-1">
             <span className="text-slate-300">{r.id}</span>
-            <Button size="small" type="link" danger onClick={() => onCancelRoute(r.id)}>取消</Button>
+            <Button size="small" type="link" danger onClick={() => onCancelRoute(String(r.id))}>取消</Button>
           </div>
         ))}
       </div>

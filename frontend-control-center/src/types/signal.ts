@@ -15,7 +15,7 @@ export type SignalAspect =
   | 'RED_DARK' | 'GREEN_DARK' | 'WHITE' | 'BLUE'
   | 'RED_BROKEN' | 'GREEN_BROKEN' | 'YELLOW_BROKEN' | 'WHITE_BROKEN';
 
-export type SwitchState = 'NORMAL' | 'REVERSE';
+export type SwitchState = 'NORMAL' | 'REVERSE' | 'FAIL';
 
 export type HealthStatus = 'HEALTHY' | 'DEGRADED' | 'FAULT';
 
@@ -32,13 +32,19 @@ export interface ApiResponse<T> {
 
 // ===== 运行时数据（对应后端 signal/domain） =====
 export interface TrainState {
-  trainId: string;         // 车头里程 m
+  trainId: string;
   positionM: number;       // 车头里程 m
   speedKmh: number;
   accelerationMps2: number;
   lengthM: number;
   direction: Direction;
   timestamp: number;       // 仿真时刻 s
+  /** 故障限速 km/h；省略/undefined = 无故障限速（协议 A6） */
+  faultSpeedLimitKmh?: number;
+  /** 定位丢失（协议 A9） */
+  positionLost?: boolean;
+  /** 完整性丢失（协议 A10） */
+  integrityLost?: boolean;
 }
 
 export interface MovingAuthority {
@@ -190,9 +196,12 @@ export interface LogicalSection {
 }
 
 export interface Route {
-  id: string;
+  id: number | string;
+  name?: string;
   startSignalId: number;
   endSignalId: number;
+  axleSectionIds?: number[];
+  overlapIds?: number[];
   pathSegIds?: number[];
   built?: boolean;
   cancelled?: boolean;
@@ -234,12 +243,12 @@ export interface SwitchOperateRequest {
 }
 
 export interface RouteBuildRequest {
-  startSignalId: number;
-  endSignalId: number;
+  routeId: number;
 }
 
 export interface SignalOpenRequest {
   signalId: number;
+  aspect?: SignalAspect;
 }
 
 export interface TsrSetRequest {

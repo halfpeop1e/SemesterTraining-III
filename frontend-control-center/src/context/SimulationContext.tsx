@@ -3,6 +3,7 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
   type ReactNode,
 } from 'react';
 import { startSimulation, resetSimulation, pauseSimulation } from '../api/dispatch';
@@ -34,11 +35,10 @@ const SimulationContext = createContext<SimulationContextValue | null>(null);
 
 /**
  * 仿真运行时提升到 App 层级。
- * 数据流: 后端 @Scheduled authoritativeTick → WebSocket 推送 → useSimulationWS → context
- * 前端不驱动仿真步进，仅通过 HTTP API 控制启停/重置。
+ * 数据流: 后端 authoritativeTick → WebSocket/HTTP 轮询 → useSimulationWS → context
+ * isRunning 以快照 running 字段为权威（兼容本地 start 按钮）。
  */
 export function SimulationProvider({ children }: { children: ReactNode }) {
-  // ── WebSocket 实时快照 ──
   const ws = useSimulationWS();
 
   const [isRunning, setIsRunning] = useState(false);
@@ -46,12 +46,24 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const [speedIndex, setSpeedIndex] = useState(0);
 
+  // 后端快照带 running 时同步 UI（刷新页面/WS 重连后仍正确）
+  useEffect(() => {
+    const snap = ws.snapshot;
+    if (!snap) return;
+    if (typeof snap.running === 'boolean') {
+      setIsRunning(snap.running);
+      return;
+    }
+    if ((snap.activeTrains ?? snap.trains?.length ?? 0) > 0 && (snap.simulationTime ?? 0) > 0) {
+      setIsRunning(true);
+    }
+  }, [ws.snapshot]);
+
   const start = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       await startSimulation(3600);
-      // 初次启动后立即刷新一次确保有初始数据
       await ws.refresh();
       setIsRunning(true);
     } catch (e: any) {
@@ -66,12 +78,11 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
     try {
       await pauseSimulation();
     } catch {
-      // 暂停失败不阻塞 UI
+      // ignore
     }
   }, []);
 
   const step = useCallback(async () => {
-    // 仿真时钟由后端驱动，手动步进仅刷新快照
     setLoading(true);
     try {
       await ws.refresh();
@@ -98,9 +109,14 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
 
   const setSpeed = useCallback((i: number) => setSpeedIndex(i), []);
 
+  const effectiveRunning =
+    isRunning ||
+    ws.snapshot?.running === true ||
+    ((ws.snapshot?.activeTrains ?? 0) > 0 && (ws.snapshot?.simulationTime ?? 0) > 1);
+
   const value: SimulationContextValue = {
     snapshot: ws.snapshot,
-    isRunning,
+    isRunning: effectiveRunning,
     loading,
     error: error || ws.error,
     speedIndex,

@@ -32,17 +32,45 @@ public class TrackConstraintService {
      * 后车与本车之间需保持的安全净距（m）。
      * requiredGap = safeSeparationM + self.speedMps · t_total，
      * t_total = t_reaction + t_brake + t_safety_margin，
-     * t_brake = speedMps / a_eff，a_eff = a_brake + g·(permille/1000)（下坡 permille<0
-     * → a_eff 变小 → gap 变大）。
+     * t_brake = speedMps / a_eff。
+     *
+     * <p><b>A4 载重折减制动</b>：有效减速度 a_eff 受载重系数 load（满载率）影响：
+     * <ul>
+     *   <li>load 未知（NaN）或 &lt;0 → 按额定 aBrake 计算（与现网行为兼容，保证回归）</li>
+     *   <li>load∈[0,1] → aEff = aBrake * (1 - k * load) + g·(permille/1000)
+     *       （重载 load↑ → aEff↓ → tBrake↑ → gap↑，fail-safe 收紧）</li>
+     * </ul>
+     * 再取 max(aEff, aFloor) 兜底。k 见 {@link MaConfig#loadFactorK}。
+     *
+     * <p>坡度修正：下坡 permille&lt;0 → aEff 变小 → gap 变大（§2.4）。
      */
     public double requiredGap(TrainState self, TrainState preceding, LineProfile line) {
         double v = Units.kmhToMps(self.getSpeedKmh());
         double permille = gradientAt(line, self.getPositionM());
-        double aEff = cfg.aBrakeMps2 + G * (permille / 1000.0);
+        // A4：载重折减有效制动减速度
+        double aBrake = effectiveBrakeDecel(self.getLoadFactor());
+        double aEff = aBrake + G * (permille / 1000.0);
         aEff = Math.max(aEff, cfg.aFloorMps2);
         double tBrake = v / aEff;
         double tTotal = cfg.tReactionS + tBrake + cfg.tSafetyMarginS;
         return cfg.safeSeparationM + v * tTotal;
+    }
+
+    /**
+     * A4 载重折减：根据满载率返回有效额定制动减速度。
+     * <ul>
+     *   <li>load 未知（NaN）或 &lt;0 → 返回额定 aBrakeMps2（与旧公式一致，保证回归）</li>
+     *   <li>load∈[0,1] → aBrake * (1 - k * load)，重载减速度下降</li>
+     *   <li>load&gt;1 按 1 处理（封顶）</li>
+     * </ul>
+     */
+    public double effectiveBrakeDecel(double loadFactor) {
+        if (Double.isNaN(loadFactor) || loadFactor < 0) {
+            // 未知 → 按额定（与现网兼容）
+            return cfg.aBrakeMps2;
+        }
+        double load = Math.min(loadFactor, 1.0); // 封顶 1.0
+        return cfg.aBrakeMps2 * (1.0 - cfg.loadFactorK * load);
     }
 
     // ================= 六维约束：EoA 截断点 =================

@@ -32,6 +32,14 @@ public class StatusReport {
      */
     private Boolean authoritative;
 
+    // ── P2 安全字段（司机台协议 A6/A9/A10）──
+    /** 故障限速 km/h；NaN=无故障限速 */
+    private double faultSpeedLimitKmh = Double.NaN;
+    /** 定位丢失 → MA POSITION_LOSS */
+    private boolean positionLost;
+    /** 完整性丢失 → MA POSITION_LOSS */
+    private boolean integrityLost;
+
     /**
      * 多质点车厢级状态上报（车载系统 → 信号系统 → 中控）。
      * 每节车厢独立上报质量、载客率、车钩力、健康状态。
@@ -65,6 +73,14 @@ public class StatusReport {
 
     public List<CarStatus> getCarStatuses() { return carStatuses; }
     public void setCarStatuses(List<CarStatus> v) { this.carStatuses = v; }
+
+    // ── P2 安全字段 ──
+    public double getFaultSpeedLimitKmh() { return faultSpeedLimitKmh; }
+    public void setFaultSpeedLimitKmh(double v) { this.faultSpeedLimitKmh = v; }
+    public boolean isPositionLost() { return positionLost; }
+    public void setPositionLost(boolean v) { this.positionLost = v; }
+    public boolean isIntegrityLost() { return integrityLost; }
+    public void setIntegrityLost(boolean v) { this.integrityLost = v; }
 
     /**
      * 车厢状态上报项 —— 车载系统通过报文上报给信号系统/中控。
