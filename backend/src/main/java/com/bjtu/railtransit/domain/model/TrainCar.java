@@ -44,14 +44,14 @@ public class TrainCar {
     /** 车厢加速度 km/h/s */
     private double accelerationKmhs;
 
-    /** Davis 阻力系数 A (N/kN) */
-    private double davisA = 2.0;
+    /** Davis 阻力系数 A (N/kN) (来源: 列车仿真参数.xlsx) */
+    private double davisA = 2.067;
 
     /** Davis 阻力系数 B (N/kN/(km/h)) */
-    private double davisB = 0.03;
+    private double davisB = 0.01428;
 
     /** Davis 阻力系数 C (N/kN/(km/h)^2) */
-    private double davisC = 0.0015;
+    private double davisC = 0.000377;
 
     /** 当前坡度阻力 m/s² (坡度阻力对应减速度, 正值=阻碍) */
     private double gradeResistance;
@@ -68,8 +68,8 @@ public class TrainCar {
     /** 健康状态: NORMAL / DEGRADED / FAULTY / OFFLINE */
     private String health = "NORMAL";
 
-    /** 车厢长度 m (B型车≈19m) */
-    private double lengthMeters = 19.0;
+    /** 车厢长度 m (默认中间车长度, 来源: 列车仿真参数.xlsx M=19.4m, Tc=20.2m) */
+    private double lengthMeters = 19.4;
 
     // ═══════════════════════════════════════════════════════════════
 
@@ -82,10 +82,12 @@ public class TrainCar {
         this.curbMass = curbMass;
         this.occupiedMass = curbMass;
         this.passengerLoadRatio = 0.0;
-        // 动车单节牵引力: 4台电机×12.9kN = 51.6kN (参考中车B型车参数)
+        // 动车单节牵引力: 基于列车仿真参数.xlsx 电机转矩曲线 + GR=7.5
+        // 全车16电机, 4动车各4电机, 恒转矩区 F_total = 1042.9×16×7.5/0.46 ≈ 272kN
+        // 每节动车贡献 272/4 ≈ 68kN
         if (motored) {
-            this.maxTractiveEffortN = 4 * 12900.0;
-            this.maxElectricBrakeForceN = 4 * 12900.0 * 0.8;
+            this.maxTractiveEffortN = 68_000.0;
+            this.maxElectricBrakeForceN = 64_000.0;
         }
     }
 
