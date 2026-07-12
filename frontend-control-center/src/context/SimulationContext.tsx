@@ -54,9 +54,6 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
       setIsRunning(snap.running);
       return;
     }
-    if ((snap.activeTrains ?? snap.trains?.length ?? 0) > 0 && (snap.simulationTime ?? 0) > 0) {
-      setIsRunning(true);
-    }
   }, [ws.snapshot]);
 
   const start = useCallback(async () => {
@@ -111,8 +108,7 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
 
   const effectiveRunning =
     isRunning ||
-    ws.snapshot?.running === true ||
-    ((ws.snapshot?.activeTrains ?? 0) > 0 && (ws.snapshot?.simulationTime ?? 0) > 1);
+    (ws.snapshot?.running === true);
 
   const value: SimulationContextValue = {
     snapshot: ws.snapshot,
