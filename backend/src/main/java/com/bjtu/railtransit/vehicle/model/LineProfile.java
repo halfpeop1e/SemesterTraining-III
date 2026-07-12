@@ -68,4 +68,16 @@ public class LineProfile {
         }
         return 0.0;
     }
+
+    /**
+     * 是否存在非零坡度段（供测试校验坡度数据是否已加载）。
+     */
+    public boolean getGradientAtRangeNonZero() {
+        for (GradeSegment segment : gradeSegments) {
+            if (segment.getGradient() != 0.0) {
+                return true;
+            }
+        }
+        return false;
+    }
 }
