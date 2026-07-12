@@ -32,6 +32,8 @@ interface Props {
   onSetTsr: (startM: number, endM: number, speedLimitKmh: number, active: boolean) => void;
   onCancelTsr: (tsrId: string) => void;
   onRefresh: () => void;
+  /** top = 顶部横条布局；默认侧栏竖排 */
+  layout?: 'side' | 'top';
 }
 
 const MENUS: { id: MenuId; label: string }[] = [
@@ -65,6 +67,7 @@ export default function OperationsDock({
   onSetTsr,
   onCancelTsr,
   onRefresh,
+  layout = 'side',
 }: Props) {
   const [routeFilter, setRouteFilter] = useState('');
   const [selectedRouteId, setSelectedRouteId] = useState<number | undefined>();
@@ -153,8 +156,14 @@ export default function OperationsDock({
   }, [routeBindings]);
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-700/60 bg-slate-900/50 p-3">
-      <div className="mb-3 flex flex-wrap gap-2">
+    <section
+      className={
+        layout === 'top'
+          ? 'ops-dock-top flex max-h-[220px] min-h-0 flex-col overflow-hidden rounded-lg border border-amber-500/25 bg-slate-950/90 p-2'
+          : 'flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-700/60 bg-slate-900/50 p-3'
+      }
+    >
+      <div className="mb-2 flex flex-wrap gap-1.5">
         {MENUS.map((m) => (
           <button
             key={m.id}
@@ -162,8 +171,21 @@ export default function OperationsDock({
             onClick={() => onMenuChange(m.id)}
             className={
               activeMenu === m.id
-                ? 'rounded-xl border border-sky-400/60 bg-sky-500/15 px-3 py-1.5 text-sm text-sky-200'
-                : 'rounded-xl border border-slate-600 bg-slate-800/60 px-3 py-1.5 text-sm text-slate-400 hover:border-sky-500/40'
+                ? 'rounded-md border px-3 py-1 text-xs font-semibold'
+                : 'rounded-md border px-3 py-1 text-xs font-medium'
+            }
+            style={
+              activeMenu === m.id
+                ? {
+                    borderColor: 'rgba(212,175,55,0.55)',
+                    background: 'rgba(212,175,55,0.16)',
+                    color: '#F5E6B8',
+                  }
+                : {
+                    borderColor: 'rgba(148,163,184,0.25)',
+                    background: 'rgba(15,23,42,0.6)',
+                    color: '#94a3b8',
+                  }
             }
           >
             {m.label}
@@ -171,7 +193,13 @@ export default function OperationsDock({
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1 text-sm text-slate-300">
+      <div
+        className={
+          layout === 'top'
+            ? 'min-h-0 flex-1 overflow-y-auto pr-1 text-sm text-slate-300'
+            : 'min-h-0 flex-1 overflow-y-auto pr-1 text-sm text-slate-300'
+        }
+      >
         {activeMenu === 'route' && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-2 text-xs">

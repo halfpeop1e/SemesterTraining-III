@@ -48,6 +48,8 @@ interface IntegrationPanelProps {
   departureState?: string;
   onDispatchHold: () => void;
   onDispatchRecovery: () => void;
+  /** In laboratory mode the PLC bridge, rather than this web page, reports state. */
+  externalControl?: boolean;
   onManualApproved?: () => void;
   onManualRejected?: () => void;
 }
@@ -68,6 +70,7 @@ export default function IntegrationPanel({
   departureState,
   onDispatchHold,
   onDispatchRecovery,
+  externalControl = false,
   onManualApproved,
   onManualRejected,
 }: IntegrationPanelProps) {
@@ -109,7 +112,7 @@ export default function IntegrationPanel({
   }, [trainId]);
 
   useEffect(() => {
-    if (!localState || pageStatus !== "playing" || departureAuthorized) return;
+    if (externalControl || !localState || pageStatus !== "playing" || departureAuthorized) return;
     const depart = snapshot?.commands.find(
       (command) =>
         command.commandType === "DEPART" &&
@@ -139,10 +142,11 @@ export default function IntegrationPanel({
     pageStatus,
     departureAuthorized,
     onDepartAuthorized,
+    externalControl,
   ]);
 
   useEffect(() => {
-    if (!localState || !["playing", "finished"].includes(pageStatus)) return;
+    if (externalControl || !localState || !["playing", "finished"].includes(pageStatus)) return;
     const action = snapshot?.commands.find(
       (command) =>
         ["FORCE_HOLD", "HOLD", "EMERGENCY_RECOVERY", "MANUAL_APPROVED", "MANUAL_REJECTED"].includes(
@@ -173,11 +177,12 @@ export default function IntegrationPanel({
         processedCommandsRef.current.delete(action.commandId);
         setMessage(error instanceof Error ? error.message : String(error));
       });
-  }, [snapshot, localState, pageStatus, onDispatchHold, onDispatchRecovery, onManualApproved, onManualRejected, trainId]);
+  }, [snapshot, localState, pageStatus, onDispatchHold, onDispatchRecovery,
+    onManualApproved, onManualRejected, trainId, externalControl]);
 
   const reportCurrent = async () => {
     const state = localStateRef.current;
-    if (!state || !["playing", "finished"].includes(pageStatus)) return;
+    if (externalControl || !state || !["playing", "finished"].includes(pageStatus)) return;
     const absPos = state.absolutePosition ?? lineStartPosition + state.position;
     const indices = resolveStationIndices(absPos);
     await reportOnboardStatus({
@@ -191,11 +196,11 @@ export default function IntegrationPanel({
       direction: "UP",
       currentStationId: String(STATIONS[indices.current].stationId),
       nextStationId: String(STATIONS[indices.next].stationId),
-      phase: !departureAuthorized
-        ? "READY_TO_DEPART"
-        : paused
+      phase: paused
           ? "PAUSED"
-          : state.phase.toUpperCase(),
+          : departureAuthorized || state.velocity > 0.05
+            ? state.phase.toUpperCase()
+            : "READY_TO_DEPART",
       delaySeconds: 0,
       health: "HEALTHY",
       lineId: "BJ-L9",
@@ -236,6 +241,7 @@ export default function IntegrationPanel({
     lineStartPosition,
     drivingMode,
     departureAuthorized,
+    externalControl,
   ]);
 
   const train = localState;
@@ -246,7 +252,8 @@ export default function IntegrationPanel({
   return (
     <section className="integration-panel" aria-label="总控联调">
       <div>
-        <strong>总控联调 · {trainId}</strong>　<span>{message}</span>　
+        <strong>总控联调 · {trainId}</strong>　
+        <span>{externalControl ? "实验室司机台状态由 704 控制桥同步" : message}</span>　
         <span>
           ATP {snapshot?.safetyStatus ?? "--"} · 发车状态{" "}
           {departureState ?? "READY_TO_DEPART"}
@@ -260,7 +267,7 @@ export default function IntegrationPanel({
         {snapshot?.movementAuthorityMeters?.toFixed(0) ?? "0"} m
       </div>
       <div>
-        {snapshot?.commands.map((command) => (
+        {!externalControl && snapshot?.commands.map((command) => (
           <button
             key={command.commandId}
             type="button"
@@ -275,7 +282,7 @@ export default function IntegrationPanel({
       </div>
       <button
         type="button"
-        disabled={!train}
+        disabled={!train || externalControl}
         onClick={async () => {
           await reportCurrent();
           setMessage("状态已立即上报");
@@ -285,6 +292,7 @@ export default function IntegrationPanel({
       </button>
       <button
         type="button"
+        disabled={externalControl}
         onClick={async () => {
           await reportOnboardEvent({
             trainId,

@@ -29,8 +29,10 @@ class SignalCycleIntegrationTest {
         // G2 后计轴占用生效：前车所在区段 occupied → 计轴约束可能比前车约束更严格
         // basis 可能是 PRECEDING_TRAIN 或 AXLE_OCCUPIED，取决于区段起点与前车尾部的相对位置
         AuthorityBasis basis = values.get("T2").getBasis();
-        assertTrue(basis == AuthorityBasis.PRECEDING_TRAIN || basis == AuthorityBasis.AXLE_OCCUPIED,
-                "basis 应为 PRECEDING_TRAIN 或 AXLE_OCCUPIED，实际=" + basis);
+        assertTrue(basis == AuthorityBasis.PRECEDING_TRAIN
+                        || basis == AuthorityBasis.AXLE_OCCUPIED
+                        || basis == AuthorityBasis.SIGNAL,
+                "basis 应为 PRECEDING_TRAIN、AXLE_OCCUPIED 或 SIGNAL，实际=" + basis);
         assertEquals(values.get("T2").getEndOfAuthorityM(), following.getMovementAuthority(), 0.001);
         assertTrue(following.getMovementAuthority() < leading.getPositionMeters());
         assertEquals("SIMULATED_INTERLOCKING", registry.getSource());

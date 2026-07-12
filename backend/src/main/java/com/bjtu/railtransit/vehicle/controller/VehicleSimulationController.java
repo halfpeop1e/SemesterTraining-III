@@ -225,7 +225,12 @@ public class VehicleSimulationController {
                                             SimulationResult result, DrivingMode mode) {
         if (protocol704VehicleControlBridge != null && request != null
                 && request.getTrainId() != null && !request.getTrainId().isBlank()) {
-            protocol704VehicleControlBridge.registerSimulation(request.getTrainId(), fromId, toId, result, mode, false);
+            if (request.isHardwareControlEnabled()) {
+                protocol704VehicleControlBridge.registerSimulation(
+                        request.getTrainId(), fromId, toId, result, mode, false);
+            } else {
+                protocol704VehicleControlBridge.unregisterSimulation(request.getTrainId());
+            }
         }
     }
 
@@ -252,12 +257,8 @@ public class VehicleSimulationController {
         String command = request.getControlCommand() != null ? request.getControlCommand().getCommand() : null;
 
         if (protocol704VehicleControlBridge != null && request.getTrainId() != null
-                && protocol704VehicleControlBridge.isPlcControlOwner(request.getTrainId())
-                && request.getControlCommand() != null
-                && !"emergency_brake".equals(command)
-                && !"atp_emergency_brake".equals(command)
-                && !"reset_emergency".equals(command)) {
-            return ApiResponse.error("PLC_704_LOCAL_V1 已拥有人工控制权；网页普通手柄已拒绝");
+                && protocol704VehicleControlBridge.isLaboratoryControlEnabled(request.getTrainId())) {
+            return ApiResponse.error("该列车已启用实验室司机台控制；网页驾驶命令已拒绝");
         }
 
         // Bug#4: set_manual during active ATO session requires control-center approval.

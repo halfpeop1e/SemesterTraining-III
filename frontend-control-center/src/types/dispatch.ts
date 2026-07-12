@@ -11,6 +11,7 @@ export interface TrainState {
   trainNumber: string;      // 正式车次号 (如 90101)
   direction: 'UP' | 'DOWN'; // 运行方向
   routePattern: string;     // 交路模式 FULL | SHORT_N | SHORT_S
+  headLinkId?: number;      // 车头 LK_ID（司机台/视景联调标识）
   operationLevel: string;   // 运行等级 NORMAL | ENERGY_SAVE | EXPRESS | SLOW
   skipNextStation: boolean; // 下一站甩站通过
   turnbackCount: number;    // 已完成折返次数

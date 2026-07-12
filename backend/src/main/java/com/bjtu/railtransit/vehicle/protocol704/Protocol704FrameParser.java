@@ -126,8 +126,8 @@ public class Protocol704FrameParser {
 
         int speedWord = readUInt16LE(data, 26);
         fields.put("plc_speed_raw_word", speedWord);
-        fields.put("speed_unit_note", "PLC speed field at byte26-27; unit TBD on-site (possibly 0.1km/h or raw PLC unit; NOT cm/s per 704 signal system spec)");
-        note.append("plc_speed_raw=").append(speedWord).append(" (unit TBD); ");
+        fields.put("speed_unit_note", "PLC speed field at byte26-27; documented as an upper-computer speed echo, but the unit and PLC-output acceptance are not verified");
+        note.append("plc_speed_raw=").append(speedWord).append(" (unit/echo behavior unverified); ");
 
         int byte28 = data[28] & 0xFF;
         boolean ebButtonLocked = (byte28 & 0x01) != 0;

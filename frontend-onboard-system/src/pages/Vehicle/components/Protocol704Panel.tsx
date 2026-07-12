@@ -12,10 +12,17 @@ import type { SimulationControlRequest, SimulationResult, TrainState } from '../
 
 interface Protocol704PanelProps {
   trainId: string;
+  enabled: boolean;
   onError: (message: string) => void;
   /** 命令执行回调（commandId 去重后只触发一次）。
    *  result 非空时包含完整 EB 制动轨迹，前端拼接到主 result.states 后播放。 */
-  onExecutedState?: (state: TrainState, mode: string, latched: boolean, result?: SimulationResult) => void;
+  onExecutedState?: (
+    state: TrainState,
+    mode: string,
+    departureState: string | undefined,
+    latched: boolean,
+    result?: SimulationResult,
+  ) => void;
   /** 获取当前 ATO 播放状态，测试帧发送前同步到 Bridge，使 EB 从真实当前位置开始。 */
   getCurrentState?: () => SimulationControlRequest | null;
 }
@@ -27,6 +34,7 @@ function formatTime(timestamp?: number) {
 
 export default function Protocol704Panel({
   trainId,
+  enabled,
   onError,
   onExecutedState,
   getCurrentState,
@@ -58,10 +66,11 @@ export default function Protocol704Panel({
         // 新 commandId：触发一次回调
         lastProcessedCommandIdRef.current = cmdId;
         onExecutedState?.(
-          lifecycle.executedState as TrainState,
-          lifecycle.resultMode ?? next.realtimeVehicleState?.mode ?? 'UNKNOWN',
-          latched,
-          lifecycle.executedResult as SimulationResult | undefined,
+           lifecycle.executedState as TrainState,
+           lifecycle.resultMode ?? next.realtimeVehicleState?.mode ?? 'UNKNOWN',
+           lifecycle.departureState,
+           latched,
+           lifecycle.executedResult as SimulationResult | undefined,
         );
       }
       // 同 commandId 重复轮询：不触发（去重核心）
@@ -71,6 +80,7 @@ export default function Protocol704Panel({
   };
 
   const refresh = async () => {
+    if (!enabled) return;
     try {
       const next = await getProtocol704Status(trainId);
       setStatus(next);
@@ -83,31 +93,38 @@ export default function Protocol704Panel({
   };
 
   useEffect(() => {
-    // trainId 切换时重置去重状态
+    if (!enabled) {
+      setPolling(false);
+      setStatus(null);
+      setExpanded(false);
+      firstRefreshRef.current = true;
+      lastProcessedCommandIdRef.current = null;
+      return undefined;
+    }
     firstRefreshRef.current = true;
     lastProcessedCommandIdRef.current = null;
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trainId]);
+  }, [trainId, enabled]);
 
   useEffect(() => {
-    if (!polling) return undefined;
+    if (!enabled || !polling) return undefined;
     const timerId = window.setInterval(() => {
       void refresh();
     }, 500);
     return () => window.clearInterval(timerId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polling, trainId]);
+  }, [enabled, polling, trainId]);
 
   const portStatuses = useMemo(
     () => Object.values(status?.portStatuses ?? {}),
     [status?.portStatuses],
   );
   const connected = status?.connected ?? false;
+  const simulationReady = status?.simulationReady ?? false;
   const lastMappedCommand = status?.lastMappedCommand;
   const realtimeState = status?.realtimeVehicleState;
 
   const handleConnect = async () => {
+    if (!enabled) return;
     try {
       await connectProtocol704(trainId);
       setPolling(true);
@@ -119,6 +136,7 @@ export default function Protocol704Panel({
   };
 
   const handleDisconnect = async () => {
+    if (!enabled) return;
     try {
       await disconnectProtocol704(trainId);
       setPolling(false);
@@ -129,6 +147,7 @@ export default function Protocol704Panel({
   };
 
   const handleReset = async () => {
+    if (!enabled) return;
     try {
       await resetProtocol704(trainId);
       setPolling(false);
@@ -139,6 +158,7 @@ export default function Protocol704Panel({
   };
 
   const handleTestFrame = async (type: string) => {
+    if (!enabled) return;
     setTestFrameLoading(type);
     try {
       // 测试帧发送前，把当前 ATO 播放状态同步到 Bridge，使 EB 从真实当前位置开始制动。
@@ -166,7 +186,10 @@ export default function Protocol704Panel({
   };
 
   return (
-    <section className="vehicle-704-panel" aria-label={`${trainId} 704协议状态`}>
+    <section
+      className={`vehicle-704-panel ${enabled ? '' : 'is-disabled'}`}
+      aria-label={`${trainId} 704协议状态`}
+    >
       <div
         className="vehicle-704-panel__header"
       >
@@ -174,19 +197,30 @@ export default function Protocol704Panel({
           <strong>704司机台 · {trainId}</strong>
           <span
             className={`vehicle-704-badge ${
-              connected
+                !enabled
+                  ? 'vehicle-704-badge--disconnected'
+                  : connected
                 ? 'vehicle-704-badge--connected'
                 : polling
                   ? 'vehicle-704-badge--connecting'
                   : 'vehicle-704-badge--disconnected'
             }`}
           >
-            {connected ? '已连接' : polling ? '连接中' : '未连接'}
-          </span>
-          <span className="vehicle-704-target">
-            {status?.host ?? '192.168.100.123'}:
-            {portStatuses.map((port) => port.port).join('/') || '8001/8002/8003'}
-          </span>
+              {!enabled ? '设备模式未启用' : connected ? '已连接' : polling ? '连接中' : '未连接'}
+            </span>
+            {enabled ? (
+              <>
+                <span className="vehicle-704-target">
+                  {status?.host ?? '192.168.100.123'}:
+                  {portStatuses.map((port) => port.port).join('/') || '8001/8002/8003'}
+                </span>
+                <span className={`vehicle-704-readiness ${simulationReady ? 'vehicle-704-readiness--ready' : 'vehicle-704-readiness--pending'}`}>
+                  {simulationReady ? '仿真已准备' : '仿真未准备'}
+                </span>
+              </>
+            ) : (
+              <span className="vehicle-704-mode-note">当前由软件仿真控制，不会连接 PLC</span>
+            )}
           {!expanded && lastMappedCommand && (
             <span className="vehicle-704-last-command">
               最近命令 {lastMappedCommand.command}
@@ -200,7 +234,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-btn"
-            disabled={polling}
+            disabled={!enabled || polling}
             onClick={() => void handleConnect()}
           >
             连接
@@ -208,7 +242,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-btn"
-            disabled={!polling}
+            disabled={!enabled || !polling}
             onClick={() => void handleDisconnect()}
           >
             断开
@@ -216,6 +250,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-btn"
+            disabled={!enabled}
             onClick={() => void handleReset()}
           >
             重置
@@ -223,6 +258,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-expand-btn"
+            disabled={!enabled}
             aria-label={expanded ? '收起704协议详情' : '展开704协议详情'}
             onClick={() => setExpanded((value) => !value)}
           >
@@ -231,8 +267,16 @@ export default function Protocol704Panel({
         </div>
       </div>
 
-      {expanded && (
+      {enabled && expanded && (
         <div className="vehicle-704-panel__body">
+          <div className="vehicle-704-section">
+            <div className="vehicle-704-section__title">联调前置条件</div>
+            <div className="vehicle-704-preflight">
+              <strong>{simulationReady ? '当前列车可接收 PLC 控制' : '当前列车尚未准备好'}</strong>
+              <span>{status?.simulationReadiness ?? '正在检查仿真状态'}</span>
+            </div>
+          </div>
+
           <div className="vehicle-704-section">
             <div className="vehicle-704-section__title">端口状态</div>
             <div className="vehicle-704-port-grid">
@@ -283,7 +327,7 @@ export default function Protocol704Panel({
                   key={type}
                   type="button"
                   className={`vehicle-704-test-btn vehicle-704-test-btn--${type}`}
-                  disabled={testFrameLoading !== null}
+                  disabled={!enabled || testFrameLoading !== null}
                   onClick={() => void handleTestFrame(type)}
                 >
                   {testFrameLoading === type ? '发送中...' : label}

@@ -9,11 +9,10 @@ import {
   callVehicleControl,
   getAllSidingStatuses,
   reportOnboardEvent,
-  reportOnboardStatus,
   resetVehicleSimulation,
   runVehicleSimulation,
 } from "../../api/vehicle";
-import { disconnectProtocol704 } from "../../api/protocol704";
+import { disconnectProtocol704, resetProtocol704 } from "../../api/protocol704";
 import type {
   DrivingMode,
   SafetyEvent,
@@ -35,6 +34,7 @@ const DEMO_SPEED_LIMIT_FALLBACK_MS = 20;
 const SPEED_MULTIPLIER_OPTIONS = [0.5, 1, 2, 4, 8] as const;
 type SpeedMultiplier = (typeof SPEED_MULTIPLIER_OPTIONS)[number];
 type PageStatus = "idle" | "loading" | "playing" | "finished" | "error";
+type ControlSourceMode = "SIMULATION" | "LAB_DRIVER_DESK";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -58,6 +58,7 @@ interface InstanceState {
   fromStationId: number;
   toStationId: number;
   drivingMode: DrivingMode;
+  controlSourceMode: ControlSourceMode;
   allSafetyEvents: SafetyEvent[];
   handleResetToken: number;
   /** useRef 等效保持引用 (不触发重渲染) */
@@ -98,6 +99,7 @@ function createInstance(trainId: string): InstanceState {
     fromStationId: 1,
     toStationId: 2,
     drivingMode: "ato",
+    controlSourceMode: "SIMULATION",
     allSafetyEvents: [],
     handleResetToken: 0,
     stateRef: null,
@@ -354,6 +356,7 @@ function Vehicle() {
     instances.forEach((inst, trainId) => {
       const shouldRun =
         inst.status === "playing" &&
+        inst.controlSourceMode === "SIMULATION" &&
         !inst.isPaused &&
         inst.result &&
         inst.result.states.length > 0;
@@ -406,6 +409,7 @@ function Vehicle() {
           trainId,
           fromStationId: inst.fromStationId,
           toStationId: inst.toStationId,
+          hardwareControlEnabled: inst.controlSourceMode === "LAB_DRIVER_DESK",
         });
         if (!simulationResult.states || simulationResult.states.length === 0) {
           throw new Error("后端返回的仿真结果不包含任何 states 数据");
@@ -420,8 +424,11 @@ function Vehicle() {
             })),
           },
           allSafetyEvents: simulationResult.safetyEvents ?? [],
+          // A physical desk owns the clock. Keep the prepared train at its
+          // start state until a valid PLC frame advances it.
           status: "playing",
           frameIndex: 0,
+          isPaused: cur.controlSourceMode === "LAB_DRIVER_DESK",
         }));
       } catch (err) {
         updateInstance(trainId, (cur) => ({
@@ -568,6 +575,7 @@ function Vehicle() {
 
   const handleReset = useCallback(
     (trainId: string) => {
+      void resetProtocol704(trainId).catch(() => undefined);
       const refs = instanceRefs.current.get(trainId);
       const lineStart = refs?.resultRef?.summary?.lineStartPosition ?? 0;
       const positionMeters = refs?.stateRef
@@ -588,30 +596,12 @@ function Vehicle() {
           departureAuthorized: false,
           speedMultiplier: 1,
           drivingMode: "ato",
+          controlSourceMode: "SIMULATION",
           allSafetyEvents: [],
           handleResetToken: cur.handleResetToken + 1,
         };
       });
       void resetVehicleSimulation(trainId, positionMeters).catch(() => undefined);
-      void reportOnboardStatus({
-        trainId,
-        deviceId: `HMI-${trainId}-reset`,
-        sourceType: "ONBOARD_SOFTWARE",
-        timestampSeconds: 0,
-        positionMeters,
-        speedKmh: 0,
-        accelerationMps2: 0,
-        direction: "UP",
-        currentStationId: String(refs?.fromStationIdRef ?? 1),
-        nextStationId: String(refs?.toStationIdRef ?? 2),
-        phase: "READY_TO_DEPART",
-        delaySeconds: 0,
-        health: "HEALTHY",
-        lineId: "BJ-L9",
-        operatingMode: "ATO",
-        paused: true,
-        authoritative: true,
-      }).catch(() => undefined);
       void reportOnboardEvent({
         trainId,
         eventType: "SIMULATION_RESET",
@@ -625,9 +615,31 @@ function Vehicle() {
     [updateInstance],
   );
 
+  const setControlSourceMode = useCallback(
+    (trainId: string, mode: ControlSourceMode) => {
+      const current = instances.get(trainId);
+      if (!current || current.controlSourceMode === mode) return;
+      if (mode === "SIMULATION") {
+        // Stop sockets and erase the server-side PLC context before web controls
+        // become available again.
+        void resetProtocol704(trainId).catch(() => undefined);
+      }
+      updateInstance(trainId, (cur) => ({
+        ...cur,
+        controlSourceMode: mode,
+        isPaused: mode === "LAB_DRIVER_DESK" ? true : cur.isPaused,
+        departureAuthorized: mode === "LAB_DRIVER_DESK" ? false : cur.departureAuthorized,
+        handleResetToken: cur.handleResetToken + 1,
+      }));
+      setDisplayState((state) => state?.trainId === trainId ? null : state);
+    },
+    [instances, updateInstance],
+  );
+
   const handleTogglePause = useCallback(
     (trainId: string) => {
       updateInstance(trainId, (cur) => {
+        if (cur.controlSourceMode === "LAB_DRIVER_DESK") return cur;
         if (cur.status !== "playing" || !cur.departureAuthorized) return cur;
         return { ...cur, isPaused: !cur.isPaused };
       });
@@ -800,6 +812,7 @@ function Vehicle() {
   const isLoading = ai.status === "loading";
   const isPlaying = ai.status === "playing";
   const canReset = ai.result !== null || ai.status === "error";
+  const labDriverDeskMode = ai.controlSourceMode === "LAB_DRIVER_DESK";
   const toStationOptions = STATIONS.filter(
     (s) => s.stationId > ai.fromStationId,
   );
@@ -1014,6 +1027,26 @@ function Vehicle() {
             </select>
           </div>
 
+          <div className="vehicle-control-mode" role="group" aria-label="控制来源">
+            <span>控制来源</span>
+            <button
+              type="button"
+              className={!labDriverDeskMode ? "is-active" : ""}
+              disabled={isLoading || isPlaying}
+              onClick={() => setControlSourceMode(activeTrainId, "SIMULATION")}
+            >
+              软件仿真
+            </button>
+            <button
+              type="button"
+              className={labDriverDeskMode ? "is-active" : ""}
+              disabled={isLoading || isPlaying}
+              onClick={() => setControlSourceMode(activeTrainId, "LAB_DRIVER_DESK")}
+            >
+              实验室司机台
+            </button>
+          </div>
+
           <button
             className="vehicle-start-btn"
             onClick={() => handleStart(activeTrainId)}
@@ -1029,7 +1062,7 @@ function Vehicle() {
           <button
             className="vehicle-secondary-btn"
             onClick={() => handleTogglePause(activeTrainId)}
-            disabled={!isPlaying || !ai.departureAuthorized}
+            disabled={labDriverDeskMode || !isPlaying || !ai.departureAuthorized}
             type="button"
           >
             {!ai.departureAuthorized && isPlaying
@@ -1059,7 +1092,7 @@ function Vehicle() {
                     speedMultiplier: m,
                   }))
                 }
-                disabled={!ai.result && ai.status !== "playing"}
+                disabled={labDriverDeskMode || (!ai.result && ai.status !== "playing")}
                 aria-pressed={ai.speedMultiplier === m}
               >
                 {m}x
@@ -1091,11 +1124,11 @@ function Vehicle() {
             </span>
           )}
 
-          {isPlaying && currentState && (
+          {isPlaying && viewState && (
             <span className="vehicle-status-text">
-              {ai.isPaused ? "已暂停" : "播放中"} · {ai.frameIndex + 1}/
-              {ai.result?.states.length}
-              {" · "}t={currentState.time.toFixed(1)}s{" · "}模式:
+              {labDriverDeskMode ? "司机台同步" : ai.isPaused ? "已暂停" : "播放中"}
+              {!labDriverDeskMode && <> · {ai.frameIndex + 1}/{ai.result?.states.length}</>}
+              {" · "}t={viewState.time.toFixed(1)}s{" · "}模式:
               {ai.drivingMode.toUpperCase()}
             </span>
           )}
@@ -1109,9 +1142,11 @@ function Vehicle() {
       {trainIds.map((tid) => {
         const inst = instances.get(tid)!;
         const instState: TrainState | null =
-          inst.result && inst.result.states.length > 0
-            ? inst.result.states[inst.frameIndex]
-            : null;
+          inst.controlSourceMode === "LAB_DRIVER_DESK" && displayState?.trainId === tid
+            ? displayState
+            : inst.result && inst.result.states.length > 0
+              ? inst.result.states[inst.frameIndex]
+              : null;
         const instFromName =
           inst.result?.summary?.fromStationName ??
           STATIONS.find((s) => s.stationId === inst.fromStationId)
@@ -1149,6 +1184,7 @@ function Vehicle() {
               onDepartAuthorized={(state) => handleDepartAuthorized(tid, state)}
               onDispatchHold={() => handleDispatchHold(tid)}
               onDispatchRecovery={() => handleDispatchRecovery(tid)}
+              externalControl={inst.controlSourceMode === "LAB_DRIVER_DESK"}
               onManualApproved={() => {
                 updateInstance(tid, (cur) => ({
                   ...cur,
@@ -1170,6 +1206,7 @@ function Vehicle() {
         >
           <Protocol704Panel
             trainId={tid}
+            enabled={instances.get(tid)?.controlSourceMode === "LAB_DRIVER_DESK"}
             onError={(message) => {
               updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
             }}
@@ -1185,11 +1222,18 @@ function Vehicle() {
                 departureConfirmed: instances.get(tid)?.departureAuthorized ?? false,
               };
             }}
-            onExecutedState={(state, mode, latched, result) => {
+            onExecutedState={(state, mode, departureState, latched, result) => {
+              setDisplayState({ ...state, trainId: tid });
               if (mode === "MANUAL" || mode === "EMERGENCY" || mode === "ATO") {
                 updateInstance(tid, (cur) => ({
                   ...cur,
                   drivingMode: mode.toLowerCase() as DrivingMode,
+                  // PLC frames are the only physical clock in laboratory mode.
+                  // Keep the local trajectory paused even after departure is granted.
+                  isPaused: cur.controlSourceMode === "LAB_DRIVER_DESK"
+                    ? true
+                    : departureState !== "RUNNING",
+                  departureAuthorized: departureState === "RUNNING",
                 }));
               }
 
@@ -1274,7 +1318,7 @@ function Vehicle() {
           speedLimit={speedLimitValue}
           stopResult={ai.result?.stopResult ?? null}
           safetyEventCount={ai.allSafetyEvents.length}
-          isPaused={ai.isPaused}
+          isPaused={labDriverDeskMode ? false : ai.isPaused}
           stationStops={ai.result?.stationStops}
           externalDriveMode={ai.drivingMode}
           onRequestManual={() => handleRequestManual(activeTrainId)}
@@ -1290,6 +1334,8 @@ function Vehicle() {
           onResetEmergency={() => handleResetEmergency(activeTrainId)}
           canResetEmergency={canResetEmergency}
           handleResetToken={ai.handleResetToken}
+          controlLocked={labDriverDeskMode}
+          controlLockMessage="实验室司机台控制已启用，网页驾驶台只显示状态"
         />
         <div className="vehicle-right-panel">
           <div className="vehicle-right-tabs">

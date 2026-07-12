@@ -3,7 +3,6 @@ package com.bjtu.railtransit.signal.service;
 import com.bjtu.railtransit.domain.model.TrainState;
 import com.bjtu.railtransit.signal.domain.Direction;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
-import com.bjtu.railtransit.signal.domain.SignalAspect;
 import com.bjtu.railtransit.signal.domain.SignalEvent;
 import com.bjtu.railtransit.signal.model.AxleCounterSection;
 import com.bjtu.railtransit.signal.model.LineProfile;
@@ -49,14 +48,9 @@ public class SignalCycleService {
         // 必须与联锁/GET /line 共用同一 LineProfile，否则扳道/设灯不影响 MA 周期
         this.lineProfile = loader.getLineProfile();
         this.simulatedInterlocking = simulatedInterlocking;
-        if (simulatedInterlocking) {
-            // 实验室默认：未人工干预前信号绿灯；之后以联锁操作为准
-            this.lineProfile.getSignals().forEach(s -> {
-                if (s.getAspect() == null) {
-                    s.setAspect(SignalAspect.GREEN);
-                }
-            });
-        }
+        // A missing aspect is intentionally left unset. Both the frontend and the
+        // interlocking API treat it as RED, which is the fail-safe protective state.
+        // GREEN is set only by a built route or an explicit signal command.
     }
 
     public synchronized Map<String, MovingAuthority> runCycle(

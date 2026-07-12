@@ -68,6 +68,7 @@ export interface Protocol704CommandLifecycle {
   status: 'RECEIVED' | 'PARSED' | 'VALIDATED' | 'EXECUTED' | 'REJECTED' | 'FAILED';
   rejectionReason?: string;
   executionError?: string;
+  departureState?: string;
   executedState?: {
     time: number; position: number; velocity: number; acceleration: number; phase: string; trainId: string;
     absolutePosition?: number;
@@ -119,4 +120,7 @@ export interface Protocol704Status {
   lastValidFrameTime?: number;
   lastCommandLifecycle?: Protocol704CommandLifecycle;
   activeBinding?: string;
+  simulationReady?: boolean;
+  simulationReadiness?: string;
+  simulationContextUpdatedAt?: number;
 }

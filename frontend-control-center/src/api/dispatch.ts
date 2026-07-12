@@ -5,6 +5,7 @@ const API_BASE = '/api';
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
+    cache: 'no-store',
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
@@ -175,3 +176,26 @@ export interface PopulationDensityPoint {
 
 export const getPopulationDensity = () =>
   request<PopulationDensityPoint[]>('/dispatch/population-density');
+
+export interface AddDispatchTrainRequest {
+  trainId: string;
+  headLinkId: number;
+  direction: 'UP' | 'DOWN';
+  stationId: number;
+  routePattern: 'FULL' | 'SHORT_N' | 'SHORT_S' | 'EXPRESS';
+}
+
+export const addDispatchTrain = (payload: AddDispatchTrainRequest) =>
+  request<unknown>('/dispatch/trains', { method: 'POST', body: JSON.stringify(payload) });
+
+export const removeDispatchTrain = (trainId: string) =>
+  request<unknown>(`/dispatch/trains/${encodeURIComponent(trainId)}`, { method: 'DELETE' });
+
+export const clearDispatchTrains = () =>
+  request<{ removed: number }>('/dispatch/trains', { method: 'DELETE' });
+
+export const setDispatchTrainRoutePattern = (trainId: string, routePattern: string) =>
+  request<unknown>(`/dispatch/trains/${encodeURIComponent(trainId)}/route-pattern`, {
+    method: 'POST',
+    body: JSON.stringify({ routePattern }),
+  });

@@ -24,6 +24,11 @@ public class Protocol704Status {
     private long lastValidFrameTime;
     private Protocol704CommandLifecycle lastCommandLifecycle;
     private String activeBinding;
+    private boolean simulationReady;
+    private String simulationReadiness;
+    private long simulationContextUpdatedAt;
+    private boolean staleInputFailSafeTriggered;
+    private long staleInputFailSafeTime;
     private String lastOutputFrame;
     private String lastOutputHmi;
     private boolean outputEnabled;
@@ -74,6 +79,18 @@ public class Protocol704Status {
     public void setLastCommandLifecycle(Protocol704CommandLifecycle lastCommandLifecycle) { this.lastCommandLifecycle = lastCommandLifecycle; }
     public String getActiveBinding() { return activeBinding; }
     public void setActiveBinding(String activeBinding) { this.activeBinding = activeBinding; }
+    public boolean isSimulationReady() { return simulationReady; }
+    public void setSimulationReady(boolean simulationReady) { this.simulationReady = simulationReady; }
+    public String getSimulationReadiness() { return simulationReadiness; }
+    public void setSimulationReadiness(String simulationReadiness) { this.simulationReadiness = simulationReadiness; }
+    public long getSimulationContextUpdatedAt() { return simulationContextUpdatedAt; }
+    public void setSimulationContextUpdatedAt(long simulationContextUpdatedAt) {
+        this.simulationContextUpdatedAt = simulationContextUpdatedAt;
+    }
+    public boolean isStaleInputFailSafeTriggered() { return staleInputFailSafeTriggered; }
+    public void setStaleInputFailSafeTriggered(boolean value) { this.staleInputFailSafeTriggered = value; }
+    public long getStaleInputFailSafeTime() { return staleInputFailSafeTime; }
+    public void setStaleInputFailSafeTime(long value) { this.staleInputFailSafeTime = value; }
     public String getLastOutputFrame() { return lastOutputFrame; }
     public void setLastOutputFrame(String lastOutputFrame) { this.lastOutputFrame = lastOutputFrame; }
     public String getLastOutputHmi() { return lastOutputHmi; }

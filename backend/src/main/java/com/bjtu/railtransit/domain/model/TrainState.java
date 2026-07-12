@@ -64,6 +64,7 @@ public class TrainState {
     private String tripId;              // 车次行程ID (区分同一列车不同趟次)
     private String lineId = "BJ-L9";
     private String routeId = "L9-FULL";
+    private int headLinkId;              // 司机台/视景联调使用的车头 LK_ID
     private String currentSegmentId;    // 当前所在轨道区段ID
     private double trainLengthMeters;   // 列车总长度 m (6B=114m)
     private double loadFactor;          // 满载率 0.0~1.0
@@ -231,6 +232,8 @@ public class TrainState {
     public void setLineId(String v) { this.lineId = v; }
     public String getRouteId() { return routeId; }
     public void setRouteId(String v) { this.routeId = v; }
+    public int getHeadLinkId() { return headLinkId; }
+    public void setHeadLinkId(int v) { this.headLinkId = v; }
     public String getCurrentStationId() { return String.valueOf(currentStationIndex + 1); }
     public String getNextStationId() { return String.valueOf(nextStationIndex + 1); }
     public double getSpeedKmh() { return speed; }
