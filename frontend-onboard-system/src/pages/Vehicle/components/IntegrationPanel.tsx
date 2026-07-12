@@ -6,9 +6,29 @@ import {
   reportOnboardEvent,
   reportOnboardStatus,
   type OnboardSnapshot,
-  type TimetableEntry,
 } from "../../../api/vehicle";
 import type { DrivingMode, TrainState } from "../../../types/vehicle";
+import { STATIONS } from "../data/lineMap";
+
+/** 根据绝对位置(米)推算当前站和下一站的索引 (0-based) */
+function resolveStationIndices(absPosM: number): {
+  current: number;
+  next: number;
+} {
+  let current = 0;
+  let next = 1;
+  const count = STATIONS.length;
+  for (let i = 0; i < count; i++) {
+    const stationPos = (STATIONS[i].km ?? 0) * 1000;
+    if (stationPos <= absPosM) {
+      current = i;
+      next = Math.min(i + 1, count - 1);
+    } else {
+      break;
+    }
+  }
+  return { current, next };
+}
 
 interface IntegrationPanelProps {
   trainId?: string;
@@ -27,11 +47,6 @@ interface IntegrationPanelProps {
   onDispatchHold: () => void;
   onDispatchRecovery: () => void;
 }
-
-const fmtOnboardTime = (s: number) =>
-  [Math.floor(s / 3600), Math.floor((s % 3600) / 60), Math.floor(s % 60)]
-    .map((n) => String(n).padStart(2, "0"))
-    .join(":");
 
 export default function IntegrationPanel({
   trainId = "T1",
@@ -141,18 +156,19 @@ export default function IntegrationPanel({
   const reportCurrent = async () => {
     const state = localStateRef.current;
     if (!state || !["playing", "finished"].includes(pageStatus)) return;
+    const absPos = state.absolutePosition ?? lineStartPosition + state.position;
+    const indices = resolveStationIndices(absPos);
     await reportOnboardStatus({
       trainId,
       deviceId: deviceIdRef.current,
       sourceType: "ONBOARD_SOFTWARE",
       timestampSeconds: state.time,
-      positionMeters:
-        state.absolutePosition ?? lineStartPosition + state.position,
+      positionMeters: absPos,
       speedKmh: state.velocity * 3.6,
       accelerationMps2: state.acceleration,
       direction: "UP",
-      currentStationId: String(fromStationId),
-      nextStationId: String(toStationId),
+      currentStationId: String(STATIONS[indices.current].stationId),
+      nextStationId: String(STATIONS[indices.next].stationId),
       phase: !departureAuthorized
         ? "READY_TO_DEPART"
         : paused
@@ -209,7 +225,10 @@ export default function IntegrationPanel({
     <section className="integration-panel" aria-label="总控联调">
       <div>
         <strong>总控联调 · {trainId}</strong>　<span>{message}</span>　
-        <span>ATP {snapshot?.safetyStatus ?? "--"} · 发车状态 {departureState ?? "READY_TO_DEPART"}</span>
+        <span>
+          ATP {snapshot?.safetyStatus ?? "--"} · 发车状态{" "}
+          {departureState ?? "READY_TO_DEPART"}
+        </span>
       </div>
       <div>
         线路 {fromStationName} → {toStationName} · 速度{" "}
@@ -259,35 +278,6 @@ export default function IntegrationPanel({
       >
         模拟事件
       </button>
-
-      {/* 时刻表 */}
-      {snapshot?.timetable && snapshot.timetable.length > 0 && (
-        <div className="onboard-timetable">
-          <div className="onboard-timetable-title">时刻表</div>
-          <table className="onboard-timetable-table">
-            <thead>
-              <tr>
-                <th>车站</th>
-                <th>里程(km)</th>
-                <th>计划到站</th>
-                <th>计划发车</th>
-                <th>停站(s)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {snapshot.timetable.map((entry: TimetableEntry) => (
-                <tr key={entry.stationIndex}>
-                  <td>{entry.stationName}</td>
-                  <td>{entry.stationKm.toFixed(1)}</td>
-                  <td>{fmtOnboardTime(entry.plannedArrival)}</td>
-                  <td>{fmtOnboardTime(entry.plannedDeparture)}</td>
-                  <td>{entry.plannedDwell.toFixed(0)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </section>
   );
 }
