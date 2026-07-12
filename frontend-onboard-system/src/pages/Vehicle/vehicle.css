@@ -182,6 +182,12 @@
   gap: var(--space-md);
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+.vehicle-main-area > * {
+  min-height: 0;
+  overflow: hidden;
 }
 
 @media (max-width: 1400px) {
@@ -703,6 +709,58 @@
 }
 
 .vehicle-704-log-item--test { border-left-color: var(--color-accent); }
+
+/* ═══════════════════════════════════════════════
+   右侧面板 Tab 切换
+   ═══════════════════════════════════════════════ */
+.vehicle-right-panel {
+   display: flex;
+   flex-direction: column;
+   gap: var(--space-sm);
+   min-width: 0;
+   min-height: 0;
++  overflow: hidden;
+ }
+
+.vehicle-right-tabs {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.vehicle-right-tab {
+  flex: 1;
+  padding: 8px 12px;
+  color: #94a3b8;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  background: #1e293b;
+  border: 1px solid rgba(148,163,184,0.18);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+.vehicle-right-tab:hover {
+  color: #cbd5e1;
+  background: #253449;
+  border-color: rgba(148,163,184,0.36);
+}
+.vehicle-right-tab.is-active {
+  color: #38bdf8;
+  background: #0f172a;
+  border-color: rgba(56,189,248,0.48);
+  border-bottom: 2px solid #38bdf8;
+}
+
+/* 右侧面板内的视图自动填充 */
+.vehicle-right-panel > .line-run-view,
+.vehicle-right-panel > .traction-curve-view {
+  flex: 1;
+  overflow: auto;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
 
 @media (max-width: 1000px) {
   .vehicle-704-panel__body {
