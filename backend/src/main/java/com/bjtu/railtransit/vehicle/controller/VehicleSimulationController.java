@@ -19,6 +19,12 @@ import com.bjtu.railtransit.vehicle.protocol704.Protocol704VehicleControlBridge;
 import com.bjtu.railtransit.vehicle.protocol704.Protocol704CommandLifecycle;
 import com.bjtu.railtransit.vehicle.protocol704.MappedControlCommand;
 import com.bjtu.railtransit.vehicle.enums.DrivingMode;
+import com.bjtu.railtransit.dispatch.CommandBus;
+import com.bjtu.railtransit.dispatch.OnboardEventHandler;
+import com.bjtu.railtransit.dispatch.SimulationService;
+import com.bjtu.railtransit.domain.model.OnboardEvent;
+import com.bjtu.railtransit.domain.model.TrainCommand;
+import com.bjtu.railtransit.common.SimulationWebSocketHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -27,6 +33,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -49,12 +56,26 @@ public class VehicleSimulationController {
     private final LineProfileJsonLoader lineProfileJsonLoader;
     private final SidingDispatchService sidingDispatchService;
     private final Protocol704VehicleControlBridge protocol704VehicleControlBridge;
+    private final CommandBus commandBus;
+    private final OnboardEventHandler onboardEventHandler;
+    private final SimulationService simulationService;
+    private final SimulationWebSocketHandler webSocketHandler;
 
     public VehicleSimulationController(VehicleSimulationService vehicleSimulationService,
                                         DemoScenarioProvider demoScenarioProvider,
                                         LineProfileJsonLoader lineProfileJsonLoader,
                                         SidingDispatchService sidingDispatchService) {
-        this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, sidingDispatchService, null);
+        this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, sidingDispatchService,
+                null, null, null, null, null);
+    }
+
+    public VehicleSimulationController(VehicleSimulationService vehicleSimulationService,
+                                        DemoScenarioProvider demoScenarioProvider,
+                                        LineProfileJsonLoader lineProfileJsonLoader,
+                                        SidingDispatchService sidingDispatchService,
+                                        Protocol704VehicleControlBridge protocol704VehicleControlBridge) {
+        this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, sidingDispatchService,
+                protocol704VehicleControlBridge, null, null, null, null);
     }
 
     @Autowired
@@ -62,12 +83,20 @@ public class VehicleSimulationController {
                                         DemoScenarioProvider demoScenarioProvider,
                                         LineProfileJsonLoader lineProfileJsonLoader,
                                         SidingDispatchService sidingDispatchService,
-                                        Protocol704VehicleControlBridge protocol704VehicleControlBridge) {
+                                        Protocol704VehicleControlBridge protocol704VehicleControlBridge,
+                                        CommandBus commandBus,
+                                        OnboardEventHandler onboardEventHandler,
+                                        SimulationService simulationService,
+                                        SimulationWebSocketHandler webSocketHandler) {
         this.vehicleSimulationService = vehicleSimulationService;
         this.demoScenarioProvider = demoScenarioProvider;
         this.lineProfileJsonLoader = lineProfileJsonLoader;
         this.sidingDispatchService = sidingDispatchService;
         this.protocol704VehicleControlBridge = protocol704VehicleControlBridge;
+        this.commandBus = commandBus;
+        this.onboardEventHandler = onboardEventHandler;
+        this.simulationService = simulationService;
+        this.webSocketHandler = webSocketHandler;
     }
 
     /**
@@ -211,7 +240,7 @@ public class VehicleSimulationController {
      * 返回 states.position 以当前位置为起点继续累积。</p>
      */
     @PostMapping("/simulation/control")
-    public ApiResponse<SimulationResult> control(
+    public ApiResponse<?> control(
             @RequestBody SimulationControlRequest request) {
 
         if (request == null || request.getCurrentState() == null) {
@@ -220,12 +249,44 @@ public class VehicleSimulationController {
 
         int fromId = request.getFromStationId() > 0 ? request.getFromStationId() : 1;
         int toId = request.getToStationId() > 0 ? request.getToStationId() : 2;
+        String command = request.getControlCommand() != null ? request.getControlCommand().getCommand() : null;
 
         if (protocol704VehicleControlBridge != null && request.getTrainId() != null
                 && protocol704VehicleControlBridge.isPlcControlOwner(request.getTrainId())
                 && request.getControlCommand() != null
-                && !"emergency_brake".equals(request.getControlCommand().getCommand())) {
+                && !"emergency_brake".equals(command)
+                && !"atp_emergency_brake".equals(command)
+                && !"reset_emergency".equals(command)) {
             return ApiResponse.error("PLC_704_LOCAL_V1 已拥有人工控制权；网页普通手柄已拒绝");
+        }
+
+        // Bug#4: set_manual during active ATO session requires control-center approval.
+        if ("set_manual".equals(command) && request.getTrainId() != null && !request.getTrainId().isBlank()
+                && request.getCurrentMode() == DrivingMode.ATO
+                && commandBus != null) {
+            double now = simulationService != null ? simulationService.getSimulationTimeSeconds() : 0.0;
+            TrainCommand pending = commandBus.issue(
+                    request.getTrainId(), "MANUAL_REQUEST", 0,
+                    "司机申请人工接管", 90, "ONBOARD", now);
+            if (onboardEventHandler != null) {
+                OnboardEvent event = new OnboardEvent();
+                event.setTrainId(request.getTrainId());
+                event.setEventType("MANUAL_REQUEST");
+                event.setTimestampSeconds(now);
+                event.setPositionMeters(request.getCurrentState().getAbsolutePosition() != null
+                        ? request.getCurrentState().getAbsolutePosition()
+                        : request.getCurrentState().getPosition());
+                event.setSpeedKmh(request.getCurrentState().getVelocity() * 3.6);
+                event.setSeverity("WARNING");
+                event.setDetails(request.getTrainId() + " 请求人工驾驶，等待中控批准");
+                onboardEventHandler.accept(event);
+            }
+            Map<String, Object> pendingBody = new LinkedHashMap<>();
+            pendingBody.put("status", "PENDING_APPROVAL");
+            pendingBody.put("message", "已向中控发送人工接管请求");
+            pendingBody.put("commandId", pending.getCommandId());
+            pendingBody.put("trainId", request.getTrainId());
+            return ApiResponse.ok("PENDING_APPROVAL", pendingBody);
         }
 
         try {
@@ -249,8 +310,9 @@ public class VehicleSimulationController {
 
             setAuthoritativeStationStops(result, request, nextStation, authoritativeTarget);
             expandContinuationStationStops(result, fromId, toId, nextStation.id);
-            if (protocol704VehicleControlBridge != null) {
+            if (protocol704VehicleControlBridge != null && request.getTrainId() != null) {
                 protocol704VehicleControlBridge.recordWebControl(request.getTrainId(), request, result);
+                syncBridgeFromControl(request, result);
             }
 
             return ApiResponse.ok("ok", result);
@@ -275,7 +337,117 @@ public class VehicleSimulationController {
         if (!"EXECUTED".equals(lifecycle.getStatus())) {
             return ApiResponse.error("车载发车确认失败: " + lifecycle.getRejectionReason());
         }
+        protocol704VehicleControlBridge.syncDepartureAuth(trainId, true);
         return ApiResponse.ok("车载已确认发车", lifecycle);
+    }
+
+    /**
+     * Apply a dispatcher-approved MANUAL_APPROVED / MANUAL_REJECTED decision on the vehicle side.
+     * MANUAL_APPROVED switches Bridge + returns a MANUAL coast continuation;
+     * MANUAL_REJECTED keeps ATO.
+     */
+    @PostMapping("/simulation/manual-decision")
+    public ApiResponse<?> manualDecision(@RequestBody Map<String, Object> body) {
+        if (body == null || body.get("trainId") == null || body.get("decision") == null) {
+            return ApiResponse.error("人工接管审批参数非法");
+        }
+        String trainId = String.valueOf(body.get("trainId"));
+        String decision = String.valueOf(body.get("decision")).toUpperCase();
+        if ("MANUAL_REJECTED".equals(decision) || "REJECTED".equals(decision)) {
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("status", "REJECTED");
+            resp.put("trainId", trainId);
+            resp.put("mode", "ATO");
+            return ApiResponse.ok("人工接管已拒绝，保持 ATO", resp);
+        }
+        if (!"MANUAL_APPROVED".equals(decision) && !"APPROVED".equals(decision)) {
+            return ApiResponse.error("未知审批结果: " + decision);
+        }
+        if (protocol704VehicleControlBridge != null) {
+            protocol704VehicleControlBridge.syncMode(trainId, DrivingMode.MANUAL,
+                    Protocol704VehicleControlBridge.SOURCE_WEB_HMI);
+        }
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("status", "APPROVED");
+        resp.put("trainId", trainId);
+        resp.put("mode", "MANUAL");
+        return ApiResponse.ok("人工接管已批准", resp);
+    }
+
+    /**
+     * Onboard simulation reset: clear local bridge latch/auth and broadcast
+     * SIMULATION_RESET so the control center can re-home the train marker.
+     */
+    @PostMapping("/simulation/reset")
+    public ApiResponse<Map<String, Object>> resetSimulation(@RequestBody Map<String, Object> body) {
+        String trainId = body == null || body.get("trainId") == null ? null : String.valueOf(body.get("trainId"));
+        if (trainId == null || trainId.isBlank()) {
+            return ApiResponse.error("trainId 不能为空");
+        }
+        double positionMeters = 0.0;
+        if (body.get("positionMeters") instanceof Number n) {
+            positionMeters = n.doubleValue();
+        }
+        if (protocol704VehicleControlBridge != null) {
+            protocol704VehicleControlBridge.resetEmergencyLatch(trainId);
+            protocol704VehicleControlBridge.syncMode(trainId, DrivingMode.ATO,
+                    Protocol704VehicleControlBridge.SOURCE_ATO);
+            protocol704VehicleControlBridge.syncDepartureAuth(trainId, false);
+        }
+        if (onboardEventHandler != null) {
+            OnboardEvent event = new OnboardEvent();
+            event.setTrainId(trainId);
+            event.setEventType("SIMULATION_RESET");
+            event.setTimestampSeconds(simulationService != null
+                    ? simulationService.getSimulationTimeSeconds() : 0.0);
+            event.setPositionMeters(positionMeters);
+            event.setSpeedKmh(0);
+            event.setSeverity("INFO");
+            event.setDetails("车载复位: position=" + positionMeters + "m");
+            onboardEventHandler.accept(event);
+        }
+        if (webSocketHandler != null && simulationService != null) {
+            try {
+                webSocketHandler.broadcast(simulationService.getSnapshot());
+            } catch (Exception ignore) {
+                // broadcast is best-effort
+            }
+        }
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("status", "RESET");
+        resp.put("trainId", trainId);
+        resp.put("eventType", "SIMULATION_RESET");
+        resp.put("positionMeters", positionMeters);
+        return ApiResponse.ok("车载仿真已复位", resp);
+    }
+
+    private void syncBridgeFromControl(SimulationControlRequest request, SimulationResult result) {
+        if (protocol704VehicleControlBridge == null || request.getTrainId() == null) {
+            return;
+        }
+        String command = request.getControlCommand() != null ? request.getControlCommand().getCommand() : null;
+        DrivingMode resultMode = result != null && result.getSummary() != null
+                ? result.getSummary().getCurrentMode() : null;
+
+        if ("emergency_brake".equals(command) || "atp_emergency_brake".equals(command)
+                || resultMode == DrivingMode.EMERGENCY) {
+            protocol704VehicleControlBridge.syncMode(request.getTrainId(), DrivingMode.EMERGENCY,
+                    Protocol704VehicleControlBridge.SOURCE_EMERGENCY);
+        } else if ("reset_emergency".equals(command)) {
+            protocol704VehicleControlBridge.resetEmergencyLatch(request.getTrainId());
+            protocol704VehicleControlBridge.syncMode(request.getTrainId(), DrivingMode.MANUAL,
+                    Protocol704VehicleControlBridge.SOURCE_WEB_HMI);
+        } else if ("set_manual".equals(command) || resultMode == DrivingMode.MANUAL) {
+            protocol704VehicleControlBridge.syncMode(request.getTrainId(), DrivingMode.MANUAL,
+                    Protocol704VehicleControlBridge.SOURCE_WEB_HMI);
+        } else if ("resume_ato".equals(command) || resultMode == DrivingMode.ATO) {
+            protocol704VehicleControlBridge.syncMode(request.getTrainId(), DrivingMode.ATO,
+                    Protocol704VehicleControlBridge.SOURCE_ATO);
+        }
+
+        if (request.isDepartureConfirmed()) {
+            protocol704VehicleControlBridge.syncDepartureAuth(request.getTrainId(), true);
+        }
     }
 
     /**

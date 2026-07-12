@@ -37,6 +37,7 @@ export interface RealtimeVehicleState704 {
   mode: string;
   lastCommand: string;
   note: string;
+  emergencyLatched?: boolean;
 }
 
 export interface Protocol704LogEntry {
@@ -70,6 +71,23 @@ export interface Protocol704CommandLifecycle {
   executedState?: {
     time: number; position: number; velocity: number; acceleration: number; phase: string; trainId: string;
     absolutePosition?: number;
+  };
+  /** 命令执行后紧急制动是否锁存（后端 emergencyLatchedAfter）。 */
+  emergencyLatchedAfter?: boolean;
+  /** 命令触发的完整续算仿真结果（仅 EXECUTED 且命令触发了物理仿真时存在）。
+   *  前端用它把 EB 制动轨迹拼接到主 result.states 后面播放。 */
+  executedResult?: {
+    states: Array<{
+      time: number; position: number; velocity: number; acceleration: number;
+      phase: string; trainId: string; absolutePosition?: number;
+    }>;
+    summary: {
+      currentMode?: string;
+      nextMode?: string;
+      [key: string]: unknown;
+    };
+    stopResult?: { [key: string]: unknown };
+    safetyEvents?: Array<{ [key: string]: unknown }>;
   };
 }
 
