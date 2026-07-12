@@ -51,6 +51,7 @@ public class SimulationService {
     private final SimulationWebSocketHandler webSocketHandler;
     private final TractionPowerSupplyService powerSupply;
     private final TrainNetworkService networkService;
+    private final RedisDataBus redisDataBus;
 
     private boolean simulationRunning = false;
     private double simulationTimeSeconds = 0;
@@ -122,7 +123,8 @@ public class SimulationService {
             BlendingBrakeService blendingBrakeService,
             SimulationWebSocketHandler webSocketHandler,
             TractionPowerSupplyService powerSupply,
-            TrainNetworkService networkService) {
+            TrainNetworkService networkService,
+            RedisDataBus redisDataBus) {
         this.lineDataService = lineDataService;
         this.dispatchEngine = dispatchEngine;
         this.energyOptimizer = energyOptimizer;
@@ -138,6 +140,7 @@ public class SimulationService {
         this.webSocketHandler = webSocketHandler;
         this.powerSupply = powerSupply;
         this.networkService = networkService;
+        this.redisDataBus = redisDataBus;
     }
 
     // ================================================================
@@ -251,6 +254,35 @@ public class SimulationService {
             webSocketHandler.broadcast(getSnapshot());
         } catch (Exception e) {
             // 广播失败不影响仿真继续
+        }
+        // 同步发布到 Redis 数据总线（供外部系统订阅）
+        try {
+            publishToRedisDataBus();
+        } catch (Exception e) {
+            // Redis 不可用时静默降级
+        }
+    }
+
+    /** 将当前仿真状态同步到 Redis 数据总线 */
+    private void publishToRedisDataBus() {
+        if (!redisDataBus.isConnected())
+            return;
+        // 发布完整快照
+        redisDataBus.publishSnapshot(getSnapshot());
+        // 逐列车发布状态
+        for (TrainState t : trains.values()) {
+            redisDataBus.putTrainState(t.getTrainId(), t);
+        }
+        // 发布能耗数据
+        redisDataBus.putEnergyData(totalTractionEnergyKwh, totalRegenEnergyKwh,
+                totalAuxEnergyKwh, totalCruisingEnergyKwh, coastingSavedKwh, totalEnergyKwh);
+        // 发布移动授权
+        redisDataBus.replaceMA(movementAuthorityRegistry.snapshot());
+        // 发布活跃指令
+        for (TrainCommand cmd : integrationCommandBus.all()) {
+            if (!Set.of("COMPLETED", "REJECTED", "SUPERSEDED").contains(cmd.getStatus())) {
+                redisDataBus.putCommand(cmd.getCommandId(), cmd);
+            }
         }
     }
 
@@ -387,6 +419,8 @@ public class SimulationService {
             // calculations; the raw vehicle timestamp remains available in report.
             train.setLastReportTimeSeconds(simulationTimeSeconds);
             fusedOnboardReportRevisions.put(train.getTrainId(), revision);
+            // 同步到 Redis 数据总线
+            redisDataBus.putStatusReport(train.getTrainId(), report);
 
             // 追踪车站索引变化（到站检测）
             int reportedStationIdx = parseStationIndex(report.getCurrentStationId());
@@ -1240,13 +1274,34 @@ public class SimulationService {
                 }
                 return;
             }
+
+            // ── 巡航接近车站: 提前切断牵引，惰行滑入制动曲线，省去巡航能耗 ──
+            if ("CRUISING".equals(status) && distToStationM <= brakingDistance * 2.0) {
+                train.setStatus("COASTING");
+            }
         }
 
         // ── 正常加速/巡航 ──
         double newSpeed = speed;
         double accel;
 
-        if (speed < maxSpeed) {
+        if ("COASTING".equals(status)) {
+            // 惰行: 无牵引力、无制动力，仅受阻力减速
+            double tareMass = train.getCarCount() * 35000.0;
+            double passengerMass = train.getLoadFactor() * 60.0 * 2200.0;
+            double massKg = tareMass + passengerMass;
+            double resistN = physics.totalResistanceForce(train);
+            // 含回转质量修正的减速度
+            double coastDecelMs2 = resistN / (massKg * (1.0 + 0.06)); // ROTARY_MASS_FACTOR = 0.06
+            double coastDecelKmhPerS = coastDecelMs2 * 3.6;
+            accel = -coastDecelKmhPerS;
+            newSpeed = Math.max(0, speed - coastDecelKmhPerS);
+
+            // 速度过低时退出惰行，恢复加速至巡航
+            if (newSpeed < EnergyOptimizer.COAST_MIN_SPEED) {
+                train.setStatus("ACCELERATING");
+            }
+        } else if (speed < maxSpeed) {
             accel = Math.min(accelKmhPerS, maxSpeed - speed);
             newSpeed = speed + accel;
             if ("BRAKING".equals(status) || "ARRIVING".equals(status)) {
@@ -1515,15 +1570,14 @@ public class SimulationService {
         for (EnergyOptimizer.CoastingDecision cd : lastEnergyResult.coastingOpportunities) {
             TrainState t = trains.get(cd.trainId);
             if (t != null && t.getSpeed() > EnergyOptimizer.COAST_MIN_SPEED) {
-                // 惰行: 通过降低目标速度来实现滑行效果
-                // 不直接切断牵引，而是将目标巡航速度设为节能模式的55km/h
-                t.setTargetSpeed(EnergyOptimizer.COAST_CRUISE_SPEED);
+                // 惰行: 将列车状态切换为惰行，无牵引力无制动力，仅受阻力自然减速
+                t.setStatus("COASTING");
 
                 // 记录惰行指令
                 SimulationSnapshot.TrainCommand coastCmd = new SimulationSnapshot.TrainCommand();
                 coastCmd.setTrainId(cd.trainId);
-                coastCmd.setCommandType("SPEED_UP"); // 复用SPEED_UP类型表示惰行节能
-                coastCmd.setTargetValue(EnergyOptimizer.COAST_CRUISE_SPEED);
+                coastCmd.setCommandType("COAST");
+                coastCmd.setTargetValue(t.getSpeed());
                 coastCmd.setReason(cd.reason);
                 coastCmd.setIssuedTime(simulationTimeSeconds);
                 coastCmd.setStatus("EXECUTING");
@@ -1845,6 +1899,14 @@ public class SimulationService {
                 log.setBrakeForce(0);
                 log.setElectricBrakeForce(0);
                 log.setAirBrakeForce(0);
+            } else if ("COASTING".equals(t.getStatus())) {
+                // 惰行: 无牵引力、无制动力，仅受阻力自然减速（不消耗能量）
+                log.setTractiveBrakeCmd("coast");
+                log.setTractiveBrakePercent(0);
+                log.setTractionForce(0);
+                log.setBrakeForce(0);
+                log.setElectricBrakeForce(0);
+                log.setAirBrakeForce(0);
             } else if (accelMs2 > 0.05) {
                 // 牵引工况 — Davis阻力 + 惯性力 + 坡道阻力
                 double tractionForceN = resistanceN + Math.max(0, inertiaForceN);
@@ -1903,10 +1965,10 @@ public class SimulationService {
                     totalRegenEnergyKwh += netElecBrakeKw * 0.65 / 3600.0;
                 }
             } else {
-                // 惰行/巡航 — 仅克服阻力 (Davis + 坡道)
-                log.setTractiveBrakeCmd("coast");
-                log.setTractiveBrakePercent(0);
-                log.setTractionForce(0);
+                // 巡航: 牵引力刚好克服阻力，维持恒速
+                log.setTractiveBrakeCmd("traction");
+                log.setTractiveBrakePercent(5);
+                log.setTractionForce(resistanceN);
                 log.setBrakeForce(0);
                 log.setElectricBrakeForce(0);
                 log.setAirBrakeForce(0);
@@ -1928,6 +1990,7 @@ public class SimulationService {
             totalAuxEnergyKwh += physics.auxiliaryStepEnergyKwh(t.getCarCount());
 
             simulationLogs.add(log);
+            redisDataBus.appendLog(log);
         }
 
         // ── DC1500V 牵引供电仿真 ──
@@ -2562,5 +2625,6 @@ public class SimulationService {
         lastEnergyHistoryTime = -10;
         dispatchEngine.clearLogs();
         movementAuthorityRegistry.clear();
+        redisDataBus.clearSimulationData();
     }
 }
