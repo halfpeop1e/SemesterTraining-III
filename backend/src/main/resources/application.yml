@@ -18,3 +18,24 @@ vehicle:
     connect-timeout-ms: 3000
     read-timeout-ms: 1000
     auto-start: false
+    # PLC write-back (上位机 → PLC)
+    plc-output:
+      enabled: false
+      frame-format: documented-26       # documented-26 | capture-variant-28
+      interval-ms: 500
+
+hil:
+  # 信号屏 MMI 66B TCP 发送
+  signal-screen:
+    enabled: false
+    host: 192.168.100.122
+    port: 9999
+    interval-ms: 200
+  # 网络屏 HMI 572B TCP 发送
+  network-screen:
+    enabled: false
+    host: 192.168.100.121
+    port: 8888
+    interval-ms: 200
+  # 关联列车 ID（HIL 输出绑定同一列车）
+  train-id: T1

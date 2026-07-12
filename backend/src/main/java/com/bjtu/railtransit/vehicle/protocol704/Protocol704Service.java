@@ -10,6 +10,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.*;
@@ -35,6 +36,15 @@ public class Protocol704Service {
 
     @Value("${vehicle.protocol704.auto-start:false}")
     private boolean autoStart;
+
+    @Value("${vehicle.protocol704.plc-output.enabled:false}")
+    private boolean plcOutputEnabled;
+
+    @Value("${vehicle.protocol704.plc-output.frame-format:documented-26}")
+    private String plcOutputFormat;
+
+    @Value("${vehicle.protocol704.plc-output.interval-ms:500}")
+    private long plcOutputIntervalMs;
 
     private final List<Integer> ports = new ArrayList<>();
     private final Map<String, Map<Integer, PortClient>> portClients = new ConcurrentHashMap<>();
@@ -62,6 +72,11 @@ public class Protocol704Service {
         parsePorts();
         executor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "704-protocol-worker");
+            t.setDaemon(true);
+            return t;
+        });
+        scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "704-plc-writeback");
             t.setDaemon(true);
             return t;
         });
@@ -93,6 +108,7 @@ public class Protocol704Service {
             stop(trainId);
         }
         if (executor != null) executor.shutdownNow();
+        if (scheduler != null) scheduler.shutdownNow();
     }
 
     public void start(String trainId) {
@@ -294,7 +310,9 @@ public class Protocol704Service {
         private final Protocol704Status status;
         private Socket socket;
         private InputStream in;
+        private OutputStream out;
         private volatile boolean closed = false;
+        private ScheduledFuture<?> writeBackTask;
         private long lastReceiveTime = 0;
         private long lastFrameLen = 0;
         private long connectStart = 0;
@@ -331,11 +349,29 @@ public class Protocol704Service {
                     s.setTcpNoDelay(true);
                     this.socket = s;
                     this.in = s.getInputStream();
+                    this.out = s.getOutputStream();
                     ps.setConnecting(false);
                     ps.setConnected(true);
                     updateOverallConnected();
                     ps.setLastConnectSuccessTime(System.currentTimeMillis());
                     log.info("704 TCP socket opened train={} port={}, waiting for first frame", trainId, port);
+
+                    // Start PLC write-back if enabled
+                    if (plcOutputEnabled && scheduler != null) {
+                        writeBackTask = scheduler.scheduleAtFixedRate(() -> {
+                            try {
+                                if (!closed && socket != null && socket.isConnected()) {
+                                    byte[] outFrame = buildPlcOutputFrame(trainId);
+                                    if (outFrame != null) {
+                                        out.write(outFrame);
+                                        out.flush();
+                                    }
+                                }
+                            } catch (IOException e) {
+                                log.debug("PLC write-back port {} failed: {}", port, e.getMessage());
+                            }
+                        }, plcOutputIntervalMs, plcOutputIntervalMs, TimeUnit.MILLISECONDS);
+                    }
 
                     byte[] buf = new byte[4096];
                     while (!closed && running.get()) {
@@ -370,8 +406,10 @@ public class Protocol704Service {
                     ps.setLastDisconnectTime(System.currentTimeMillis());
                     log.debug("704 port {} disconnected: {}", port, e.getMessage());
                 } finally {
+                    if (writeBackTask != null) { writeBackTask.cancel(false); writeBackTask = null; }
                     updateOverallConnected();
                     try { if (in != null) in.close(); } catch (Exception ignored) {}
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
                     try { if (socket != null) socket.close(); } catch (Exception ignored) {}
                     accumulator.reset();
                 }
@@ -440,6 +478,49 @@ public class Protocol704Service {
         state.setAccelerationMs2(lifecycle.getExecutedState().getAcceleration());
         state.setNote(lifecycle.getStatus());
         state.setLastUpdateTime(System.currentTimeMillis());
+    }
+
+    /**
+     * Build PLC write-back frame from current vehicle state.
+     * Speed unit: 0.1 km/h (converted from m/s stored in RealtimeVehicleState).
+     */
+    private byte[] buildPlcOutputFrame(String trainId) {
+        RealtimeVehicleState state = realtimeStates.get(trainId);
+        if (state == null) return null;
+
+        double speedKmh = state.getVelocityMs() * 3.6;
+        int speedRaw = Math.max(0, Math.min(65535, (int) Math.round(speedKmh * 10)));
+
+        // Build light/mode bytes from last known PLC parsed frame
+        byte lightsByte = (byte) 0x20; // default: doors_closed_ok
+        byte modeByte = 0x00;
+
+        Protocol704Status status = statusMap.get(trainId);
+        if (status != null) {
+            Parsed704Frame lastFrame = status.getLastParsedFrame();
+            if (lastFrame != null && lastFrame.getFields() != null) {
+                Map<String, Object> fields = lastFrame.getFields();
+                lightsByte = Protocol704FrameEncoder.buildLightsByte(
+                        Boolean.TRUE.equals(fields.get("doors_closed_ok")),
+                        Boolean.TRUE.equals(fields.get("lights_high_breaker_on")),
+                        Boolean.TRUE.equals(fields.get("brake_release_bad")),
+                        false,  // doorOpenLight: not available from inbound
+                        Boolean.TRUE.equals(fields.get("network_fault")),
+                        Boolean.TRUE.equals(fields.get("ar_mode_available"))
+                );
+                modeByte = Protocol704FrameEncoder.buildModeByte(
+                        Boolean.TRUE.equals(fields.get("ato_mode_available")),
+                        Boolean.TRUE.equals(fields.get("wash_mode_entered")),
+                        Boolean.TRUE.equals(fields.get("ato_mode_active")),
+                        Boolean.TRUE.equals(fields.get("ar_mode_active"))
+                );
+            }
+        }
+
+        boolean is28B = "capture-variant-28".equalsIgnoreCase(plcOutputFormat);
+        return is28B
+                ? Protocol704FrameEncoder.encode28B(lightsByte, modeByte, speedRaw)
+                : Protocol704FrameEncoder.encode26B(lightsByte, modeByte);
     }
 
     static String bytesToHex(byte[] bytes) {
