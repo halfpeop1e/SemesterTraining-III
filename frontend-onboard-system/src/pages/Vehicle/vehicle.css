@@ -529,6 +529,7 @@
   gap: var(--space-sm);
   padding: 8px var(--space-md);
   cursor: pointer;
+  -webkit-user-select: none;
   user-select: none;
 }
 

@@ -950,7 +950,7 @@ function Vehicle() {
                   }))
                 }
                 disabled={!ai.result && ai.status !== "playing"}
-                aria-pressed={ai.speedMultiplier === m}
+                aria-pressed={ai.speedMultiplier === m ? "true" : "false"}
               >
                 {m}x
               </button>
