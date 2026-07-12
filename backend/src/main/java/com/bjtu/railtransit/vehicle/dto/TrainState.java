@@ -2,6 +2,8 @@ package com.bjtu.railtransit.vehicle.dto;
 
 import com.bjtu.railtransit.vehicle.enums.SimulationPhase;
 
+import java.util.List;
+
 /**
  * 单个仿真时间点的列车状态（SIM 数据，由 service 逐步计算生成）。
  *
@@ -52,6 +54,15 @@ public class TrainState {
      */
     private Double absolutePosition;
 
+    /**
+     * 车厢状态快照列表（可选，多质点模型下车厢级详情）。
+     *
+     * <p>多质点仿真时由 service 从 {@code MultiParticleSimulationService.CarStatusSnapshot}
+     * 映射填充。null 或空列表表示不启用车厢级展示，单质点模型或不需要车厢级
+     * 详情的场景可不填充，不影响现有 JSON 序列化与前端解析（字段对老消费方透明）。</p>
+     */
+    private List<CarSnapshot> cars;
+
     public TrainState() {
     }
 
@@ -85,4 +96,72 @@ public class TrainState {
 
     public Double getAbsolutePosition() { return absolutePosition; }
     public void setAbsolutePosition(Double absolutePosition) { this.absolutePosition = absolutePosition; }
+
+    public List<CarSnapshot> getCars() { return cars; }
+    public void setCars(List<CarSnapshot> cars) { this.cars = cars; }
+
+    /**
+     * 车厢状态快照（多质点模型下车厢级详情，对应一次采样帧各车厢的瞬时状态）。
+     *
+     * <p>字段对 {@link com.bjtu.railtransit.dispatch.MultiParticleSimulationService.CarStatusSnapshot}
+     * 做裁剪映射，只保留车载/前端展示需要的子集。单位沿用 CarStatusSnapshot 的约定。</p>
+     */
+    public static class CarSnapshot {
+        /** 车厢序号 (0-based, 车头→车尾)。 */
+        private int carIndex;
+        /** 车厢类型: Tc/Mp/M。 */
+        private String carType;
+        /** 是否为动车（提供牵引/电制动）。 */
+        private boolean motored;
+        /** 当前总质量 (空车+乘客)，单位 kg。 */
+        private double occupiedMass;
+        /** 载客率 (0.0~1.5, 相对 AW2 定员倍数)。 */
+        private double passengerLoadRatio;
+        /** 车厢位置 (绝对公里标), 单位 m。 */
+        private double positionMeters;
+        /** 车厢速度, 单位 km/h。 */
+        private double speedKmh;
+        /** 车钩力, 单位 kN（受拉为正）。 */
+        private double couplerForceKN;
+
+        public CarSnapshot() {
+        }
+
+        public CarSnapshot(int carIndex, String carType, boolean motored, double occupiedMass,
+                           double passengerLoadRatio, double positionMeters, double speedKmh,
+                           double couplerForceKN) {
+            this.carIndex = carIndex;
+            this.carType = carType;
+            this.motored = motored;
+            this.occupiedMass = occupiedMass;
+            this.passengerLoadRatio = passengerLoadRatio;
+            this.positionMeters = positionMeters;
+            this.speedKmh = speedKmh;
+            this.couplerForceKN = couplerForceKN;
+        }
+
+        public int getCarIndex() { return carIndex; }
+        public void setCarIndex(int carIndex) { this.carIndex = carIndex; }
+
+        public String getCarType() { return carType; }
+        public void setCarType(String carType) { this.carType = carType; }
+
+        public boolean isMotored() { return motored; }
+        public void setMotored(boolean motored) { this.motored = motored; }
+
+        public double getOccupiedMass() { return occupiedMass; }
+        public void setOccupiedMass(double occupiedMass) { this.occupiedMass = occupiedMass; }
+
+        public double getPassengerLoadRatio() { return passengerLoadRatio; }
+        public void setPassengerLoadRatio(double passengerLoadRatio) { this.passengerLoadRatio = passengerLoadRatio; }
+
+        public double getPositionMeters() { return positionMeters; }
+        public void setPositionMeters(double positionMeters) { this.positionMeters = positionMeters; }
+
+        public double getSpeedKmh() { return speedKmh; }
+        public void setSpeedKmh(double speedKmh) { this.speedKmh = speedKmh; }
+
+        public double getCouplerForceKN() { return couplerForceKN; }
+        public void setCouplerForceKN(double couplerForceKN) { this.couplerForceKN = couplerForceKN; }
+    }
 }

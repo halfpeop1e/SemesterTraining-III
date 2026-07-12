@@ -7,10 +7,12 @@ import {
   sendTestFrame,
 } from '../../../api/protocol704';
 import type { Protocol704Status } from '../../../types/protocol704';
+import type { TrainState } from '../../../types/vehicle';
 
 interface Protocol704PanelProps {
   trainId: string;
   onError: (message: string) => void;
+  onExecutedState?: (state: TrainState, mode?: string) => void;
 }
 
 function formatTime(timestamp?: number) {
@@ -21,6 +23,7 @@ function formatTime(timestamp?: number) {
 export default function Protocol704Panel({
   trainId,
   onError,
+  onExecutedState,
 }: Protocol704PanelProps) {
   const [status, setStatus] = useState<Protocol704Status | null>(null);
   const [polling, setPolling] = useState(false);
@@ -29,7 +32,11 @@ export default function Protocol704Panel({
 
   const refresh = async () => {
     try {
-      setStatus(await getProtocol704Status(trainId));
+      const next = await getProtocol704Status(trainId);
+      setStatus(next);
+      if (next.lastCommandLifecycle?.status === 'EXECUTED' && next.lastCommandLifecycle.executedState) {
+        onExecutedState?.(next.lastCommandLifecycle.executedState as TrainState, next.lastCommandLifecycle.resultMode);
+      }
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     }
@@ -89,7 +96,11 @@ export default function Protocol704Panel({
   const handleTestFrame = async (type: string) => {
     setTestFrameLoading(type);
     try {
-      setStatus(await sendTestFrame(trainId, type));
+      const next = await sendTestFrame(trainId, type);
+      setStatus(next);
+      if (next.lastCommandLifecycle?.status === 'EXECUTED' && next.lastCommandLifecycle.executedState) {
+        onExecutedState?.(next.lastCommandLifecycle.executedState as TrainState, next.lastCommandLifecycle.resultMode);
+      }
       setExpanded(true);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
@@ -202,8 +213,8 @@ export default function Protocol704Panel({
 
           <div className="vehicle-704-section vehicle-704-test-section">
             <div className="vehicle-704-section__title">
-              测试帧
-              <span className="vehicle-704-test-warning">仅用于协议链路验证</span>
+              本地解析测试帧
+              <span className="vehicle-704-test-warning">不经过 TCP，不代表设备命令</span>
             </div>
             <div className="vehicle-704-test-buttons">
               {[
@@ -238,14 +249,21 @@ export default function Protocol704Panel({
                   <strong>{lastMappedCommand?.levelPercent ?? 0}%</strong>
                 </div>
                 <div className="vehicle-704-parse-item">
-                  <span>实时速度</span>
+                  <span>仿真速度</span>
                   <strong>{realtimeState?.velocityMs.toFixed(2) ?? '0.00'} m/s</strong>
                 </div>
                 <div className="vehicle-704-parse-item">
-                  <span>实时位置</span>
+                  <span>仿真位置</span>
                   <strong>{realtimeState?.positionM.toFixed(1) ?? '0.0'} m</strong>
                 </div>
               </div>
+              <div className="vehicle-704-parse-grid">
+                <div className="vehicle-704-parse-item"><span>收到合法帧</span><strong>{status?.receivedValidFrame ? '是' : '否'}</strong></div>
+                <div className="vehicle-704-parse-item"><span>最近合法帧</span><strong>{formatTime(status?.lastValidFrameTime)}</strong></div>
+                <div className="vehicle-704-parse-item"><span>命令生命周期</span><strong>{status?.lastCommandLifecycle?.status ?? '-'}</strong></div>
+                <div className="vehicle-704-parse-item"><span>拒绝/失败原因</span><strong>{status?.lastCommandLifecycle?.rejectionReason ?? status?.lastCommandLifecycle?.executionError ?? '-'}</strong></div>
+              </div>
+              {status?.activeBinding && <div className="vehicle-704-test-warning">绑定：{status.activeBinding}</div>}
             </div>
           )}
 

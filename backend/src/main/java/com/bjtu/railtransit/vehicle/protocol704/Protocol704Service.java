@@ -3,6 +3,7 @@ package com.bjtu.railtransit.vehicle.protocol704;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
@@ -40,10 +41,21 @@ public class Protocol704Service {
     private final Map<String, AtomicBoolean> runningFlags = new ConcurrentHashMap<>();
     private final Map<String, Protocol704Status> statusMap = new ConcurrentHashMap<>();
     private final Map<String, RealtimeVehicleState> realtimeStates = new ConcurrentHashMap<>();
+    private final Protocol704VehicleControlBridge vehicleControlBridge;
 
     private ExecutorService executor;
     private ScheduledExecutorService scheduler;
     private final Object initLock = new Object();
+
+    /** Kept for parser-only unit tests; production injection always supplies the bridge. */
+    Protocol704Service() {
+        this.vehicleControlBridge = null;
+    }
+
+    @Autowired
+    public Protocol704Service(Protocol704VehicleControlBridge vehicleControlBridge) {
+        this.vehicleControlBridge = vehicleControlBridge;
+    }
 
     @PostConstruct
     public void init() {
@@ -53,12 +65,6 @@ public class Protocol704Service {
             t.setDaemon(true);
             return t;
         });
-        scheduler = Executors.newScheduledThreadPool(1, r -> {
-            Thread t = new Thread(r, "704-realtime-tick");
-            t.setDaemon(true);
-            return t;
-        });
-        scheduler.scheduleAtFixedRate(this::tickRealtimeStates, 100, 100, TimeUnit.MILLISECONDS);
         if (autoStart) {
             start("T1");
         }
@@ -86,7 +92,6 @@ public class Protocol704Service {
         for (String trainId : new ArrayList<>(runningFlags.keySet())) {
             stop(trainId);
         }
-        if (scheduler != null) scheduler.shutdownNow();
         if (executor != null) executor.shutdownNow();
     }
 
@@ -103,6 +108,8 @@ public class Protocol704Service {
             status.setConnected(false);
             status.setStartTime(System.currentTimeMillis());
             status.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
+            status.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
+            status.setActiveBinding("protocol704-local-v1 explicit trainId binding");
 
             Map<Integer, PortConnectionStatus> portStatusMap = new ConcurrentHashMap<>();
             for (int port : ports) {
@@ -163,6 +170,8 @@ public class Protocol704Service {
             s.setPortStatuses(pss);
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
+            s.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
+            s.setActiveBinding("protocol704-local-v1 explicit trainId binding");
             return s;
         });
     }
@@ -184,49 +193,16 @@ public class Protocol704Service {
             s.setPortStatuses(pss);
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
+            s.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
+            s.setActiveBinding("protocol704-local-v1 explicit trainId binding");
             return s;
         });
 
-        // build test frame
+        // Local parser/bridge test only: this does not open or write a TCP socket.
         byte[] frame = buildTestFrame(type);
         String hex = bytesToHex(frame);
 
-        // parse frame
-        Parsed704Frame parsed = Protocol704FrameParser.parseFrame(frame);
-
-        // update status
-        status.setLastRawHex(hex);
-        status.setLastFrameLength(frame.length);
-        status.setLastParsedFrame(parsed);
-
-        if (parsed.getMappedCommand() != null) {
-            MappedControlCommand mapped = parsed.getMappedCommand();
-            status.setLastMappedCommand(mapped);
-
-            RealtimeVehicleState st = realtimeStates.get(trainId);
-            if (st != null) {
-                st.setLastCommand(mapped.getCommand());
-                st.setMode("MANUAL");
-                st.setNote("test frame");
-                st.setLastUpdateTime(System.currentTimeMillis());
-            }
-        }
-
-        // build log entry
-        Protocol704LogEntry entry = new Protocol704LogEntry();
-        entry.setTrainId(trainId);
-        entry.setPort(0); // test frame has no port
-        entry.setDirection("test_frame");
-        entry.setTimestamp(System.currentTimeMillis());
-        entry.setRawHex(hex);
-        entry.setFrameLength(frame.length);
-        entry.setParsedFields(parsed.getFields());
-        entry.setVerified(!parsed.isHasUnverifiedFields());
-        entry.setMappedCommand(parsed.getMappedCommand());
-        entry.setSource("TEST_FRAME");
-        entry.setNote("test frame/" + type + " - does not represent real 704 connection");
-
-        addLog(status, entry);
+        processCompleteFrame(trainId, status, 0, frame, "TEST_FRAME", "test frame/local parser test/" + type);
 
         return status;
     }
@@ -311,45 +287,6 @@ public class Protocol704Service {
         }
     }
 
-    private void tickRealtimeStates() {
-        try {
-            long now = System.currentTimeMillis();
-            for (Map.Entry<String, RealtimeVehicleState> e : realtimeStates.entrySet()) {
-                RealtimeVehicleState st = e.getValue();
-                long dtMs = now - st.getLastUpdateTime();
-                if (dtMs < 50) continue;
-                double dt = dtMs / 1000.0;
-                st.setLastUpdateTime(now);
-
-                String cmd = st.getLastCommand();
-                double accel = 0.0;
-                if ("traction".equals(cmd)) {
-                    accel = 1.0;
-                } else if ("brake".equals(cmd)) {
-                    accel = -1.2;
-                } else if ("emergency_brake".equals(cmd)) {
-                    accel = -2.5;
-                } else {
-                    accel = -0.05;
-                }
-
-                double newV = st.getVelocityMs() + accel * dt;
-                if (newV < 0) newV = 0;
-                double maxV = 22.0;
-                if (newV > maxV) newV = maxV;
-
-                double avgV = 0.5 * (st.getVelocityMs() + newV);
-                double newPos = st.getPositionM() + avgV * dt;
-
-                st.setVelocityMs(newV);
-                st.setPositionM(newPos);
-                st.setAccelerationMs2(accel);
-            }
-        } catch (Exception ex) {
-            log.warn("realtime tick error", ex);
-        }
-    }
-
     private class PortClient implements Runnable {
         private final String trainId;
         private final String host;
@@ -363,6 +300,7 @@ public class Protocol704Service {
         private long connectStart = 0;
         private long frameCount = 0;
         private long lastFrameTimestamp = 0;
+        private final Protocol704FrameAccumulator accumulator = new Protocol704FrameAccumulator();
 
         PortClient(String trainId, String host, int port, Protocol704Status status) {
             this.trainId = trainId;
@@ -394,6 +332,8 @@ public class Protocol704Service {
                     this.socket = s;
                     this.in = s.getInputStream();
                     ps.setConnecting(false);
+                    ps.setConnected(true);
+                    updateOverallConnected();
                     ps.setLastConnectSuccessTime(System.currentTimeMillis());
                     log.info("704 TCP socket opened train={} port={}, waiting for first frame", trainId, port);
 
@@ -407,11 +347,9 @@ public class Protocol704Service {
                         long now = System.currentTimeMillis();
                         lastReceiveTime = now;
                         lastFrameLen = n;
-                        frameCount++;
                         ps.setLastReceiveTime(now);
                         ps.setLastFrameLength(n);
                         ps.setBytesReceived(ps.getBytesReceived() + n);
-                        ps.setFrameCount(frameCount);
 
                         if (lastFrameTimestamp > 0) {
                             long interval = now - lastFrameTimestamp;
@@ -419,8 +357,11 @@ public class Protocol704Service {
                         }
                         lastFrameTimestamp = now;
 
-                        byte[] frame = Arrays.copyOf(buf, n);
-                        handleFrame(frame);
+                        for (byte[] frame : accumulator.append(Arrays.copyOf(buf, n))) {
+                            frameCount++;
+                            ps.setFrameCount(frameCount);
+                            processCompleteFrame(trainId, status, port, frame, "HARDWARE", "inbound local-v1 frame");
+                        }
                     }
                 } catch (Exception e) {
                     ps.setConnected(false);
@@ -432,6 +373,7 @@ public class Protocol704Service {
                     updateOverallConnected();
                     try { if (in != null) in.close(); } catch (Exception ignored) {}
                     try { if (socket != null) socket.close(); } catch (Exception ignored) {}
+                    accumulator.reset();
                 }
 
                 if (!closed) {
@@ -447,50 +389,57 @@ public class Protocol704Service {
             }
             status.setConnected(any);
         }
+    }
 
-        private void handleFrame(byte[] frame) {
-            // Mark port as connected only after receiving actual data, not just TCP handshake
-            PortConnectionStatus ps = status.getPortStatuses().get(port);
-            if (ps != null && !ps.isConnected()) {
-                ps.setConnected(true);
-                updateOverallConnected();
-            }
-
+    private void processCompleteFrame(String trainId, Protocol704Status status, int port, byte[] frame,
+                                      String source, String notePrefix) {
             String hex = bytesToHex(frame);
             Protocol704LogEntry entry = new Protocol704LogEntry();
             entry.setTrainId(trainId);
             entry.setPort(port);
-            entry.setDirection("inbound");
-            entry.setSource("HARDWARE");
+            entry.setDirection("TEST_FRAME".equals(source) ? "test_frame" : "inbound");
+            entry.setSource(source);
             entry.setTimestamp(System.currentTimeMillis());
             entry.setRawHex(hex);
             entry.setFrameLength(frame.length);
 
             Parsed704Frame parsed = Protocol704FrameParser.parseFrame(frame);
             entry.setParsedFields(parsed.getFields());
-            entry.setVerified(!parsed.isHasUnverifiedFields());
-            entry.setNote(parsed.getNote());
+            boolean validFrame = Boolean.TRUE.equals(parsed.getFields().get("header_valid"))
+                    && Integer.valueOf(46).equals(parsed.getFields().get("total_len_field"))
+                    && Integer.valueOf(22).equals(parsed.getFields().get("data_len_field"));
+            entry.setVerified(validFrame);
+            entry.setNote(notePrefix + "; " + parsed.getNote());
 
             status.setLastRawHex(hex);
             status.setLastFrameLength(frame.length);
             status.setLastParsedFrame(parsed);
 
-            if (parsed.getMappedCommand() != null) {
+            if (validFrame && parsed.getMappedCommand() != null) {
                 MappedControlCommand mapped = parsed.getMappedCommand();
                 status.setLastMappedCommand(mapped);
-
-                RealtimeVehicleState st = realtimeStates.get(trainId);
-                if (st != null) {
-                    st.setLastCommand(mapped.getCommand());
-                    st.setMode("MANUAL");
-                    st.setNote(mapped.isVerified() ? "verified" : "DEMO_fallback_not_verified");
-                }
-
                 entry.setMappedCommand(mapped);
+                status.setReceivedValidFrame(true);
+                status.setLastValidFrameTime(System.currentTimeMillis());
+                if (vehicleControlBridge != null) {
+                    Protocol704CommandLifecycle lifecycle = vehicleControlBridge.execute(trainId, mapped);
+                    status.setLastCommandLifecycle(lifecycle);
+                    updateRealtimeStateFromLifecycle(trainId, lifecycle);
+                }
             }
-
             addLog(status, entry);
-        }
+    }
+
+    private void updateRealtimeStateFromLifecycle(String trainId, Protocol704CommandLifecycle lifecycle) {
+        RealtimeVehicleState state = realtimeStates.get(trainId);
+        if (state == null || lifecycle == null || lifecycle.getExecutedState() == null) return;
+        state.setLastCommand(lifecycle.getParsedCommand());
+        state.setMode(lifecycle.getResultMode());
+        state.setPositionM(lifecycle.getExecutedState().getPosition());
+        state.setVelocityMs(lifecycle.getExecutedState().getVelocity());
+        state.setAccelerationMs2(lifecycle.getExecutedState().getAcceleration());
+        state.setNote(lifecycle.getStatus());
+        state.setLastUpdateTime(System.currentTimeMillis());
     }
 
     static String bytesToHex(byte[] bytes) {

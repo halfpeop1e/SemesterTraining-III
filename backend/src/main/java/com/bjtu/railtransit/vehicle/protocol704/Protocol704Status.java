@@ -19,6 +19,11 @@ public class Protocol704Status {
     private RealtimeVehicleState realtimeVehicleState;
     private List<Protocol704LogEntry> recentLogs = new ArrayList<>();
     private String connectionNote;
+    /** Socket-level state is separate from whether a valid local-v1 frame has arrived. */
+    private boolean receivedValidFrame;
+    private long lastValidFrameTime;
+    private Protocol704CommandLifecycle lastCommandLifecycle;
+    private String activeBinding;
 
     public String getTrainId() { return trainId; }
     public void setTrainId(String trainId) { this.trainId = trainId; }
@@ -58,4 +63,12 @@ public class Protocol704Status {
 
     public String getConnectionNote() { return connectionNote; }
     public void setConnectionNote(String connectionNote) { this.connectionNote = connectionNote; }
+    public boolean isReceivedValidFrame() { return receivedValidFrame; }
+    public void setReceivedValidFrame(boolean receivedValidFrame) { this.receivedValidFrame = receivedValidFrame; }
+    public long getLastValidFrameTime() { return lastValidFrameTime; }
+    public void setLastValidFrameTime(long lastValidFrameTime) { this.lastValidFrameTime = lastValidFrameTime; }
+    public Protocol704CommandLifecycle getLastCommandLifecycle() { return lastCommandLifecycle; }
+    public void setLastCommandLifecycle(Protocol704CommandLifecycle lastCommandLifecycle) { this.lastCommandLifecycle = lastCommandLifecycle; }
+    public String getActiveBinding() { return activeBinding; }
+    public void setActiveBinding(String activeBinding) { this.activeBinding = activeBinding; }
 }
