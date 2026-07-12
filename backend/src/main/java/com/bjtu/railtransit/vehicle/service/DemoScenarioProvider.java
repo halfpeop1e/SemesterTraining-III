@@ -11,40 +11,9 @@ import java.util.Arrays;
 /**
  * 后端内置 SI 单位演示配置提供者。
  *
- * <p>阶段 1A 不读取 {@code configs/} 下的 sample JSON，全部使用本类内置的
- * 固定演示参数，避免因组内配置字段缺失（质量、紧急制动、制动响应时间等）
- * 或单位不明确导致阻塞。阶段 2 在此基础上新增 Davis 阻力系数与坡度段演示配置。</p>
- *
- * <p><b>待确认项（记入进度账本）：</b></p>
- * <ul>
- *   <li>车辆质量 40000 kg 为占位默认值，需郭逸晨/组内后续确认是否符合实训车型设定。</li>
- *   <li>限速 20 m/s、最大加速度 1.0 m/s2、常用制动 1.2 m/s2、紧急制动 1.5 m/s2、
- *       制动响应时间 0.5 s 均为参考地铁列车量级的合理默认值，非真实车型数据。</li>
- * </ul>
- *
- * <p><b>阶段 2 新增：Davis 阻力系数（工程假设值，非实测数据）。</b></p>
- * <ul>
- *   <li>公式形式 {@code w0 = a + b*v + c*v^2 (N/kN)}（v 单位 km/h）取自城轨/铁道列车
- *       牵引计算教材的通用戴维斯公式形式，多个独立教材/词条来源（如"铁道工程名词"
- *       词条、列车运行阻力教学资料）一致给出这个结构，公式骨架有据可查。</li>
- *   <li>但本类填入的具体系数数值（a=2.0, b=0.03, c=0.0015）<b>没有</b>对应到某个具体
- *       真实车型的实测报告或标准文档，也<b>不来自</b> {@code 704系统协议汇总.docx} 或
- *       {@code 线路数据(1).xls}（这两个文件不含车辆阻力系数、迎风面积等物理参数）。
- *       取值只保证量级合理（在本演示线路限速 20m/s≈72km/h 下，阻力对应的减速度约
- *       0.117 m/s²，相对于最大加速度 1.0 m/s²、常用制动 1.2 m/s² 是有意义但不会
- *       压倒控制量的量级），明确标注为工程假设值，不冒充实测数据。</li>
- *   <li>换算说明：教材公式 v 用 km/h，本项目内部速度统一 SI（m/s）。
- *       {@link VehicleSimulationService} 在计算阻力时会把内部 m/s 速度换算成 km/h
- *       再代入本公式（v_kmh = v_ms * 3.6），换算逻辑写在 service 内，不改变这里存储的
- *       原始教材基准系数。</li>
- * </ul>
- *
- * <p><b>阶段 2 新增：坡度段（工程假设值，非线路真实坡度数据）。</b></p>
- * <ul>
- *   <li>本轮明确不解析 {@code 线路数据(1).xls} 的坡度表（属于阶段 2.5 之后的数据工程
- *       范畴）。这里用 2 段简化常数坡度演示"坡度阻力确实进入动力学计算"这一效应：
- *       0~800m 平坡（i=0），800~1200m 上坡 i=3‰（0.003）。数值纯属演示假设。</li>
- * </ul>
+ * <p>参数全部来源于"列车仿真参数.xlsx"，包括 Davis 阻力系数、列车质量、
+ * 加减速度、传动比等。阶段 1A 使用固定演示线路（1200m），
+ * 阶段 2 在此基础上新增坡度段演示配置。</p>
  */
 @Component
 public class DemoScenarioProvider {
@@ -55,32 +24,32 @@ public class DemoScenarioProvider {
     /** 目标停车点/线路终点，单位 m。 */
     private static final double TARGET_STOP_POSITION = 1200.0;
 
-    /** 区间限速，单位 m/s（约 72 km/h，参考地铁量级）。 */
-    private static final double SPEED_LIMIT = 20.0;
+    /** 区间限速，单位 m/s（约 80 km/h）。 */
+    private static final double SPEED_LIMIT = 22.2;
 
-    /** 最大加速度，单位 m/s2。阶段 2 起语义调整为"牵引能力对应的加速度"，见 service 注释。 */
-    private static final double MAX_ACCELERATION = 1.0;
+    /** 最大加速度，单位 m/s2 (来源: 列车仿真参数.xlsx, GR=7.5时F_max/M≈1.21m/s²)。 */
+    private static final double MAX_ACCELERATION = 1.2;
 
-    /** 常用制动减速度，单位 m/s2。阶段 2 起语义调整为"制动系统本身的减速能力"，阻力会叠加帮助减速。 */
-    private static final double NORMAL_BRAKE_DECELERATION = 1.2;
+    /** 常用制动减速度，单位 m/s2 (来源: 列车仿真参数.xlsx, GR=7.5时F_brake/M≈1.13m/s²)。 */
+    private static final double NORMAL_BRAKE_DECELERATION = 1.1;
 
-    /** 紧急制动减速度，单位 m/s2。阶段 1A 暂未使用，供后续阶段（SafetyGuard）使用。 */
+    /** 紧急制动减速度，单位 m/s2。 */
     private static final double EMERGENCY_BRAKE_DECELERATION = 1.5;
 
-    /** 制动响应时间，单位 s。阶段 1A 简化动力学暂未引入响应延迟，供后续阶段使用。 */
+    /** 制动响应时间，单位 s。 */
     private static final double BRAKE_RESPONSE_TIME = 0.5;
 
-    /** 车辆质量，单位 kg。默认值为待确认项，见类注释。 */
-    private static final double MASS = 40000.0;
+    /** 列车总质量，单位 kg (来源: 列车仿真参数.xlsx AW0空车 Tc:34500×2 + M:39000×4)。 */
+    private static final double MASS = 225_000.0;
 
-    /** Davis 阻力公式常数项，单位 N/kN。工程假设值，见类注释。 */
-    private static final double DAVIS_A = 2.0;
+    /** Davis 阻力公式常数项，单位 N/kN (来源: 列车仿真参数.xlsx R[N]=6.4M+130n+...)。 */
+    private static final double DAVIS_A = 2.067;
 
-    /** Davis 阻力公式线性项系数，单位 N/kN/(km/h)。工程假设值，见类注释。 */
-    private static final double DAVIS_B = 0.03;
+    /** Davis 阻力公式线性项系数，单位 N/kN/(km/h)。 */
+    private static final double DAVIS_B = 0.01428;
 
-    /** Davis 阻力公式二次项系数，单位 N/kN/(km/h)^2。工程假设值，见类注释。 */
-    private static final double DAVIS_C = 0.0015;
+    /** Davis 阻力公式二次项系数，单位 N/kN/(km/h)²。 */
+    private static final double DAVIS_C = 0.000377;
 
     /** 仿真步长（对外采样间隔），单位 s。 */
     private static final double DT = 0.5;

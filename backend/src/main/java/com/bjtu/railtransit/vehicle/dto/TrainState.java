@@ -63,17 +63,35 @@ public class TrainState {
      */
     private List<CarSnapshot> cars;
 
+    /** 当前轮周牵引力 N（正值, 惰行/制动时为0）。 */
+    private double tractionForce;
+
+    /** 当前轮周制动力 N（正值, 牵引/惰行时为0）。 */
+    private double brakeForce;
+
+    /** 当前可用电机数 (默认16, 故障降级时减少)。 */
+    private int availableMotors;
+
     public TrainState() {
     }
 
     public TrainState(double time, double position, double velocity, double acceleration,
                        SimulationPhase phase, String trainId) {
+        this(time, position, velocity, acceleration, phase, trainId, 0.0, 0.0, 16);
+    }
+
+    public TrainState(double time, double position, double velocity, double acceleration,
+                       SimulationPhase phase, String trainId,
+                       double tractionForce, double brakeForce, int availableMotors) {
         this.time = time;
         this.position = position;
         this.velocity = velocity;
         this.acceleration = acceleration;
         this.phase = phase;
         this.trainId = trainId;
+        this.tractionForce = tractionForce;
+        this.brakeForce = brakeForce;
+        this.availableMotors = availableMotors;
     }
 
     public double getTime() { return time; }
@@ -99,6 +117,15 @@ public class TrainState {
 
     public List<CarSnapshot> getCars() { return cars; }
     public void setCars(List<CarSnapshot> cars) { this.cars = cars; }
+
+    public double getTractionForce() { return tractionForce; }
+    public void setTractionForce(double tractionForce) { this.tractionForce = tractionForce; }
+
+    public double getBrakeForce() { return brakeForce; }
+    public void setBrakeForce(double brakeForce) { this.brakeForce = brakeForce; }
+
+    public int getAvailableMotors() { return availableMotors; }
+    public void setAvailableMotors(int availableMotors) { this.availableMotors = availableMotors; }
 
     /**
      * 车厢状态快照（多质点模型下车厢级详情，对应一次采样帧各车厢的瞬时状态）。

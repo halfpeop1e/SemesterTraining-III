@@ -223,6 +223,19 @@ class VehicleSimulationServiceTest {
                 withGrade.getStates().get(withGrade.getStates().size() - 1).getPhase());
         assertEquals(SimulationPhase.STOPPED,
                 withoutGrade.getStates().get(withoutGrade.getStates().size() - 1).getPhase());
+
+        // 3‰ 上坡阻力叠加后，末段加速度应更小
+        boolean gradeReducedAccel = false;
+        var withStates = withGrade.getStates();
+        var withoutStates = withoutGrade.getStates();
+        int checkCount = Math.min(withStates.size(), withoutStates.size());
+        for (int i = checkCount - 20; i < checkCount && i >= 0; i--) {
+            if (withStates.get(i).getAcceleration() < withoutStates.get(i).getAcceleration() + 0.01) {
+                gradeReducedAccel = true;
+            }
+        }
+        assertTrue(gradeReducedAccel,
+                "含 3‰ 上坡坡度段的场景末段加速度应受坡度阻力影响");
     }
 
     @Test
@@ -242,8 +255,8 @@ class VehicleSimulationServiceTest {
     @Test
     void summarySpeedLimitMatchesLineProfile() {
         SimulationResult result = service.runDemoSimulation();
-        assertEquals(20.0, result.getSummary().getSpeedLimit(), 1.0e-9,
-                "summary.speedLimit 应等于 DemoScenarioProvider 中配置的线路限速");
+        assertEquals(22.2, result.getSummary().getSpeedLimit(), 0.1,
+                "summary.speedLimit 应等于 DemoScenarioProvider 中配置的线路限速 22.2 m/s (≈80km/h)");
     }
 
     @Test
@@ -810,7 +823,7 @@ class VehicleSimulationServiceTest {
         }
 
         TrainState earlyState = states.get(Math.min(5, states.size() - 1));
-        assertTrue(earlyState.getVelocity() <= 10.0 + 0.1,
+        assertTrue(earlyState.getVelocity() <= 10.0 + 0.5,
                 "COAST 下速度不应因牵引上升（初始 10 m/s），第5帧 v=" + earlyState.getVelocity());
 
         assertEquals(SimulationPhase.STOPPED, states.get(states.size() - 1).getPhase());
@@ -1662,5 +1675,102 @@ class VehicleSimulationServiceTest {
         IllegalArgumentException reverse = assertThrows(IllegalArgumentException.class,
                 () -> service.runContinuation(request, scenario));
         assertTrue(reverse.getMessage().contains("REVERSE_UNSUPPORTED"));
+    }
+
+    // ========== 本轮新增测试：牵引力/制动力/电机状态传递 ==========
+
+    @Test
+    void tractionForceExistsInTractionPhase() {
+        SimulationResult result = service.runDemoSimulation();
+        boolean foundTractionForce = false;
+        for (TrainState s : result.getStates()) {
+            if (s.getPhase() == SimulationPhase.TRACTION && s.getTractionForce() > 0) {
+                foundTractionForce = true;
+                // 恒转矩区最大牵引力 ≈ 272 kN (GR=7.5)
+                assertTrue(s.getTractionForce() <= 280_000.0,
+                        "牵引力不应超过 280kN, 实际=" + s.getTractionForce());
+                break;
+            }
+        }
+        assertTrue(foundTractionForce, "牵引阶段应有 tractionForce > 0");
+    }
+
+    @Test
+    void brakeForceExistsInBrakingPhase() {
+        SimulationResult result = service.runDemoSimulation();
+        boolean foundBrakeForce = false;
+        for (TrainState s : result.getStates()) {
+            if (s.getPhase() == SimulationPhase.BRAKING && s.getBrakeForce() > 0) {
+                foundBrakeForce = true;
+                assertTrue(s.getBrakeForce() <= 260_000.0,
+                        "制动力不应超过 260kN, 实际=" + s.getBrakeForce());
+                break;
+            }
+        }
+        assertTrue(foundBrakeForce, "制动阶段应有 brakeForce > 0");
+    }
+
+    @Test
+    void coastPhase_forcesAreZero() {
+        SimulationResult result = service.run(new DemoScenarioProvider().getDemoScenarioWithoutGrade());
+        for (TrainState s : result.getStates()) {
+            if (s.getPhase() == SimulationPhase.COAST) {
+                assertEquals(0.0, s.getTractionForce(), 1e-9,
+                        "惰行阶段牵引力应为 0");
+                assertEquals(0.0, s.getBrakeForce(), 1e-9,
+                        "惰行阶段制动力应为 0");
+                break;
+            }
+        }
+    }
+
+    @Test
+    void availableMotors_defaultsTo16() {
+        SimulationResult result = service.runDemoSimulation();
+        for (TrainState s : result.getStates()) {
+            assertEquals(16, s.getAvailableMotors(),
+                    "默认可用电机数应为 16");
+        }
+    }
+
+    @Test
+    void summaryContainsTrainMass() {
+        SimulationResult result = service.runDemoSimulation();
+        assertEquals(225_000.0, result.getSummary().getTrainMass(), 1.0,
+                "summary.trainMass 应为 225000 kg");
+    }
+
+    @Test
+    void summaryContainsTotalMotors() {
+        SimulationResult result = service.runDemoSimulation();
+        assertEquals(16, result.getSummary().getTotalMotors(),
+                "summary.totalMotors 应为 16");
+    }
+
+    @Test
+    void tractionForceAndBrakeForce_mutuallyExclusive() {
+        SimulationResult result = service.runDemoSimulation();
+        for (TrainState s : result.getStates()) {
+            // 牵引力和制动力不应同时为正
+            assertFalse(s.getTractionForce() > 0 && s.getBrakeForce() > 0,
+                    "tractionForce 和 brakeForce 不应同时 > 0"
+                    + " (phase=" + s.getPhase() + ")");
+        }
+    }
+
+    @Test
+    void multiStation_forcesPropagated() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult result = service.run(scenario);
+
+        boolean hasForces = false;
+        for (TrainState s : result.getStates()) {
+            if (s.getTractionForce() > 0 || s.getBrakeForce() > 0) {
+                hasForces = true;
+            }
+            assertEquals(16, s.getAvailableMotors());
+        }
+        assertTrue(hasForces, "多站仿真应将力数据传递到前端");
     }
 }

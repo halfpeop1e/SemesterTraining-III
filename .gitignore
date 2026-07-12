@@ -55,6 +55,7 @@ frontend-control-center/dist/
 backend/backend-changelog-*.md
 backend/body.json
 backend/**/body.json
+文档/
 
 .fake
 frontend-control-center/test-results/

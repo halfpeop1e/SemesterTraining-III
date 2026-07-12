@@ -17,8 +17,10 @@ import java.util.stream.Collectors;
 @Service
 public class EnergyCalculator {
 
-    private static final double DEFAULT_TRACTION_EFFICIENCY = 0.85;
-    private static final double DEFAULT_REGEN_EFFICIENCY = 0.65;
+    /** 牵引效率 (来源: 列车仿真参数.xlsx 网流/机械功率回归) */
+    private static final double DEFAULT_TRACTION_EFFICIENCY = 0.882;
+    /** 再生制动回收效率 (来源: 列车仿真参数.xlsx 制动工况网流/机械功率回归) */
+    private static final double DEFAULT_REGEN_EFFICIENCY = 0.802;
 
     /**
      * 按列车分组计算能耗

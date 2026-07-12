@@ -669,9 +669,14 @@ public class DispatchEngine {
             if ("FINISHED".equals(leading.getStatus()) || "FINISHED".equals(following.getStatus())) continue;
 
             if (leading.getDelaySeconds() > DELAY_THRESHOLD) {
-                double gap = leading.getPositionMeters() - following.getPositionMeters();
-                // 方向感知: 若两车方向不同，不触发常规传播
+                // 方向感知间距: 上行 leading.pos > following.pos, 下行 following.pos > leading.pos
+                int dirSign = following.getDirectionSign();
+                double gap = dirSign > 0
+                        ? leading.getPositionMeters() - following.getPositionMeters()
+                        : following.getPositionMeters() - leading.getPositionMeters();
                 if (gap < 0) continue;
+                // 额外保护: 两车方向不同时跳过传播评估
+                if (!following.getDirection().equals(leading.getDirection())) continue;
                 double safeDist = calcSafeDistance(following.getSpeed() / 3.6);
 
                 if (gap < safeDist * 0.9) {

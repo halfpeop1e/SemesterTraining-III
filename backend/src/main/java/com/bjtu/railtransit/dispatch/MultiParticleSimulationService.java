@@ -18,13 +18,13 @@ import java.util.*;
  *   - 车钩力（弹性-阻尼耦合，相邻车厢间）
  *   - 牵引力/电制动分配（仅动车贡献）
  *
- * <p>编组方案（北京地铁9号线 6B Tc-Mp-M-M-Mp-Tc）:
- *   Car0(Tc): 拖车+司机室, 空重34t, AW2≈50t
- *   Car1(Mp): 动车+受电弓, 空重38t, AW2≈55t, 牵引/电制动
- *   Car2(M):  动车, 空重36t, AW2≈53t, 牵引/电制动
- *   Car3(M):  动车, 空重36t, AW2≈53t, 牵引/电制动
- *   Car4(Mp): 动车+受电弓, 空重38t, AW2≈55t, 牵引/电制动
- *   Car5(Tc): 拖车+司机室, 空重34t, AW2≈50t
+ * <p>编组方案（北京地铁9号线 6B Tc-M-M-M-M-Tc, 来源: 列车仿真参数.xlsx）:
+ *   Car0(Tc): 拖车+司机室, 空重34.5t
+ *   Car1(M):  动车, 空重39t, 牵引/电制动
+ *   Car2(M):  动车, 空重39t, 牵引/电制动
+ *   Car3(M):  动车, 空重39t, 牵引/电制动
+ *   Car4(M):  动车, 空重39t, 牵引/电制动
+ *   Car5(Tc): 拖车+司机室, 空重34.5t
  *
  * <p>载客分布模型（高峰期）:
  *   中间车厢(Car2, Car3) 载客率 1.0~1.2 (最拥挤)
@@ -36,8 +36,9 @@ public class MultiParticleSimulationService {
 
     private static final Logger log = LoggerFactory.getLogger(MultiParticleSimulationService.class);
 
-    /** 车厢长度 m (B型车标准) */
-    private static final double CAR_LENGTH = 19.0;
+    /** 车厢长度 m (来源: 列车仿真参数.xlsx 头车20.2m, 中间车19.4m, 此处统一近似) */
+    private static final double CAR_LENGTH_TC = 20.2;
+    private static final double CAR_LENGTH_M = 19.4;
 
     /** 重力加速度 m/s² */
     private static final double GRAVITY = 9.80665;
@@ -89,33 +90,39 @@ public class MultiParticleSimulationService {
         // 载客率分布因子（高峰分布: 中间高, 两端低）
         double[] loadFactors = distributePassengerLoad(baseLoadRatio);
 
-        // Car0: Tc (拖车+司机室)
-        TrainCar c0 = new TrainCar(0, "Tc", false, 34000.0);
+        // Car0: Tc (拖车+司机室, 34.5t)
+        TrainCar c0 = new TrainCar(0, "Tc", false, 34500.0);
+        c0.setLengthMeters(CAR_LENGTH_TC);
         applyPassengerLoad(c0, loadFactors[0], TC_AW2_PASSENGERS);
         cars.add(c0);
 
-        // Car1: Mp (动车+受电弓)
-        TrainCar c1 = new TrainCar(1, "Mp", true, 38000.0);
+        // Car1: M (动车, 39t)
+        TrainCar c1 = new TrainCar(1, "M", true, 39000.0);
+        c1.setLengthMeters(CAR_LENGTH_M);
         applyPassengerLoad(c1, loadFactors[1], M_AW2_PASSENGERS);
         cars.add(c1);
 
-        // Car2: M (动车)
-        TrainCar c2 = new TrainCar(2, "M", true, 36000.0);
+        // Car2: M (动车, 39t)
+        TrainCar c2 = new TrainCar(2, "M", true, 39000.0);
+        c2.setLengthMeters(CAR_LENGTH_M);
         applyPassengerLoad(c2, loadFactors[2], M_AW2_PASSENGERS);
         cars.add(c2);
 
-        // Car3: M (动车)
-        TrainCar c3 = new TrainCar(3, "M", true, 36000.0);
+        // Car3: M (动车, 39t)
+        TrainCar c3 = new TrainCar(3, "M", true, 39000.0);
+        c3.setLengthMeters(CAR_LENGTH_M);
         applyPassengerLoad(c3, loadFactors[3], M_AW2_PASSENGERS);
         cars.add(c3);
 
-        // Car4: Mp (动车+受电弓)
-        TrainCar c4 = new TrainCar(4, "Mp", true, 38000.0);
+        // Car4: M (动车, 39t)
+        TrainCar c4 = new TrainCar(4, "M", true, 39000.0);
+        c4.setLengthMeters(CAR_LENGTH_M);
         applyPassengerLoad(c4, loadFactors[4], M_AW2_PASSENGERS);
         cars.add(c4);
 
-        // Car5: Tc (拖车+司机室)
-        TrainCar c5 = new TrainCar(5, "Tc", false, 34000.0);
+        // Car5: Tc (拖车+司机室, 34.5t)
+        TrainCar c5 = new TrainCar(5, "Tc", false, 34500.0);
+        c5.setLengthMeters(CAR_LENGTH_TC);
         applyPassengerLoad(c5, loadFactors[5], TC_AW2_PASSENGERS);
         cars.add(c5);
 
@@ -229,12 +236,12 @@ public class MultiParticleSimulationService {
      * @param speedKmh    初始速度
      */
     public void initCarPositions(List<TrainCar> cars, double headPosM, double speedKmh) {
+        double cumulativeOffset = 0;
         for (int i = 0; i < cars.size(); i++) {
-            // Car0 的车头在 headPosM, 车厢后部 = headPosM - CAR_LENGTH
-            // Car1 的车头 = headPosM - CAR_LENGTH - 车钩间隙
-            double posOffset = i * (CAR_LENGTH + COUPLER_FREE_LENGTH);
-            cars.get(i).setPositionMeters(headPosM - posOffset);
-            cars.get(i).setSpeedKmh(speedKmh);
+            TrainCar c = cars.get(i);
+            c.setPositionMeters(headPosM - cumulativeOffset);
+            c.setSpeedKmh(speedKmh);
+            cumulativeOffset += c.getLengthMeters() + COUPLER_FREE_LENGTH;
         }
     }
 
@@ -281,7 +288,7 @@ public class MultiParticleSimulationService {
      */
     private double computeCouplerForce(TrainCar front, TrainCar rear) {
         double frontTailPos = front.getPositionMeters(); // 前车尾部
-        double rearHeadPos = rear.getPositionMeters() + CAR_LENGTH; // 后车头部
+        double rearHeadPos = rear.getPositionMeters() + rear.getLengthMeters(); // 后车头部
         double dx = frontTailPos - rearHeadPos;
 
         double frontTailVel = front.getSpeedMps();
@@ -477,6 +484,8 @@ public class MultiParticleSimulationService {
     /** 获取编组总长度 m */
     public double getConsistLength(List<TrainCar> cars) {
         if (cars == null || cars.isEmpty()) return 0;
-        return cars.size() * CAR_LENGTH + (cars.size() - 1) * COUPLER_FREE_LENGTH;
+        double total = 0;
+        for (TrainCar c : cars) total += c.getLengthMeters();
+        return total + (cars.size() - 1) * COUPLER_FREE_LENGTH;
     }
 }

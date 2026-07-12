@@ -5,46 +5,61 @@ import com.bjtu.railtransit.domain.model.TrainState;
 import org.springframework.stereotype.Service;
 
 /**
- * 列车牵引物理模型 —— 基于 TB/T 1407.2-2024 国家标准的能耗计算引擎.
+ * 列车牵引物理模型 —— 基于"列车仿真参数.xlsx"真实车型数据.
  *
- * 公式来源:
- * 基本阻力: W₀ = M·(a + b·v + c·v²)·g (Davis 公式, a/b/c 为 N/kN 级系数)
- * 坡道阻力: Wᵢ = M·g·i/1000 (i 为坡度千分数 ‰)
- * 曲线阻力: Wᵣ = M·g·(600/R) (R 为曲线半径 m, 简化公式)
- * 回转质量修正: γ = 0.06 (旋转部件惯量)
- * 电机效率: η(v) 速度相关映射
- * 辅助能耗: HVAC+照明 ≈ 18kW/节 (TB/T 1407.2 推荐值)
+ * <p>公式来源:
+ * <ul>
+ *   <li>基本阻力: R[N] = 6.4M + 130n + 0.14Mv + [0.046+0.0065(N-1)]Av² (Davis公式)
+ *       M=列车质量(吨), n=24轴, v=车速(km/h), N=6辆, A=10.6m²</li>
+ *   <li>坡道阻力: Wᵢ = M·g·i/1000 (i=坡度千分数‰)</li>
+ *   <li>回转质量修正: γ = 0.06</li>
+ *   <li>电机效率: η = 0.882 (全工况恒定, 由网流/机械功率回归)</li>
+ *   <li>牵引/制动特性: 基于电机转矩曲线 Speed_Tranction_Te_AW0 / Speed_Brake_Te_AW0</li>
+ * </ul>
  */
 @Service
 public class TractionPhysics {
 
-    // ── Davis 基本阻力系数 (地铁6编组, N/kN 级) ──
-    // W₀(N) = M(kg) × 9.81 / 1000 × (a + b·v_(km/h) + c·v_(km/h)²) × 1000
-    // 简化: W₀(N) = M(kg) × (A + B·v_ms + C·v_ms²)
-    // 其中 A≈0.025, B≈0.00035, C≈0.00115 (已在 N/kg 单位)
-    private static final double DAVIS_A = 0.025; // N/kg 机械摩擦常数项 (~525N for 210t)
-    private static final double DAVIS_B = 0.00035; // N·s/(kg·m) 滚动线性项
-    private static final double DAVIS_C = 0.00115; // N·s²/(kg·m²) 空气阻力二次项
-    private static final double ROTARY_MASS_FACTOR = 0.06; // γ 回转质量系数
+    // ── 基本参数 (来源: 列车仿真参数.xlsx) ──
+    private static final double TRAIN_MASS_KG = 225_000.0;
+    private static final int MOTOR_COUNT = 16;
+    private static final double WHEEL_RADIUS_M = 0.46;
 
-    // ── 辅助能耗参数 (TB/T 1407.2 推荐: 8编组~18A, 16编组~36A) ──
-    // 6编组估算: 12A × 1500V DC = 18kW/节 → 108kW 总辅助功率
-    private static final double AUX_POWER_PER_CAR_KW = 18.0; // kW/节
+    // ── Davis 基本阻力系数 (来源: 列车仿真参数.xlsx) ──
+    // 通用形式: R[N] = 6.4M_t + 3120 + 0.14M_t·v_kmh + 0.8321·v_kmh²
+    // 换算为 N/kg 制 (v: m/s):
+    //   R/M = 0.02027 + 0.000504·v_ms + 0.0000479·v_ms²
+    private static final double DAVIS_A = 0.02027;
+    private static final double DAVIS_B = 0.000504;
+    private static final double DAVIS_C = 0.0000479;
+    private static final double ROTARY_MASS_FACTOR = 0.06;
 
-    // ── 电机效率曲线 η(v) (速度相关, 简化为梯形) ──
-    // 0-15 km/h: 0.88 (低速大转矩, 效率稍低)
-    // 15-50 km/h: 0.93 (最优区)
-    // 50-80 km/h: 0.90 (弱磁区)
-    // >80 km/h: 0.88
-    public static double motorEfficiency(double speedKmh) {
-        if (speedKmh < 15)
-            return 0.88;
-        if (speedKmh < 50)
-            return 0.93;
-        if (speedKmh < 80)
-            return 0.90;
-        return 0.88;
-    }
+    // ── 传动比 (需根据实际车型确认, 当前为推算值) ──
+    private static final double GEAR_RATIO = 7.5;
+    private static final double RPM_TO_KMH = 2.0 * Math.PI * WHEEL_RADIUS_M * 3.6 / 60.0;
+
+    // ── 电机转矩特性 (单电机, 来源: 列车仿真参数.xlsx 牵引曲线) ──
+    /** 恒转矩区峰值 N·m */
+    private static final double TORQUE_CONST = 1042.9;
+    /** 恒转矩→恒功率过渡转速 rpm */
+    private static final double RPM_CT_END = 2496.1;
+    /** 恒功率区功率 kW */
+    private static final double POWER_CONST_KW = 271.0;
+    /** 恒功率→自然特性过渡转速 rpm */
+    private static final double RPM_CP_END = 2912.1;
+    /** 自然特性区: T = K_NAT / rpm² */
+    private static final double K_NAT = 6.477812984e9;
+
+    // ── 制动转矩特性 (单电机) ──
+    private static final double TORQUE_BRAKE = 977.7;
+    private static final double RPM_BRAKE_START = 166.4;
+
+    // ── 效率 (来源: 列车仿真参数.xlsx 网流/机械功率回归) ──
+    private static final double EFF_TRACTION = 0.882;
+    private static final double EFF_REGEN = 0.802;
+
+    // ── 辅助能耗 ──
+    private static final double AUX_POWER_PER_CAR_KW = 18.0;
 
     private final LineDataService lineDataService;
 
@@ -52,37 +67,31 @@ public class TractionPhysics {
         this.lineDataService = lineDataService;
     }
 
-    /**
-     * 计算列车总运行阻力 (N)
-     * W = W₀(基本) + Wᵢ(坡道) + Wᵣ(曲线)
-     */
+    // ═══════════════════════════════════════════════════════════════
+    // 阻力计算
+    // ═══════════════════════════════════════════════════════════════
+
+    /** 获取列车总质量 (kg) */
+    private double getTrainMassKg(TrainState train) {
+        return TRAIN_MASS_KG;
+    }
+
     public double totalResistanceForce(TrainState train) {
-        double massKg = train.getCarCount() * 35000.0;
+        double massKg = getTrainMassKg(train);
         double speedMs = train.getSpeed() / 3.6;
-
-        double basicResistance = basicResistanceNewton(massKg, speedMs);
-        double gradeResistance = gradeResistanceNewton(massKg, train.getPositionMeters());
-        // 曲线附加阻力: 当前线路数据中无水平曲线半径字段, 保持0
-        // w_r = M × g × (600 / R), 其中 R 为曲线半径(m)
-        double curveResistance = 0;
-
-        return basicResistance + gradeResistance + curveResistance;
+        return basicResistanceNewton(massKg, speedMs)
+                + gradeResistanceNewton(massKg, train.getPositionMeters());
     }
 
     /**
-     * Davis 基本阻力 W₀(N)
-     * 实际公式: W₀ = M × (DAVIS_A + DAVIS_B×v + DAVIS_C×v²)
-     * 其中 M 为列车质量(kg), v 为速度(m/s)
+     * Davis 基本阻力 W₀(N) = M × (DAVIS_A + DAVIS_B×v_ms + DAVIS_C×v_ms²)
      */
     public double basicResistanceNewton(double massKg, double speedMs) {
         return massKg * (DAVIS_A + DAVIS_B * speedMs + DAVIS_C * speedMs * speedMs);
     }
 
     /**
-     * 坡道附加阻力 Wᵢ(N)
-     * Wᵢ = M × g × i / 1000
-     * 其中 i 为线路坡度千分数 (‰)
-     * 上坡为正(增阻), 下坡为负(助行)
+     * 坡道附加阻力 Wᵢ(N) = M × g × i / 1000 (i=‰)
      */
     public double gradeResistanceNewton(double massKg, double positionMeters) {
         double posKm = positionMeters / 1000.0;
@@ -92,128 +101,115 @@ public class TractionPhysics {
 
     /**
      * 惯性力 (N): F = M × a × (1 + γ)
-     * 回转质量系数 γ 修正旋转部件惯量对加速的影响
      */
     public double inertiaForce(double massKg, double accelMs2) {
         return massKg * accelMs2 * (1.0 + ROTARY_MASS_FACTOR);
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // 电机转矩 / 牵引力
+    // ═══════════════════════════════════════════════════════════════
+
     /**
-     * 牵引功率 (kW): P = (F_traction × v) / (η × 1000)
-     * F_traction = 惯性力 + 总阻力
-     * η = 电机效率 (速度相关)
+     * 单电机最大牵引转矩 (N·m).
+     * 恒转矩区(0~2496rpm):     T = 1042.9
+     * 恒功率区(2496~2912rpm):  T = 271kW × 9549.3 / rpm
+     * 自然特性区(2912~4160rpm): T = 6.478×10⁹ / rpm²
      */
-    public double tractionPowerKw(TrainState train) {
-        double massKg = train.getCarCount() * 35000.0;
-        double accelMs2 = Math.max(0, train.getAcceleration() / 3.6); // km/h/s → m/s²
-        double speedMs = train.getSpeed() / 3.6;
-        double speedKmh = train.getSpeed();
+    public static double motorTorqueTraction(double rpm) {
+        if (rpm <= RPM_CT_END) {
+            return TORQUE_CONST;
+        } else if (rpm <= RPM_CP_END) {
+            return POWER_CONST_KW * 9549.3 / rpm;
+        } else {
+            return K_NAT / (rpm * rpm);
+        }
+    }
 
-        double inertiaForce = inertiaForce(massKg, accelMs2);
-        double resistanceForce = totalResistanceForce(train);
-        double totalForceN = inertiaForce + resistanceForce;
-        double efficiency = motorEfficiency(speedKmh);
-
-        return (totalForceN * speedMs) / (efficiency * 1000.0);
+    /** 车速 km/h → 电机转速 rpm */
+    private static double speedToRpm(double speedKmh) {
+        return speedKmh * GEAR_RATIO / RPM_TO_KMH;
     }
 
     /**
-     * 巡航功率 (kW): 仅克服阻力, 无惯性项
+     * 最大可用轮周牵引力 (N).
      */
+    public double maxTractiveForceAtSpeed(double speedKmh, int availableMotors, int totalMotors) {
+        double rpm = speedToRpm(Math.max(0.1, speedKmh));
+        double torque = motorTorqueTraction(rpm);
+        double ratio = (double) availableMotors / Math.max(1, totalMotors);
+        return torque * MOTOR_COUNT * ratio * GEAR_RATIO / WHEEL_RADIUS_M;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 功率 / 能耗
+    // ═══════════════════════════════════════════════════════════════
+
+    /** 电机+逆变器效率 (全工况恒定 88.2%) */
+    public static double motorEfficiency(double speedKmh) {
+        return EFF_TRACTION;
+    }
+
+    /** 牵引功率 (kW): P = (F_inertia + F_resistance) × v / (η × 1000) */
+    public double tractionPowerKw(TrainState train) {
+        double massKg = getTrainMassKg(train);
+        double accelMs2 = Math.max(0, train.getAcceleration() / 3.6);
+        double speedMs = train.getSpeed() / 3.6;
+        double totalForceN = inertiaForce(massKg, accelMs2) + totalResistanceForce(train);
+        return (totalForceN * speedMs) / (EFF_TRACTION * 1000.0);
+    }
+
+    /** 巡航功率 (kW): 仅克服阻力 */
     public double cruisingPowerKw(TrainState train) {
         double speedMs = train.getSpeed() / 3.6;
-        double speedKmh = train.getSpeed();
         double resistanceForce = totalResistanceForce(train);
-        double efficiency = motorEfficiency(speedKmh);
-        return (resistanceForce * speedMs) / (efficiency * 1000.0);
+        return (resistanceForce * speedMs) / (EFF_TRACTION * 1000.0);
     }
 
-    /**
-     * 再生制动回收功率 (kW)
-     * P_regen = (F_brake × v) × η_regen / 1000
-     * η_regen = 0.65 (典型值), 实际利用率取决于附近是否有吸收列车
-     */
+    /** 再生制动回收功率 (kW) */
     public double regenPowerKw(TrainState train, double regenUtilizationRate) {
-        double massKg = train.getCarCount() * 35000.0;
+        double massKg = getTrainMassKg(train);
         double decelMs2 = Math.abs(Math.min(0, train.getAcceleration() / 3.6));
         double speedMs = train.getSpeed() / 3.6;
         double decelForce = massKg * decelMs2 * (1.0 + ROTARY_MASS_FACTOR);
-        // 制动时阻力帮助减速, 可回收部分扣除阻力
         double resistanceHelp = basicResistanceNewton(massKg, speedMs);
         double netBrakingPower = Math.max(0, (decelForce - resistanceHelp) * speedMs / 1000.0);
-        return netBrakingPower * 0.65 * regenUtilizationRate;
+        return netBrakingPower * EFF_REGEN * regenUtilizationRate;
     }
 
-    /**
-     * 单步牵引能耗 (kWh): E = P_traction × Δt / 3600
-     */
+    /** 单步牵引能耗 (kWh) */
     public double tractionStepEnergyKwh(TrainState train) {
-        return tractionPowerKw(train) / 3600.0; // 1秒步长
+        return tractionPowerKw(train) / 3600.0;
     }
 
-    /**
-     * 单步巡航能耗 (kWh)
-     */
+    /** 单步巡航能耗 (kWh) */
     public double cruisingStepEnergyKwh(TrainState train) {
         return cruisingPowerKw(train) / 3600.0;
     }
 
-    /**
-     * 单步再生制动回收 (kWh)
-     */
+    /** 单步再生制动回收 (kWh) */
     public double regenStepEnergyKwh(TrainState train, double regenUtilizationRate) {
         return regenPowerKw(train, regenUtilizationRate) / 3600.0;
     }
 
-    /**
-     * 辅助能耗 (kW): HVAC + 照明 + 控制系统
-     * 6节编组 × 18kW/节 = 108kW
-     */
+    /** 辅助能耗 (kW): 6编组×18kW/节 = 108kW */
     public double auxiliaryPowerKw(int carCount) {
         return carCount * AUX_POWER_PER_CAR_KW;
     }
 
-    /**
-     * 单步辅助能耗 (kWh)
-     */
+    /** 单步辅助能耗 (kWh) */
     public double auxiliaryStepEnergyKwh(int carCount) {
-        return auxiliaryPowerKw(carCount) / 3600.0; // 1秒步长
+        return auxiliaryPowerKw(carCount) / 3600.0;
     }
 
-    // ── 查询方法 ──
+    // ═══════════════════════════════════════════════════════════════
+    // 查询
+    // ═══════════════════════════════════════════════════════════════
 
-    /**
-     * 牵引能力曲线 (中车株洲所异步电机特性, 6B编组参考值).
-     *
-     * 恒转矩区 (0~36km/h):  F_max = 310 kN
-     * 恒功率区 (36~72km/h): F = 310 × 36 / v
-     * 自然特性区 (>72km/h): F = 310 × 36 × 72 / v²
-     *
-     * @param speedKmh 当前速度 (km/h)
-     * @param availableMotors 可用电机数
-     * @param totalMotors 总电机数 (用于计算能力比例)
-     * @return 当前最大可用牵引力 (N)
-     */
-    public double maxTractiveForceAtSpeed(double speedKmh, int availableMotors, int totalMotors) {
-        double ratio = (double) availableMotors / Math.max(1, totalMotors);
-        double baseForceKN = 310.0 * ratio; // 6B编组恒转矩 310kN
-        double v = Math.max(1, speedKmh);
-
-        if (v <= 36.0) {
-            return baseForceKN * 1000.0;
-        } else if (v <= 72.0) {
-            return baseForceKN * 36.0 / v * 1000.0;
-        } else {
-            return baseForceKN * 36.0 * 72.0 / (v * v) * 1000.0;
-        }
-    }
-
-    /** 获取位置处坡度(‰) */
     public int getGradePermilleAtMeters(double positionMeters) {
         return lineDataService.getGradientAtKm(positionMeters / 1000.0);
     }
 
-    /** 是否在隧道内 */
     public boolean isInTunnel(double positionMeters) {
         return lineDataService.isTunnelAtKm(positionMeters / 1000.0);
     }

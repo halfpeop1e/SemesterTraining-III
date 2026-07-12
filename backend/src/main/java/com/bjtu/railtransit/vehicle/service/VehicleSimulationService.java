@@ -311,6 +311,9 @@ public class VehicleSimulationService {
         }
         multiParticleService.initCarPositions(cars, line.getStartPosition(), 0.0);
 
+        double trainMassKg = train.getMass();
+        int totalMotors = 16; // 6B编组16电机
+
         List<TrainState> states = new ArrayList<>();
 
         double t = 0.0;
@@ -320,6 +323,7 @@ public class VehicleSimulationService {
         double brakeTriggerPosition = 0.0;
         double predictedStopPositionAtTrigger = 0.0;
         boolean hasMoved = false;
+        double sampleDragDecel = 0.0; // 采样时刻阻力减速度
 
         for (int step = 0; step < MAX_STEPS; step++) {
             TrainCar head = cars.get(0);
@@ -338,8 +342,9 @@ public class VehicleSimulationService {
             double samplePos = pos;
             double sampleV = v;
             List<CarSnapshot> sampleCars = mapCarSnapshots(cars);
-            SimulationPhase samplePhase = SimulationPhase.COAST;
-            double sampleAccel = 0.0;
+            SimulationPhase samplePhase = null;
+            double sampleAcceleration = 0.0;
+            sampleDragDecel = computeNetDrag(pos, v, train, line);
 
             for (int sub = 0; sub < SUB_STEPS_PER_SAMPLE; sub++) {
                 head = cars.get(0);
@@ -410,19 +415,36 @@ public class VehicleSimulationService {
 
                 if (sub == 0) {
                     samplePhase = phase;
-                    sampleAccel = reportedAccelFor(phase, targetAccel);
+                    sampleAcceleration = reportedAccelFor(phase, targetAccel);
                 }
                 t += dtSub;
             }
 
-            states.add(buildSampleState(sampleT, samplePos, sampleV, sampleAccel, samplePhase, sampleCars));
+            // 计算轮周力: F = M × (a + dragDecel)
+            double tractionForceN = 0.0;
+            double brakeForceN = 0.0;
+            if (samplePhase == SimulationPhase.TRACTION) {
+                tractionForceN = trainMassKg * (sampleAcceleration + sampleDragDecel);
+            } else if (samplePhase == SimulationPhase.BRAKING) {
+                brakeForceN = trainMassKg * (-sampleAcceleration - sampleDragDecel);
+            }
+            com.bjtu.railtransit.vehicle.dto.TrainState sampleSt =
+                    new com.bjtu.railtransit.vehicle.dto.TrainState(
+                            sampleT, samplePos, sampleV, sampleAcceleration,
+                            samplePhase, "T1", tractionForceN, brakeForceN, totalMotors);
+            sampleSt.setCars(sampleCars);
+            states.add(sampleSt);
         }
 
         if (states.isEmpty() || states.get(states.size() - 1).getPhase() != SimulationPhase.STOPPED) {
             throw new IllegalStateException("车辆仿真未在最大步数内收敛到停车状态，请检查演示配置参数");
         }
 
-        return buildResult(states, targetStopPosition, speedLimit, dt, brakeTriggerPosition, predictedStopPositionAtTrigger);
+        SimulationResult result = buildResult(states, targetStopPosition, speedLimit, dt,
+                brakeTriggerPosition, predictedStopPositionAtTrigger);
+        result.getSummary().setTrainMass(trainMassKg);
+        result.getSummary().setTotalMotors(totalMotors);
+        return result;
     }
 
     /**
@@ -640,7 +662,10 @@ public class VehicleSimulationService {
                         st.getVelocity(),
                         st.getAcceleration(),
                         st.getPhase(),
-                        "T1"
+                        "T1",
+                        st.getTractionForce(),
+                        st.getBrakeForce(),
+                        st.getAvailableMotors()
                 );
                 adjusted.setAbsolutePosition(absPos);
                 adjusted.setCars(st.getCars());
@@ -872,6 +897,8 @@ public class VehicleSimulationService {
 
         double startT = request.getCurrentState().getTime();
         double t = startT;
+        double trainMassKg = train.getMass();
+        int totalMotors = 16;
 
         java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> states = new java.util.ArrayList<>();
         java.util.List<com.bjtu.railtransit.vehicle.dto.SafetyEvent> safetyEvents = new java.util.ArrayList<>();
@@ -931,13 +958,17 @@ public class VehicleSimulationService {
                     && fManualTractionAccel > dragAtZero;
 
             if (brakingTriggered && v <= VELOCITY_EPSILON) {
-                states.add(makeGlobal(t, cars, 0.0, 0.0, SimulationPhase.STOPPED,
-                        currentCumulativePos, request.getCurrentState().getAbsolutePosition()));
+                states.add(makeGlobal(t, localPos, 0.0, 0.0,
+                        SimulationPhase.STOPPED, currentCumulativePos,
+                        request.getCurrentState().getAbsolutePosition(),
+                        null, 0.0, 0.0, totalMotors));
                 break;
             }
-            if (!brakingTriggered && hasMoved && v <= VELOCITY_EPSILON && !canMoveForward) {
-                states.add(makeGlobal(t, cars, 0.0, 0.0, SimulationPhase.STOPPED,
-                        currentCumulativePos, request.getCurrentState().getAbsolutePosition()));
+            if (!brakingTriggered && v <= VELOCITY_EPSILON && !canMoveForward) {
+                states.add(makeGlobal(t, localPos, 0.0, 0.0,
+                        SimulationPhase.STOPPED, currentCumulativePos,
+                        request.getCurrentState().getAbsolutePosition(),
+                        null, 0.0, 0.0, totalMotors));
                 break;
             }
 
@@ -947,6 +978,7 @@ public class VehicleSimulationService {
             List<CarSnapshot> sampleCars = mapCarSnapshots(cars);
             SimulationPhase samplePhase = SimulationPhase.COAST;
             double sampleAccel = 0.0;
+            double sampleDrag = computeNetDrag(localPos, v, train, line);
 
             for (int sub = 0; sub < SUB_STEPS_PER_SAMPLE; sub++) {
                 head = cars.get(0);
@@ -1070,8 +1102,15 @@ public class VehicleSimulationService {
                 t += dtSub;
             }
 
-            states.add(makeGlobal(sampleT, sampleLocalPos, sampleV, sampleAccel, samplePhase,
-                    currentCumulativePos, request.getCurrentState().getAbsolutePosition(), sampleCars));
+            if (samplePhase == null) samplePhase = SimulationPhase.STOPPED;
+            double tracFN = samplePhase == SimulationPhase.TRACTION
+                    ? trainMassKg * (sampleAccel + sampleDrag) : 0.0;
+            double brkFN = samplePhase == SimulationPhase.BRAKING
+                    ? trainMassKg * (-sampleAccel - sampleDrag) : 0.0;
+            states.add(makeGlobal(sampleT, sampleLocalPos, sampleV, sampleAccel,
+                    samplePhase, currentCumulativePos,
+                    request.getCurrentState().getAbsolutePosition(),
+                    sampleCars, tracFN, brkFN, totalMotors));
         }
 
         if (states.isEmpty() || states.get(states.size() - 1).getPhase() != SimulationPhase.STOPPED) {
@@ -1100,6 +1139,8 @@ public class VehicleSimulationService {
         if (fMode == DrivingMode.EMERGENCY && lastState.getPhase() == SimulationPhase.STOPPED) {
             summary.setNextMode(DrivingMode.MANUAL);
         }
+        summary.setTrainMass(trainMassKg);
+        summary.setTotalMotors(totalMotors);
 
         SimulationResult result = new SimulationResult(states, summary, stopResult, safetyEvents);
         if (request.getNextStationId() != null) {
@@ -1172,17 +1213,19 @@ public class VehicleSimulationService {
             double cumulativeOffset, Double baseAbsolutePos) {
         TrainCar head = cars.get(0);
         return makeGlobal(t, head.getPositionMeters(), velocity, acceleration, phase,
-                cumulativeOffset, baseAbsolutePos, mapCarSnapshots(cars));
+                cumulativeOffset, baseAbsolutePos, mapCarSnapshots(cars), 0.0, 0.0, 16);
     }
 
     private com.bjtu.railtransit.vehicle.dto.TrainState makeGlobal(
             double t, double localPos, double velocity, double acceleration,
             SimulationPhase phase,
-            double cumulativeOffset, Double baseAbsolutePos, List<CarSnapshot> cars) {
+            double cumulativeOffset, Double baseAbsolutePos,
+            List<CarSnapshot> cars, double tractionForceN, double brakeForceN, int availableMotors) {
         double globalPos = cumulativeOffset + localPos;
         com.bjtu.railtransit.vehicle.dto.TrainState st =
                 new com.bjtu.railtransit.vehicle.dto.TrainState(
-                        t, globalPos, velocity, acceleration, phase, "T1");
+                        t, globalPos, velocity, acceleration, phase, "T1",
+                        tractionForceN, brakeForceN, availableMotors);
         if (baseAbsolutePos != null) {
             st.setAbsolutePosition(baseAbsolutePos + localPos);
         }

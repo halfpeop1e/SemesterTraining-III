@@ -27,6 +27,12 @@ export interface TrainState {
    * LineRunView 优先使用此字段在全线地图上定位列车。
    */
   absolutePosition?: number;
+  /** 当前轮周牵引力 N（正值, 惰行/制动时为0, 后端新增字段）。 */
+  tractionForce?: number;
+  /** 当前轮周制动力 N（正值, 牵引/惰行时为0, 后端新增字段）。 */
+  brakeForce?: number;
+  /** 当前可用电机数（默认16, 后端新增字段）。 */
+  availableMotors?: number;
 }
 
 /** 仿真总结指标。 */
@@ -47,6 +53,10 @@ export interface SimulationSummary {
   // 驾驶模式（/control 接口返回时填充）
   currentMode?: DrivingMode | null;
   nextMode?: DrivingMode | null;
+  /** 列车总质量 kg（后端新增字段）。 */
+  trainMass?: number;
+  /** 列车总电机数（后端新增字段）。 */
+  totalMotors?: number;
 }
 
 /** 自动停站结果。 */

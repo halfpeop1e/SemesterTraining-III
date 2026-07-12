@@ -137,14 +137,22 @@ const fmtTime = (s: number) =>
     .join(":");
 const fmtNum = (n: number) => Math.round(n).toLocaleString();
 
-function interpolatePos(posMeters: number, sorted: StationGeo[]) {
+function interpolatePos(
+  posMeters: number,
+  sorted: StationGeo[],
+  offsetLat: number = 0,
+  offsetLng: number = 0,
+) {
   const km = posMeters / 1000;
   if (km <= sorted[0].km)
-    return { lat: sorted[0].latitude, lng: sorted[0].longitude };
+    return {
+      lat: sorted[0].latitude + offsetLat,
+      lng: sorted[0].longitude + offsetLng,
+    };
   if (km >= sorted[sorted.length - 1].km)
     return {
-      lat: sorted[sorted.length - 1].latitude,
-      lng: sorted[sorted.length - 1].longitude,
+      lat: sorted[sorted.length - 1].latitude + offsetLat,
+      lng: sorted[sorted.length - 1].longitude + offsetLng,
     };
   let ni = 1;
   while (ni < sorted.length && sorted[ni].km < km) ni++;
@@ -152,8 +160,119 @@ function interpolatePos(posMeters: number, sorted: StationGeo[]) {
     n = sorted[ni];
   const r = (km - p.km) / (n.km - p.km);
   return {
-    lat: p.latitude + (n.latitude - p.latitude) * r,
-    lng: p.longitude + (n.longitude - p.longitude) * r,
+    lat: p.latitude + (n.latitude - p.latitude) * r + offsetLat,
+    lng: p.longitude + (n.longitude - p.longitude) * r + offsetLng,
+  };
+}
+
+/**
+ * 计算线路的上下行偏移坐标。
+ * 对中心线的每个站点/拐点沿法线方向偏移 OFFSET_DEG 度，
+ * 分别在两侧生成上行线和下行线的坐标点列。
+ */
+const LINE_OFFSET_DEG = 0.00038; // 约 35-40m 偏移
+
+function computeDirectionLines(sorted: StationGeo[]): {
+  upCoords: [number, number][];
+  downCoords: [number, number][];
+  directionVectors: { dLat: number; dLng: number }[];
+} {
+  const n = sorted.length;
+  const upCoords: [number, number][] = [];
+  const downCoords: [number, number][] = [];
+  const directionVectors: { dLat: number; dLng: number }[] = [];
+
+  // 为每个站点计算法线方向（取相邻线段的平均法线）
+  for (let i = 0; i < n; i++) {
+    let dx = 0,
+      dy = 0;
+
+    if (i === 0) {
+      // 首站：用第一段的法线
+      dx = sorted[1].longitude - sorted[0].longitude;
+      dy = sorted[1].latitude - sorted[0].latitude;
+    } else if (i === n - 1) {
+      // 末站：用最后一段的法线
+      dx = sorted[n - 1].longitude - sorted[n - 2].longitude;
+      dy = sorted[n - 1].latitude - sorted[n - 2].latitude;
+    } else {
+      // 中间站：平均前后两段的法线
+      const dx1 = sorted[i].longitude - sorted[i - 1].longitude;
+      const dy1 = sorted[i].latitude - sorted[i - 1].latitude;
+      const dx2 = sorted[i + 1].longitude - sorted[i].longitude;
+      const dy2 = sorted[i + 1].latitude - sorted[i].latitude;
+      dx = dx1 + dx2;
+      dy = dy1 + dy2;
+    }
+
+    // 法线方向：(-dy, dx) 归一化
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const dLat = -dy / len;
+    const dLng = dx / len;
+
+    directionVectors.push({ dLat, dLng });
+
+    // 上行线在一侧（法线正方向），下行线在另一侧（法线负方向）
+    upCoords.push([
+      sorted[i].latitude + dLat * LINE_OFFSET_DEG,
+      sorted[i].longitude + dLng * LINE_OFFSET_DEG,
+    ]);
+    downCoords.push([
+      sorted[i].latitude - dLat * LINE_OFFSET_DEG,
+      sorted[i].longitude - dLng * LINE_OFFSET_DEG,
+    ]);
+  }
+
+  return { upCoords, downCoords, directionVectors };
+}
+
+/**
+ * 根据列车方向和公里标，在对应方向线路上插值位置。
+ */
+function interpolateTrainPos(
+  posMeters: number,
+  sorted: StationGeo[],
+  dirVectors: { dLat: number; dLng: number }[],
+  direction: "UP" | "DOWN",
+) {
+  const sign = direction === "UP" ? 1 : -1;
+  const km = posMeters / 1000;
+  if (km <= sorted[0].km) {
+    const v = dirVectors[0];
+    return {
+      lat: sorted[0].latitude + sign * v.dLat * LINE_OFFSET_DEG,
+      lng: sorted[0].longitude + sign * v.dLng * LINE_OFFSET_DEG,
+    };
+  }
+  if (km >= sorted[sorted.length - 1].km) {
+    const v = dirVectors[sorted.length - 1];
+    return {
+      lat: sorted[sorted.length - 1].latitude + sign * v.dLat * LINE_OFFSET_DEG,
+      lng:
+        sorted[sorted.length - 1].longitude + sign * v.dLng * LINE_OFFSET_DEG,
+    };
+  }
+  let ni = 1;
+  while (ni < sorted.length && sorted[ni].km < km) ni++;
+  const p = sorted[ni - 1],
+    n = sorted[ni];
+  const r = (km - p.km) / (n.km - p.km);
+
+  // 在两站的法线向量之间插值
+  const vp = dirVectors[ni - 1],
+    vn = dirVectors[ni];
+  const dLat = vp.dLat + (vn.dLat - vp.dLat) * r;
+  const dLng = vp.dLng + (vn.dLng - vp.dLng) * r;
+
+  return {
+    lat:
+      p.latitude +
+      (n.latitude - p.latitude) * r +
+      sign * dLat * LINE_OFFSET_DEG,
+    lng:
+      p.longitude +
+      (n.longitude - p.longitude) * r +
+      sign * dLng * LINE_OFFSET_DEG,
   };
 }
 
@@ -412,11 +531,16 @@ function MapView({
   const stationMrkRef = useRef<L.CircleMarker[]>([]);
   const trainMrkRef = useRef<L.CircleMarker[]>([]);
   const carMrkRef = useRef<L.CircleMarker[]>([]);
-  const lineRef = useRef<L.Polyline | null>(null);
-  const glowRef = useRef<L.Polyline | null>(null);
+  const upLineRef = useRef<L.Polyline | null>(null);
+  const downLineRef = useRef<L.Polyline | null>(null);
+  const upGlowRef = useRef<L.Polyline | null>(null);
+  const downGlowRef = useRef<L.Polyline | null>(null);
+  const upLabelRef = useRef<L.Tooltip | null>(null);
+  const downLabelRef = useRef<L.Tooltip | null>(null);
   const heatLayerRef = useRef<L.CircleMarker[]>([]);
   const popHeatLayerRef = useRef<any>(null);
   const fitDone = useRef(false);
+  const dirVectorsRef = useRef<{ dLat: number; dLng: number }[]>([]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -470,27 +594,74 @@ function MapView({
     if (!map || stations.length === 0) return;
     stationMrkRef.current.forEach((m) => m.remove());
     stationMrkRef.current = [];
-    lineRef.current?.remove();
-    glowRef.current?.remove();
+    upLineRef.current?.remove();
+    downLineRef.current?.remove();
+    upGlowRef.current?.remove();
+    downGlowRef.current?.remove();
+    upLabelRef.current?.remove();
+    downLabelRef.current?.remove();
+
     const sorted = [...stations].sort((a, b) => a.id - b.id);
-    const coords: [number, number][] = sorted.map((s) => [
-      s.latitude,
-      s.longitude,
-    ]);
-    glowRef.current = L.polyline(coords, {
-      color: "#00a8e8",
+    const { upCoords, downCoords, directionVectors } =
+      computeDirectionLines(sorted);
+    dirVectorsRef.current = directionVectors;
+
+    // 上行线（粉色）
+    upGlowRef.current = L.polyline(upCoords, {
+      color: "#f472b6",
       weight: 8,
       opacity: 0.15,
       lineCap: "round",
       lineJoin: "round",
     }).addTo(map);
-    lineRef.current = L.polyline(coords, {
-      color: "#00a8e8",
+    upLineRef.current = L.polyline(upCoords, {
+      color: "#f472b6",
       weight: 3,
       opacity: 0.9,
       lineCap: "round",
       lineJoin: "round",
     }).addTo(map);
+
+    // 下行线（青色）
+    downGlowRef.current = L.polyline(downCoords, {
+      color: "#38bdf8",
+      weight: 8,
+      opacity: 0.15,
+      lineCap: "round",
+      lineJoin: "round",
+    }).addTo(map);
+    downLineRef.current = L.polyline(downCoords, {
+      color: "#38bdf8",
+      weight: 3,
+      opacity: 0.9,
+      lineCap: "round",
+      lineJoin: "round",
+    }).addTo(map);
+
+    // 方向标注：在线路起点附近
+    const upMid = upCoords[Math.floor(upCoords.length / 2)];
+    const downMid = downCoords[Math.floor(downCoords.length / 2)];
+
+    upLabelRef.current = L.tooltip({
+      permanent: true,
+      direction: "center",
+      className: "d-dir-label",
+      content:
+        '<span style="color:#f472b6;font-weight:700;font-size:11px;">上行 ↑</span>',
+    })
+      .setLatLng(upMid)
+      .addTo(map);
+    downLabelRef.current = L.tooltip({
+      permanent: true,
+      direction: "center",
+      className: "d-dir-label",
+      content:
+        '<span style="color:#38bdf8;font-weight:700;font-size:11px;">下行 ↓</span>',
+    })
+      .setLatLng(downMid)
+      .addTo(map);
+
+    // 站点标记居中绘制在两个方向线之间
     sorted.forEach((s) => {
       const m = L.circleMarker([s.latitude, s.longitude], {
         radius: s.id === 1 || s.id === sorted.length ? 9 : 7,
@@ -507,20 +678,20 @@ function MapView({
       m.on("mouseout", () => m.setStyle({ fillColor: "#060b11" }));
       stationMrkRef.current.push(m);
     });
-    // Auto-fit map bounds to cover all stations (delay ensures container has size)
+
+    // Auto-fit map bounds to cover all stations
     if (!fitDone.current) {
       const doFit = () => {
         const map = mapRef.current;
         if (!map || !containerRef.current) return;
-        // 确保容器有尺寸再调用 fitBounds，避免 Leaflet _leaflet_pos 错误
         const container = containerRef.current;
         if (container.clientWidth === 0 || container.clientHeight === 0) {
           setTimeout(doFit, 200);
           return;
         }
-        const bounds = L.latLngBounds(
-          sorted.map((s) => [s.latitude, s.longitude]),
-        );
+        // 用上下行线的合并范围来 fit
+        const allCoords = [...upCoords, ...downCoords];
+        const bounds = L.latLngBounds(allCoords);
         try {
           map.fitBounds(bounds, { padding: [30, 30] });
           fitDone.current = true;
@@ -540,10 +711,18 @@ function MapView({
     carMrkRef.current.forEach((m) => m.remove());
     carMrkRef.current = [];
     const sorted = [...stations].sort((a, b) => a.id - b.id);
+    const dirVectors = dirVectorsRef.current;
+    if (dirVectors.length === 0) return;
+
     trains
       .filter((t) => t.status !== "FINISHED")
       .forEach((t) => {
-        const hp = interpolatePos(t.positionMeters, sorted);
+        const hp = interpolateTrainPos(
+          t.positionMeters,
+          sorted,
+          dirVectors,
+          t.direction,
+        );
         if (!hp) return;
         const bg = STATUS_COLOR[t.status];
         const isMoving = t.speed > 0;
@@ -567,7 +746,12 @@ function MapView({
         // All cars (including head car's position for all 6 cars)
         if (t.cars && t.cars.length > 1) {
           t.cars.slice(1).forEach((car: any) => {
-            const cp = interpolatePos(car.positionMeters, sorted);
+            const cp = interpolateTrainPos(
+              car.positionMeters,
+              sorted,
+              dirVectors,
+              t.direction,
+            );
             if (!cp) return;
             carMrkRef.current.push(
               L.circleMarker([cp.lat, cp.lng], {
@@ -2474,4 +2658,8 @@ const STYLES = `@import url('https://fonts.googleapis.com/css2?family=JetBrains+
 .leaflet-control-attribution a{color:var(--color-accent)!important}
 
 .d-tooltip{font-size:var(--text-xs)!important;padding:5px 8px!important;border-radius:var(--radius-md)!important;border:none!important;background:rgba(13,21,32,0.96)!important;color:var(--color-text-heading)!important;box-shadow:var(--shadow-lg)!important}
-.d-tooltip::before{border-top-color:rgba(13,21,32,0.96)!important}`;
+.d-tooltip::before{border-top-color:rgba(13,21,32,0.96)!important}
+
+/* ── Direction label (permanent tooltip) ── */
+.d-dir-label{font-size:var(--text-xs)!important;padding:1px 5px!important;border-radius:var(--radius-sm)!important;border:none!important;background:rgba(13,21,32,0.85)!important;color:var(--color-text-heading)!important;box-shadow:none!important}
+.d-dir-label::before{display:none!important}`;

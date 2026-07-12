@@ -185,4 +185,18 @@ public class SimulationSummary {
     public void setCompletedStops(int completedStops) { this.completedStops = completedStops; }
     public String getDepartureState() { return departureState; }
     public void setDepartureState(String departureState) { this.departureState = departureState; }
+
+    // ---- 牵引特性曲线对接字段 ----
+
+    /** 列车总质量 kg (来源: TrainModel.mass)。 */
+    private double trainMass;
+
+    /** 列车总电机数。 */
+    private int totalMotors;
+
+    public double getTrainMass() { return trainMass; }
+    public void setTrainMass(double trainMass) { this.trainMass = trainMass; }
+
+    public int getTotalMotors() { return totalMotors; }
+    public void setTotalMotors(int totalMotors) { this.totalMotors = totalMotors; }
 }
