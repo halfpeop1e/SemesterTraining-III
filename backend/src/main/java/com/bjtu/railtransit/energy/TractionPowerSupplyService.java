@@ -24,7 +24,7 @@ public class TractionPowerSupplyService {
     private static final double MIN_OPERATING_VOLTAGE = 1000.0; // 最低工作电压 V
     private static final double RAIL_RESISTANCE_OHM_PER_KM = 0.015; // 接触轨电阻 Ω/km
     private static final double SUBSTATION_CAPACITY_MW = 3.0;  // 单座变电站容量 MW
-    private static final double REGEN_EFFICIENCY = 0.65;       // 再生制动吸收效率
+    private static final double REGEN_EFFICIENCY = 0.802;       // 再生制动吸收效率
 
     private final LineDataService lineDataService;
     private final List<Substation> substations = new ArrayList<>();

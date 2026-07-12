@@ -264,8 +264,8 @@ export default function EnergyEvaluation() {
         {
           scenarioName: "北京9号线仿真场景",
           simulationLogs: logs,
-          tractionEfficiency: 0.85,
-          regenEfficiency: 0.65,
+          tractionEfficiency: 0.882,
+          regenEfficiency: 0.802,
           powerSupplyThreshold: 2000,
         },
         {

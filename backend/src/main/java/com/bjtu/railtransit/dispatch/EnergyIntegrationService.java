@@ -26,8 +26,8 @@ public class EnergyIntegrationService {
     private final PeakPowerDetector peakPowerDetector;
     private final PowerRiskAssessor powerRiskAssessor;
 
-    private static final double DEFAULT_TRACTION_EFFICIENCY = 0.85;
-    private static final double DEFAULT_REGEN_EFFICIENCY = 0.65;
+    private static final double DEFAULT_TRACTION_EFFICIENCY = 0.882;
+    private static final double DEFAULT_REGEN_EFFICIENCY = 0.802;
     private static final double DEFAULT_POWER_THRESHOLD_KW = 2000.0;
 
     public EnergyIntegrationService(EnergyCalculator energyCalculator,
