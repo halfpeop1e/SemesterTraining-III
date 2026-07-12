@@ -256,6 +256,12 @@ public class SimulationService {
 
     public void pauseSimulation() {
         simulationRunning = false;
+        // 广播最终快照，让前端获知 running=false
+        try {
+            webSocketHandler.broadcast(getSnapshot());
+        } catch (Exception e) {
+            // 广播失败不影响
+        }
     }
 
     public double getSimulationTimeSeconds() {

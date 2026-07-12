@@ -401,6 +401,7 @@ function Vehicle() {
 
       try {
         const simulationResult = await runVehicleSimulation({
+          trainId,
           fromStationId: inst.fromStationId,
           toStationId: inst.toStationId,
         });
@@ -454,6 +455,7 @@ function Vehicle() {
 
       try {
         const controlResult = await callVehicleControl({
+          trainId,
           fromStationId: fromId,
           toStationId: toId,
           currentState: cs,
@@ -752,6 +754,14 @@ function Vehicle() {
             ? frame.absolutePosition +
               (nextFrame.absolutePosition - frame.absolutePosition) * fraction
             : frame.absolutePosition,
+        tractionForce:
+          (frame.tractionForce ?? 0) +
+          ((nextFrame.tractionForce ?? 0) - (frame.tractionForce ?? 0)) *
+            fraction,
+        brakeForce:
+          (frame.brakeForce ?? 0) +
+          ((nextFrame.brakeForce ?? 0) - (frame.brakeForce ?? 0)) * fraction,
+        availableMotors: frame.availableMotors,
       });
       if (fraction < 1) {
         rafId = window.requestAnimationFrame(tick);
@@ -950,7 +960,7 @@ function Vehicle() {
                   }))
                 }
                 disabled={!ai.result && ai.status !== "playing"}
-                aria-pressed={ai.speedMultiplier === m ? "true" : "false"}
+                aria-pressed={ai.speedMultiplier === m}
               >
                 {m}x
               </button>
@@ -1156,14 +1166,20 @@ function Vehicle() {
               stationStops={ai.result?.stationStops}
             />
           )}
-          {rightPanelTab === "tractionCurve" && (
+          <div
+            style={{
+              display: rightPanelTab === "tractionCurve" ? undefined : "none",
+              flex: 1,
+              overflow: "auto",
+            }}
+          >
             <TractionCurveView
               currentState={viewState}
               status={ai.status}
               availableMotors={viewState?.availableMotors ?? 16}
               trainMass={ai.result?.summary?.trainMass ?? 225_000}
             />
-          )}
+          </div>
           {rightPanelTab === "timetable" && (
             <TimetableView
               currentState={viewState}

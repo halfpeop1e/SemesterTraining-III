@@ -1,11 +1,11 @@
-import { useMemo } from 'react';
-import type { StationStop, TrainState } from '../../../types/vehicle';
-import { STATIONS } from '../data/lineMap';
-import './TimetableView.css';
+import { useMemo } from "react";
+import type { StationStop, TrainState } from "../../../types/vehicle";
+import { STATIONS } from "../data/lineMap";
+import "./TimetableView.css";
 
 export interface TimetableViewProps {
   currentState: TrainState | null;
-  status: 'idle' | 'loading' | 'playing' | 'finished' | 'error';
+  status: "idle" | "loading" | "playing" | "finished" | "error";
   stationStops?: StationStop[];
   fromStationId: number;
   toStationId: number;
@@ -18,7 +18,7 @@ interface TimetableRow {
   isInScope: boolean;
   isPassed: boolean;
   isCurrent: boolean;
-  actualArrival?: number;   // seconds
+  actualArrival?: number; // seconds
   stopError?: number;
   inWindow?: boolean;
 }
@@ -53,10 +53,10 @@ function estimateSchedule(
 
 /** 格式化秒数为 mm:ss */
 function formatTime(totalSeconds: number): string {
-  if (totalSeconds < 0) return '--:--';
+  if (totalSeconds < 0) return "--:--";
   const m = Math.floor(totalSeconds / 60);
   const s = Math.floor(totalSeconds % 60);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 function TimetableView({
@@ -75,27 +75,35 @@ function TimetableView({
     [fromStationId, toStationId],
   );
 
-  // 已到站的实际时间
+  // 已到站的实际时间（仅限当前仿真时间已到达的站）
   const actualMap = useMemo(() => {
-    const map = new Map<number, { arrivalTime: number; stopError: number; inWindow: boolean }>();
+    const map = new Map<
+      number,
+      { arrivalTime: number; stopError: number; inWindow: boolean }
+    >();
     for (const stop of stationStops) {
-      map.set(stop.stationId, {
-        arrivalTime: stop.arrivalTime,
-        stopError: stop.stopError,
-        inWindow: stop.inWindow,
-      });
+      if (stop.arrivalTime <= currentTime) {
+        map.set(stop.stationId, {
+          arrivalTime: stop.arrivalTime,
+          stopError: stop.stopError,
+          inWindow: stop.inWindow,
+        });
+      }
     }
     return map;
-  }, [stationStops]);
+  }, [stationStops, currentTime]);
 
   // 构建表格行
   const rows: TimetableRow[] = useMemo(() => {
     const r: TimetableRow[] = [];
     let lastPassed = false;
     for (const s of STATIONS) {
-      const inScope = s.stationId >= fromStationId && s.stationId <= toStationId;
+      const inScope =
+        s.stationId >= fromStationId && s.stationId <= toStationId;
       const actual = actualMap.get(s.stationId);
-      const passed = actual !== undefined;
+      // 出发站天然视为"已通过"
+      const isFrom = s.stationId === fromStationId;
+      const passed = actual !== undefined || isFrom;
       const isCurrent = !lastPassed && !passed && inScope;
       if (passed) lastPassed = true;
       if (!inScope) continue;
@@ -114,7 +122,7 @@ function TimetableView({
     return r;
   }, [fromStationId, toStationId, actualMap]);
 
-  const isIdle = status === 'idle' || status === 'loading';
+  const isIdle = status === "idle" || status === "loading";
 
   return (
     <section className="timetable-view" aria-label="时刻表">
@@ -148,16 +156,26 @@ function TimetableView({
               <tbody>
                 {rows.map((row) => {
                   const schedT = schedule.get(row.stationId) ?? 0;
-                  let statusText = '—';
-                  let rowClass = '';
+                  const isFrom = row.stationId === fromStationId;
+                  let statusText = "—";
+                  let rowClass = "";
                   if (row.isPassed) {
-                    statusText = row.inWindow ? '准点' : row.stopError! > 0 ? '冲标' : '欠标';
-                    rowClass = row.inWindow ? 'tt--ontime' : 'tt--late';
+                    if (isFrom) {
+                      statusText = "已发车";
+                      rowClass = "tt--departed";
+                    } else {
+                      statusText = row.inWindow
+                        ? "准点"
+                        : row.stopError! > 0
+                          ? "冲标"
+                          : "欠标";
+                      rowClass = row.inWindow ? "tt--ontime" : "tt--late";
+                    }
                   } else if (row.isCurrent) {
-                    statusText = '← 当前';
-                    rowClass = 'tt--current';
+                    statusText = "← 当前";
+                    rowClass = "tt--current";
                   } else {
-                    statusText = '待到达';
+                    statusText = "待到达";
                   }
                   return (
                     <tr key={row.stationId} className={rowClass}>
@@ -165,12 +183,16 @@ function TimetableView({
                       <td className="tt__km">{row.km.toFixed(2)}km</td>
                       <td className="tt__num">{formatTime(schedT)}</td>
                       <td className="tt__num">
-                        {row.actualArrival !== undefined ? formatTime(row.actualArrival) : '--:--'}
+                        {row.actualArrival !== undefined
+                          ? formatTime(row.actualArrival)
+                          : "--:--"}
                       </td>
-                      <td className={`tt__num ${row.stopError !== undefined ? (Math.abs(row.stopError) <= 0.5 ? 'tt--green' : 'tt--red') : ''}`}>
+                      <td
+                        className={`tt__num ${row.stopError !== undefined ? (Math.abs(row.stopError) <= 0.5 ? "tt--green" : "tt--red") : ""}`}
+                      >
                         {row.stopError !== undefined
-                          ? `${row.stopError >= 0 ? '+' : ''}${row.stopError.toFixed(2)}m`
-                          : '—'}
+                          ? `${row.stopError >= 0 ? "+" : ""}${row.stopError.toFixed(2)}m`
+                          : "—"}
                       </td>
                       <td className={`tt__status ${rowClass}`}>{statusText}</td>
                     </tr>

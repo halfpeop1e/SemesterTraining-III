@@ -161,6 +161,10 @@
   color: #fda4af;
 }
 
+.tt--departed td {
+  color: #64748b;
+}
+
 .tt__status {
   font-weight: 700;
   font-size: 12px;
