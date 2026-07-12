@@ -161,6 +161,7 @@ public class Protocol704FrameParser {
 
         int byte34 = data[34] & 0xFF;
         boolean highAccel = (byte34 & 0x01) != 0;
+        boolean cabinLightSwitch = (byte34 & 0x02) != 0;
         boolean modeUpgradeConfirm = (byte34 & 0x04) != 0;
         boolean modeDowngradeConfirm = (byte34 & 0x08) != 0;
         boolean confirmBtn = (byte34 & 0x10) != 0;
@@ -168,6 +169,7 @@ public class Protocol704FrameParser {
         boolean tractionAssistReset = (byte34 & 0x40) != 0;
         boolean atoStartBtn = (byte34 & 0x80) != 0;
 
+        fields.put("cabin_light_switch", cabinLightSwitch);
         fields.put("high_accel_btn", highAccel);
         fields.put("mode_upgrade_confirm", modeUpgradeConfirm);
         fields.put("mode_downgrade_confirm", modeDowngradeConfirm);
@@ -181,6 +183,8 @@ public class Protocol704FrameParser {
         boolean keySwitch = (byte35 & 0x02) != 0;
         boolean vigilance = (byte35 & 0x04) != 0;
 
+        boolean vigilanceReleaseAllowed = (byte35 & 0x08) != 0;
+        fields.put("vigilance_release_allowed", vigilanceReleaseAllowed);
         fields.put("wash_mode_switch", washSwitch);
         fields.put("key_switch_on", keySwitch);
         fields.put("vigilance_btn", vigilance);
