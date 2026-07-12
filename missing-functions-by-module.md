@@ -835,13 +835,16 @@
 当前状态：
 
 - 本组车辆模型已经能产生速度、加速度、位置。
-- 还缺协议输出给外部显示/视景系统。
+- 协议输出已实现：HilGatewayService 周期 TCP 发送信号屏 66B / 网络屏 572B；
+  Protocol704Service 内 PortClient 支持 PLC 26B/28B 速度回写。
+  视景 TCMS2VIEW UDP 二进制包仍在 VisionProtocolAdapter 中使用 JSON 占位，待与老师确认 .124 端口后按协议打包。
 
 待补功能：
 
-- 把本组车辆模型输出映射为外部显示系统需要的数据。
-- 按周期发送速度、加速度、位移。
-- 接收司机台牵引/制动输入，驱动车辆模型续算。
+- ~~把本组车辆模型输出映射为外部显示系统需要的数据。~~ ✓ 已通过 HilGatewayService + SignalScreen66BEncoder + NetworkScreen572BEncoder 实现
+- ~~按周期发送速度、加速度、位移。~~ ✓ 已通过 @Scheduled 定时任务实现
+- ~~接收司机台牵引/制动输入，驱动车辆模型续算。~~ ✓ 已通过 Protocol704Service → Protocol704VehicleControlBridge → VehicleSimulationService 实现
+- 视景 UDP TCMS2VIEW 二进制编码（当前为 JSON 占位）
 
 建议验收：
 
