@@ -29,6 +29,11 @@ public class SimulationRunRequest {
     private Integer toStationId;
     /** Local vehicle identity used to bind an already-created simulation to local-v1 PLC input. */
     private String trainId;
+    /**
+     * Explicit opt-in for the laboratory driver-desk adapter. Normal web
+     * simulations must remain independent of the 704 PLC lifecycle.
+     */
+    private boolean hardwareControlEnabled;
 
     public SimulationRunRequest() {
     }
@@ -55,6 +60,10 @@ public class SimulationRunRequest {
     }
     public String getTrainId() { return trainId; }
     public void setTrainId(String trainId) { this.trainId = trainId; }
+    public boolean isHardwareControlEnabled() { return hardwareControlEnabled; }
+    public void setHardwareControlEnabled(boolean hardwareControlEnabled) {
+        this.hardwareControlEnabled = hardwareControlEnabled;
+    }
 
     /** 取出有效的起始站 id，null 时返回默认值 1。 */
     public int resolvedFromId() {

@@ -149,6 +149,59 @@ function controlRow(x: number, y: number, central: boolean) {
   );
 }
 
+function trainConsist(
+  train: TrainState,
+  x: number,
+  y: number,
+  selected: boolean,
+  onClick: (event: MouseEvent) => void,
+) {
+  const directionSign = train.direction === 'DOWN' ? -1 : 1;
+  const carWidth = 13;
+  const carGap = 2;
+  const totalWidth = carWidth * 6 + carGap * 5;
+  const left = x - totalWidth / 2;
+  const frontIndex = directionSign > 0 ? 5 : 0;
+  return (
+    <g className="il-hit" onClick={onClick} aria-label={`${train.trainId} 六节编组列车`}>
+      <rect
+        x={left - 5}
+        y={y - 18}
+        width={totalWidth + 10}
+        height={36}
+        rx={5}
+        fill="rgba(0, 184, 230, 0.08)"
+        stroke={selected ? '#ffffff' : 'rgba(0, 210, 255, 0.42)'}
+        strokeWidth={selected ? 1.8 : 1}
+      />
+      {Array.from({ length: 6 }).map((_, index) => {
+        const carX = left + index * (carWidth + carGap);
+        const isFront = index === frontIndex;
+        const points = isFront
+          ? directionSign > 0
+            ? `${carX},${y - 9} ${carX + carWidth - 4},${y - 9} ${carX + carWidth},${y} ${carX + carWidth - 4},${y + 9} ${carX},${y + 9}`
+            : `${carX + 4},${y - 9} ${carX + carWidth},${y - 9} ${carX + carWidth},${y + 9} ${carX + 4},${y + 9} ${carX},${y}`
+          : `${carX},${y - 9} ${carX + carWidth},${y - 9} ${carX + carWidth},${y + 9} ${carX},${y + 9}`;
+        return (
+          <g key={index}>
+            <polygon points={points} fill="#18bde4" stroke="#b9f4ff" strokeWidth={0.7} />
+            <rect x={carX + 3} y={y - 5} width={Math.max(3, carWidth - 6)} height={4} rx={1} fill="#062538" />
+            <circle cx={carX + 3.5} cy={y + 10.5} r={1.5} fill="#8de9fa" />
+            <circle cx={carX + carWidth - 3.5} cy={y + 10.5} r={1.5} fill="#8de9fa" />
+          </g>
+        );
+      })}
+      <rect x={x - 22} y={y - 31} width={44} height={13} rx={2} fill="#06131f" stroke="#24caed" strokeWidth={0.8} />
+      <text x={x} y={y - 21.5} textAnchor="middle" fill="#a9f2ff" fontSize={9} fontWeight={800}>
+        {train.trainId}
+      </text>
+      <text x={x} y={y + 31} textAnchor="middle" fill="#49e6ff" fontSize={9} fontWeight={700}>
+        {train.speedKmh.toFixed(1)} km/h
+      </text>
+    </g>
+  );
+}
+
 /**
  * 站1 终端区（老师图左上红框）：拉开间距、放大车挡/库线/信号，避免挤在主轨上。
  */
@@ -270,7 +323,6 @@ function nearSignals(line: LineProfile, centerM: number, radius: number) {
 export default function InterlockingTopologyDiagram({
   lineProfile,
   trains,
-  maMap,
   builtRouteIds,
   activeStationId,
   selectedEntity,
@@ -303,12 +355,12 @@ export default function InterlockingTopologyDiagram({
   const stationTopologies = useMemo(() => buildStationTopologies(lineProfile), [lineProfile]);
 
   const W = 1720;
-  const H = 1100;
+  const H = 980;
   const rows = [stations.slice(0, 7), stations.slice(7)];
   // 纵向再拉开：上下行轨距约 200px
   const layouts = [
-    { yTop: 200, yBot: 400, head: 40, y0: 20, y1: 1700, foot: 470 },
-    { yTop: 680, yBot: 880, head: 520, y0: 20, y1: 1700, foot: 960 },
+    { yTop: 180, yBot: 360, head: 32, y0: 20, y1: 1700, foot: 430 },
+    { yTop: 600, yBot: 780, head: 452, y0: 20, y1: 1700, foot: 850 },
   ];
 
   const xEven = (i: number, n: number, y0: number, y1: number, leftExtra = 0) => {
@@ -459,50 +511,41 @@ export default function InterlockingTopologyDiagram({
           );
         })}
 
-        {trains.map((tr, ti) => {
+        {trains.map((tr) => {
           if (!Number.isFinite(tr.positionM) || stations.length === 0) return null;
-          let best = stations[0];
-          let bestD = Infinity;
-          for (const s of stations) {
-            const d = Math.abs(s.positionM - tr.positionM);
-            if (d < bestD) {
-              bestD = d;
-              best = s;
-            }
-          }
-          const idx = stations.findIndex((s) => s.id === best.id);
-          const ri = idx < 7 ? 0 : 1;
-          const localI = idx < 7 ? idx : idx - 7;
+          const firstRowLast = stations[Math.min(6, stations.length - 1)];
+          const ri = tr.positionM <= firstRowLast.positionM ? 0 : 1;
           const row = rows[ri];
           const L = layouts[ri];
-          if (!row[localI]) return null;
+          if (!row.length) return null;
           const leftExtra = ri === 0 ? 100 : 0;
-          const x = xEven(localI, row.length, L.y0, L.y1, leftExtra);
+          const first = row[0];
+          const last = row[row.length - 1];
+          const firstX = xEven(0, row.length, L.y0, L.y1, leftExtra);
+          const lastX = xEven(row.length - 1, row.length, L.y0, L.y1, leftExtra);
+          const spanM = Math.max(1, last.positionM - first.positionM);
+          const progress = Math.max(0, Math.min(1, (tr.positionM - first.positionM) / spanM));
+          const x = firstX + (lastX - firstX) * progress;
           const y = tr.direction === 'DOWN' ? L.yBot : L.yTop;
-          const ma = maMap[tr.trainId];
           return (
             <g
               key={tr.trainId}
-              className="il-hit"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect({ type: 'train', id: tr.trainId });
-              }}
             >
-              <rect x={x - 26 + ti * 2} y={y - 12} width={52} height={24} fill={C.train} stroke="#FFF" strokeWidth={1.2} />
-              <text x={x + ti * 2} y={y + 5} textAnchor="middle" fill="#000" fontSize={11} fontWeight={800}>
-                {tr.trainId}
-              </text>
-              {ma && (
-                <text x={x + ti * 2} y={y + 26} textAnchor="middle" fill={C.label} fontSize={9}>
-                  {ma.maxSpeedKmh.toFixed(0)}km/h
-                </text>
+              {trainConsist(
+                tr,
+                x,
+                y,
+                selectedEntity?.type === 'train' && selectedEntity.id === tr.trainId,
+                (e) => {
+                  e.stopPropagation();
+                  onSelect({ type: 'train', id: tr.trainId });
+                },
               )}
             </g>
           );
         })}
 
-        <g transform="translate(24, 1060)">
+        <g transform="translate(24, 946)">
           <circle cx={7} cy={0} r={6} fill={C.red} />
           <text x={18} y={4} fill={C.text} fontSize={12}>
             红灯（防护）

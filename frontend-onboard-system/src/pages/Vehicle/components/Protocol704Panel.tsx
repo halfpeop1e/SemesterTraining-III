@@ -11,8 +11,9 @@ import type { TrainState } from '../../../types/vehicle';
 
 interface Protocol704PanelProps {
   trainId: string;
+  enabled: boolean;
   onError: (message: string) => void;
-  onExecutedState?: (state: TrainState, mode?: string) => void;
+  onExecutedState?: (state: TrainState, mode?: string, departureState?: string) => void;
 }
 
 function formatTime(timestamp?: number) {
@@ -22,6 +23,7 @@ function formatTime(timestamp?: number) {
 
 export default function Protocol704Panel({
   trainId,
+  enabled,
   onError,
   onExecutedState,
 }: Protocol704PanelProps) {
@@ -31,11 +33,16 @@ export default function Protocol704Panel({
   const [testFrameLoading, setTestFrameLoading] = useState<string | null>(null);
 
   const refresh = async () => {
+    if (!enabled) return;
     try {
       const next = await getProtocol704Status(trainId);
       setStatus(next);
       if (next.lastCommandLifecycle?.status === 'EXECUTED' && next.lastCommandLifecycle.executedState) {
-        onExecutedState?.(next.lastCommandLifecycle.executedState as TrainState, next.lastCommandLifecycle.resultMode);
+        onExecutedState?.(
+          next.lastCommandLifecycle.executedState as TrainState,
+          next.lastCommandLifecycle.resultMode,
+          next.lastCommandLifecycle.departureState,
+        );
       }
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
@@ -43,16 +50,22 @@ export default function Protocol704Panel({
   };
 
   useEffect(() => {
+    if (!enabled) {
+      setPolling(false);
+      setStatus(null);
+      setExpanded(false);
+      return undefined;
+    }
     void refresh();
-  }, [trainId]);
+  }, [trainId, enabled]);
 
   useEffect(() => {
-    if (!polling) return undefined;
+    if (!enabled || !polling) return undefined;
     const timerId = window.setInterval(() => {
       void refresh();
     }, 500);
     return () => window.clearInterval(timerId);
-  }, [polling, trainId]);
+  }, [enabled, polling, trainId]);
 
   const portStatuses = useMemo(
     () => Object.values(status?.portStatuses ?? {}),
@@ -64,6 +77,7 @@ export default function Protocol704Panel({
   const realtimeState = status?.realtimeVehicleState;
 
   const handleConnect = async () => {
+    if (!enabled) return;
     try {
       await connectProtocol704(trainId);
       setPolling(true);
@@ -75,6 +89,7 @@ export default function Protocol704Panel({
   };
 
   const handleDisconnect = async () => {
+    if (!enabled) return;
     try {
       await disconnectProtocol704(trainId);
       setPolling(false);
@@ -85,6 +100,7 @@ export default function Protocol704Panel({
   };
 
   const handleReset = async () => {
+    if (!enabled) return;
     try {
       await resetProtocol704(trainId);
       setPolling(false);
@@ -95,12 +111,17 @@ export default function Protocol704Panel({
   };
 
   const handleTestFrame = async (type: string) => {
+    if (!enabled) return;
     setTestFrameLoading(type);
     try {
       const next = await sendTestFrame(trainId, type);
       setStatus(next);
       if (next.lastCommandLifecycle?.status === 'EXECUTED' && next.lastCommandLifecycle.executedState) {
-        onExecutedState?.(next.lastCommandLifecycle.executedState as TrainState, next.lastCommandLifecycle.resultMode);
+        onExecutedState?.(
+          next.lastCommandLifecycle.executedState as TrainState,
+          next.lastCommandLifecycle.resultMode,
+          next.lastCommandLifecycle.departureState,
+        );
       }
       setExpanded(true);
     } catch (error) {
@@ -111,7 +132,10 @@ export default function Protocol704Panel({
   };
 
   return (
-    <section className="vehicle-704-panel" aria-label={`${trainId} 704协议状态`}>
+    <section
+      className={`vehicle-704-panel ${enabled ? '' : 'is-disabled'}`}
+      aria-label={`${trainId} 704协议状态`}
+    >
       <div
         className="vehicle-704-panel__header"
       >
@@ -119,22 +143,30 @@ export default function Protocol704Panel({
           <strong>704司机台 · {trainId}</strong>
           <span
             className={`vehicle-704-badge ${
-              connected
+                !enabled
+                  ? 'vehicle-704-badge--disconnected'
+                  : connected
                 ? 'vehicle-704-badge--connected'
                 : polling
                   ? 'vehicle-704-badge--connecting'
                   : 'vehicle-704-badge--disconnected'
             }`}
           >
-            {connected ? '已连接' : polling ? '连接中' : '未连接'}
-          </span>
-          <span className="vehicle-704-target">
-            {status?.host ?? '192.168.100.123'}:
-            {portStatuses.map((port) => port.port).join('/') || '8001/8002/8003'}
-          </span>
-          <span className={`vehicle-704-readiness ${simulationReady ? 'vehicle-704-readiness--ready' : 'vehicle-704-readiness--pending'}`}>
-            {simulationReady ? '仿真已准备' : '仿真未准备'}
-          </span>
+              {!enabled ? '设备模式未启用' : connected ? '已连接' : polling ? '连接中' : '未连接'}
+            </span>
+            {enabled ? (
+              <>
+                <span className="vehicle-704-target">
+                  {status?.host ?? '192.168.100.123'}:
+                  {portStatuses.map((port) => port.port).join('/') || '8001/8002/8003'}
+                </span>
+                <span className={`vehicle-704-readiness ${simulationReady ? 'vehicle-704-readiness--ready' : 'vehicle-704-readiness--pending'}`}>
+                  {simulationReady ? '仿真已准备' : '仿真未准备'}
+                </span>
+              </>
+            ) : (
+              <span className="vehicle-704-mode-note">当前由软件仿真控制，不会连接 PLC</span>
+            )}
           {!expanded && lastMappedCommand && (
             <span className="vehicle-704-last-command">
               最近命令 {lastMappedCommand.command}
@@ -148,7 +180,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-btn"
-            disabled={polling}
+            disabled={!enabled || polling}
             onClick={() => void handleConnect()}
           >
             连接
@@ -156,7 +188,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-btn"
-            disabled={!polling}
+            disabled={!enabled || !polling}
             onClick={() => void handleDisconnect()}
           >
             断开
@@ -164,6 +196,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-btn"
+            disabled={!enabled}
             onClick={() => void handleReset()}
           >
             重置
@@ -171,6 +204,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-expand-btn"
+            disabled={!enabled}
             aria-label={expanded ? '收起704协议详情' : '展开704协议详情'}
             onClick={() => setExpanded((value) => !value)}
           >
@@ -179,7 +213,7 @@ export default function Protocol704Panel({
         </div>
       </div>
 
-      {expanded && (
+      {enabled && expanded && (
         <div className="vehicle-704-panel__body">
           <div className="vehicle-704-section">
             <div className="vehicle-704-section__title">联调前置条件</div>
@@ -239,7 +273,7 @@ export default function Protocol704Panel({
                   key={type}
                   type="button"
                   className={`vehicle-704-test-btn vehicle-704-test-btn--${type}`}
-                  disabled={testFrameLoading !== null}
+                  disabled={!enabled || testFrameLoading !== null}
                   onClick={() => void handleTestFrame(type)}
                 >
                   {testFrameLoading === type ? '发送中...' : label}

@@ -46,6 +46,9 @@ export interface DriverCabViewProps {
   canResetEmergency?: boolean;
   /** 受控重置 token，变化时清空牵引/制动级位 UI（resume_ato/reset_emergency 成功后递增）。 */
   handleResetToken?: number;
+  /** Physical laboratory desk controls commands while this is true. */
+  controlLocked?: boolean;
+  controlLockMessage?: string;
 }
 
 interface ProjectionPoint {
@@ -683,6 +686,8 @@ function DriverCabView({
   onResetEmergency,
   canResetEmergency = false,
   handleResetToken,
+  controlLocked = false,
+  controlLockMessage,
 }: DriverCabViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -696,7 +701,7 @@ function DriverCabView({
   const isModeControlled = externalDriveMode === 'ato' || externalDriveMode === 'manual' || isEmergencyMode;
   const effectiveDriveMode: DriveMode =
     externalDriveMode === 'ato' || externalDriveMode === 'manual' ? externalDriveMode : driveMode;
-  const handlesDisabled = isEmergencyMode || effectiveDriveMode !== 'manual';
+  const handlesDisabled = controlLocked || isEmergencyMode || effectiveDriveMode !== 'manual';
 
   // 同步外部模式：用 useEffect，不在 render 期间 setState
   useEffect(() => {
@@ -1076,11 +1081,16 @@ function DriverCabView({
               <span className="dcp-section__label">
                 驾驶模式{externalDriveMode === 'emergency' ? ' ⚠紧急' : ''}
               </span>
+              {controlLocked && (
+                <div className="dcp-handle-hint">
+                  {controlLockMessage ?? '实验室司机台正在控制此列车'}
+                </div>
+              )}
               <div className="dcp-mode-buttons" role="group">
                 <button
                   type="button"
                   className={`dcp-mode-btn dcp-mode-btn--ato ${effectiveDriveMode === 'ato' ? 'is-active' : ''}`}
-                  disabled={isModeControlled}
+                  disabled={controlLocked || isModeControlled}
                   onClick={() => {
                     if (!isModeControlled) setDriveMode('ato');
                   }}>
@@ -1089,7 +1099,7 @@ function DriverCabView({
                 <button
                   type="button"
                   className={`dcp-mode-btn dcp-mode-btn--manual ${effectiveDriveMode === 'manual' ? 'is-active' : ''}`}
-                  disabled={isEmergencyMode || effectiveDriveMode === 'manual'}
+                  disabled={controlLocked || isEmergencyMode || effectiveDriveMode === 'manual'}
                   onClick={() => {
                     if (isModeControlled) {
                       setManualRequestState('pending');
@@ -1201,6 +1211,7 @@ function DriverCabView({
                 <button
                   type="button"
                   className={`dcp-emergency-btn ${emergencyActive || externalDriveMode === 'emergency' ? 'is-triggered' : ''}`}
+                  disabled={controlLocked}
                   onClick={() => {
                     setEmergencyActive(true);
                     if (onEmergencyBrake) onEmergencyBrake();
@@ -1215,6 +1226,7 @@ function DriverCabView({
                   <button
                     type="button"
                     className={`dcp-manual-req-btn ${manualRequestState === 'pending' ? 'is-pending' : ''}`}
+                    disabled={controlLocked}
                     onClick={() => {
                       const next: 'idle' | 'pending' = manualRequestState === 'idle' ? 'pending' : 'idle';
                       setManualRequestState(next);
@@ -1231,6 +1243,7 @@ function DriverCabView({
                   <button
                     type="button"
                     className="dcp-ato-resume-btn"
+                    disabled={controlLocked}
                     onClick={() => {
                       if (onRequestAto) onRequestAto();
                     }}>
@@ -1245,6 +1258,7 @@ function DriverCabView({
                   <button
                     type="button"
                     className="dcp-reset-emergency-btn"
+                    disabled={controlLocked}
                     onClick={() => {
                       if (onResetEmergency) onResetEmergency();
                     }}>

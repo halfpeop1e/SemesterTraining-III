@@ -39,6 +39,26 @@ public class StatusFusion {
     /** Monotonically increases on every server-received report for this train. */
     public synchronized long revision(String trainId) { return trainRevisions.getOrDefault(trainId, 0L); }
 
+    /** Remove one train's cached reports so a deleted simulation is not recreated by stale telemetry. */
+    public synchronized void remove(String trainId) {
+        if (trainId == null || trainId.isBlank()) return;
+        reports.remove(trainId);
+        trainReceivedAtMillis.remove(trainId);
+        trainRevisions.remove(trainId);
+        deviceReports.entrySet().removeIf(entry -> trainId.equals(entry.getValue().getTrainId()));
+        deviceReceivedAtMillis.keySet().removeIf(deviceKey -> !deviceReports.containsKey(deviceKey));
+    }
+
+    /** Clear all cached reports as part of a full simulation reset. */
+    public synchronized void clear() {
+        reports.clear();
+        deviceReports.clear();
+        deviceReceivedAtMillis.clear();
+        trainReceivedAtMillis.clear();
+        trainRevisions.clear();
+        nextRevision = 0;
+    }
+
     public synchronized List<Map<String, Object>> monitoring() {
         long now = System.currentTimeMillis();
         List<Map<String, Object>> result = new ArrayList<>();

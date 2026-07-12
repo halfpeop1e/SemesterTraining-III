@@ -873,6 +873,13 @@
   animation: emergency-pulse 0.7s ease-in-out infinite alternate;
 }
 
+.dcp-emergency-btn:disabled,
+.dcp-ato-resume-btn:disabled,
+.dcp-reset-emergency-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 @keyframes emergency-pulse {
   from {
     box-shadow: 0 0 12px rgba(251, 113, 133, 0.4);

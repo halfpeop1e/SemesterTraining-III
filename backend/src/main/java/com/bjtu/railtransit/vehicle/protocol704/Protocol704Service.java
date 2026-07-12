@@ -169,6 +169,7 @@ public class Protocol704Service {
         statusMap.remove(trainId);
         realtimeStates.remove(trainId);
         staleFailSafeFlags.remove(trainId);
+        if (vehicleControlBridge != null) vehicleControlBridge.unregisterSimulation(trainId);
     }
 
     /** Write through the already-owned PLC sockets; never opens a second client per port. */

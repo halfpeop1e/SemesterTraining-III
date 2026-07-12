@@ -331,6 +331,7 @@ public class SimulationService {
         activeCommands.remove(trainId);
         fusedOnboardReportRevisions.remove(trainId);
         movementAuthorityRegistry.remove(trainId);
+        statusFusion.remove(trainId);
         broadcastCurrentSnapshot();
         return removed;
     }
@@ -349,6 +350,21 @@ public class SimulationService {
         TrainState result = copyTrainState(train);
         broadcastCurrentSnapshot();
         return result;
+    }
+
+    /**
+     * Accepts a position report from the independent onboard/driver-desk simulation.
+     * The report becomes the source of truth for that train in the dispatch snapshot,
+     * so the signal topology and onboard page display the same train state.
+     */
+    public synchronized void acceptOnboardReport(StatusReport report) {
+        statusFusion.accept(report);
+        if (lineProfile == null) {
+            lineProfile = lineDataService.getLineProfile();
+        }
+        fuseOnboardReports();
+        signalCycleService.runCycle(trains.values(), simulationTimeSeconds);
+        broadcastCurrentSnapshot();
     }
 
     private void broadcastCurrentSnapshot() {
@@ -2657,5 +2673,6 @@ public class SimulationService {
         lastEnergyHistoryTime = -10;
         dispatchEngine.clearLogs();
         movementAuthorityRegistry.clear();
+        statusFusion.clear();
     }
 }

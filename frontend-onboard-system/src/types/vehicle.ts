@@ -137,6 +137,8 @@ export interface SimulationRunRequest {
   fromStationId?: number;
   toStationId?: number;
   dwellTimeSeconds?: number;
+  /** Enable only when this instance is deliberately bound to the laboratory PLC desk. */
+  hardwareControlEnabled?: boolean;
 }
 
 /** 驾驶模式（本轮新增）。 */

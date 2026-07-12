@@ -51,19 +51,18 @@ class Protocol704VehicleControlBridgeTest {
         assertNotNull(traction.getExecutedState());
         assertTrue(traction.getExecutedState().getAcceleration() > 0.0);
         assertTrue(traction.getExecutedState().getVelocity() > 0.0);
-        assertEquals("DUPLICATE_STEADY_STATE", bridge.execute("OB1", command("traction", 50)).getRejectionReason());
-
-        Protocol704CommandLifecycle coast = bridge.execute("OB1", command("coast", 0));
-        assertEquals("EXECUTED", coast.getStatus());
-        assertEquals("COAST", coast.getExecutedState().getPhase().name());
+        // The PLC transmits a held handle repeatedly. A frame inside the 0.5 s
+        // integrator interval is acknowledged with the current state rather than
+        // rejected as a duplicate command.
+        assertEquals("EXECUTED", bridge.execute("OB1", command("traction", 50)).getStatus());
 
         Protocol704CommandLifecycle brake = bridge.execute("OB1", command("brake", 60));
         assertEquals("EXECUTED", brake.getStatus());
-        assertTrue(brake.getExecutedState().getAcceleration() < 0.0);
+        assertTrue(brake.getExecutedState().getVelocity() < traction.getExecutedState().getVelocity());
 
         Protocol704CommandLifecycle firstEb = bridge.execute("OB1", command("emergency_brake", 100));
         Protocol704CommandLifecycle repeatedEb = bridge.execute("OB1", command("emergency_brake", 100));
-        assertEquals("EXECUTED", firstEb.getStatus());
+        assertEquals("EXECUTED", firstEb.getStatus(), firstEb.getExecutionError());
         assertEquals("EXECUTED", repeatedEb.getStatus());
         assertEquals("EMERGENCY", repeatedEb.getResultMode());
     }

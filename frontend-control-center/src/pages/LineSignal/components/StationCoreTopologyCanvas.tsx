@@ -47,6 +47,7 @@ interface SwitchGeometry {
   item: Switch;
   root: string;
   point: Point;
+  lane?: Lane;
 }
 
 interface StationSchematic {
@@ -267,25 +268,11 @@ function buildStationSchematic(lineProfile: LineProfile, topology: StationTopolo
     });
   }
 
-  const segmentDistance = new Map<number, number>();
-  const segmentQueue = [...mainSegmentIds];
-  segmentQueue.forEach((id) => segmentDistance.set(id, 0));
-  for (let index = 0; index < segmentQueue.length; index += 1) {
-    const id = segmentQueue[index];
-    const distance = segmentDistance.get(id) || 0;
-    if (distance >= 3) continue;
-    const segment = byId.get(id);
-    if (!segment) continue;
-    for (const next of allNeighbors(segment)) {
-      if (!allowed.has(next) || segmentDistance.has(next)) continue;
-      segmentDistance.set(next, distance + 1);
-      segmentQueue.push(next);
-    }
-  }
-  const visibleSegmentIds = new Set<number>([
-    ...mainSegmentIds,
-    ...[...segmentDistance.entries()].filter(([, distance]) => distance <= 3).map(([id]) => id),
-  ]);
+  // The XLS contains every throat fragment, siding and adjacent approach segment.
+  // Projecting all of them as independent rails produces dangling diagonals at the
+  // canvas edge. The station diagram deliberately keeps the two platform mainlines
+  // as its rail backbone and renders related turnouts as standard schematic symbols.
+  const visibleSegmentIds = new Set<number>(mainSegmentIds);
 
   const nodeGraph = new Map<string, Set<string>>();
   const addNodeEdge = (a: string, b: string) => {
@@ -301,62 +288,6 @@ function buildStationSchematic(lineProfile: LineProfile, topology: StationTopolo
     );
   }
 
-  const allRoots = new Set<string>();
-  for (const id of visibleSegmentIds) {
-    allRoots.add(union.find(endpointKey(id, 'start')));
-    allRoots.add(union.find(endpointKey(id, 'end')));
-  }
-  for (const root of allRoots) {
-    if (nodePoints.has(root)) continue;
-    const down = shortestAnchor(root, 'DOWN', nodeGraph, nodePoints, rootsByLane);
-    const up = shortestAnchor(root, 'UP', nodeGraph, nodePoints, rootsByLane);
-    if (down && up) {
-      const downPoint = nodePoints.get(down.root)!;
-      const upPoint = nodePoints.get(up.root)!;
-      const total = Math.max(1, down.distance + up.distance);
-      const towardUp = down.distance / total;
-      nodePoints.set(root, {
-        x: downPoint.x * (1 - towardUp) + upPoint.x * towardUp,
-        y: downPoint.y * (1 - towardUp) + upPoint.y * towardUp,
-      });
-      continue;
-    }
-    const anchor = down || up;
-    if (anchor) {
-      const point = nodePoints.get(anchor.root)!;
-      const numeric = Number(root.split(':')[0]) || 0;
-      const direction = numeric % 2 === 0 ? 1 : -1;
-      const vertical = (anchor.distance || 1) * 34;
-      nodePoints.set(root, {
-        x: Math.max(TRACK_LEFT, Math.min(TRACK_RIGHT, point.x + direction * vertical * 1.4)),
-        y: Math.max(62, Math.min(365, point.y + direction * vertical)),
-      });
-    }
-  }
-
-  for (const id of visibleSegmentIds) {
-    if (segmentGeometry.has(id)) continue;
-    const source = byId.get(id);
-    const sourceStart = nodePoints.get(union.find(endpointKey(id, 'start')));
-    const sourceEnd = nodePoints.get(union.find(endpointKey(id, 'end')));
-    if (!source || !sourceStart || !sourceEnd) continue;
-    let start = { ...sourceStart };
-    let end = { ...sourceEnd };
-    if (Math.hypot(start.x - end.x, start.y - end.y) < 2) {
-      const startContinues = startNeighbors(source).some((neighbor) => visibleSegmentIds.has(neighbor));
-      const endContinues = endNeighbors(source).some((neighbor) => visibleSegmentIds.has(neighbor));
-      const span = Math.max(54, Math.min(105, segmentWeight(source) * 8));
-      if (startContinues && !endContinues) {
-        end = { x: Math.min(TRACK_RIGHT, start.x + span), y: start.y };
-      } else if (endContinues && !startContinues) {
-        start = { x: Math.max(TRACK_LEFT, end.x - span), y: end.y };
-      } else {
-        end = { x: Math.min(TRACK_RIGHT, start.x + span), y: start.y + 22 };
-      }
-    }
-    segmentGeometry.set(id, { id, start, end, branch: true });
-  }
-
   const switchGeometry: SwitchGeometry[] = [];
   for (const item of topology.switches) {
     const endpointRoots = [item.mergeSegId, item.normalSegId, item.reverseSegId]
@@ -367,9 +298,25 @@ function buildStationSchematic(lineProfile: LineProfile, topology: StationTopolo
       ]);
     const counts = new Map<string, number>();
     endpointRoots.forEach((root) => counts.set(root, (counts.get(root) || 0) + 1));
-    const root = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const relatedMain = [item.mergeSegId, item.normalSegId, item.reverseSegId]
+      .map((id) => segmentGeometry.get(id))
+      .filter((geometry): geometry is SegmentGeometry => Boolean(geometry));
+    const root = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([candidate]) => candidate)
+      .find((candidate) => nodePoints.has(candidate));
     const point = root ? nodePoints.get(root) : undefined;
-    if (root && point && counts.get(root)! >= 2) switchGeometry.push({ item, root, point });
+    if (root && point && counts.get(root)! >= 2) {
+      switchGeometry.push({ item, root, point, lane: rootsByLane.get(root) });
+    } else if (relatedMain.length) {
+      const geometry = relatedMain[0];
+      switchGeometry.push({
+        item,
+        root: `fallback:${item.id}`,
+        point: pointAlong(geometry, 0.5),
+        lane: geometry.lane,
+      });
+    }
   }
 
   const codes = PLATFORM_CODES[String(topology.station.id)] || ['A', 'B'];
@@ -407,11 +354,21 @@ function segmentOtherPoint(geometry: SegmentGeometry, junction: Point, item: Swi
   return startDistance > endDistance ? geometry.start : geometry.end;
 }
 
+function stationRange(lineProfile: LineProfile, stationId: string, stationPositionM: number): [number, number] {
+  const stations = [...(lineProfile.stations || [])].sort((a, b) => a.positionM - b.positionM);
+  const index = stations.findIndex((station) => String(station.id) === stationId);
+  if (index < 0) return [stationPositionM - 650, stationPositionM + 650];
+  const previous = stations[index - 1];
+  const next = stations[index + 1];
+  const start = previous ? (previous.positionM + stationPositionM) / 2 : stationPositionM - 650;
+  const end = next ? (stationPositionM + next.positionM) / 2 : stationPositionM + 650;
+  return [start, end];
+}
+
 export default function StationCoreTopologyCanvas({
   lineProfile,
   topology,
   trains,
-  maMap,
   openSignalIds,
   protectedSignalIds,
   lockedSegments,
@@ -428,6 +385,15 @@ export default function StationCoreTopologyCanvas({
   );
   const stationName = STATION_NAMES[String(topology.station.id)] || topology.station.name;
   const stationCode = specOf(String(topology.station.id))?.code || topology.station.name;
+  const [stationRangeStartM, stationRangeEndM] = useMemo(
+    () => stationRange(lineProfile, String(topology.station.id), topology.station.positionM),
+    [lineProfile, topology.station.id, topology.station.positionM],
+  );
+  const stationTrains = trains.filter((train) =>
+    Number.isFinite(train.positionM)
+      && train.positionM >= stationRangeStartM
+      && train.positionM <= stationRangeEndM,
+  );
   const sectionNameBySegment = new Map<number, string>();
   topology.physicalSections.forEach((section) => {
     section.segments.forEach((segment) => {
@@ -500,23 +466,21 @@ export default function StationCoreTopologyCanvas({
           ))}
 
           {[...schematic.segmentGeometry.values()]
-            .sort((a, b) => Number(a.branch) - Number(b.branch))
             .map((geometry) => {
               const occupied = occupiedSegments.has(geometry.id);
               const locked = lockedSegments.has(geometry.id);
-              const stroke = occupied ? '#ff3131' : locked ? '#f5c842' :
-                geometry.branch ? C.railBright : C.rail;
+              const stroke = occupied ? '#ff3131' : locked ? '#f5c842' : C.rail;
               const middle = pointAlong(geometry, 0.5);
               const name = sectionNameBySegment.get(geometry.id) || `Seg ${geometry.id}`;
               return (
                 <g key={geometry.id} data-segment-id={geometry.id}>
                   <line x1={geometry.start.x} y1={geometry.start.y}
                     x2={geometry.end.x} y2={geometry.end.y}
-                    stroke={stroke} strokeWidth={occupied || locked ? 7 : geometry.branch ? 3 : 5}
+                    stroke={stroke} strokeWidth={occupied || locked ? 7 : 5}
                     strokeLinecap="round" />
                   <circle cx={geometry.start.x} cy={geometry.start.y} r={2.2} fill="#b6c7da" />
-                  <text x={middle.x} y={middle.y - 9} textAnchor="middle"
-                    fill={geometry.branch ? '#7fa9cc' : '#9bb2c9'} fontSize={9}
+                  <text x={middle.x} y={middle.y - 10} textAnchor="middle"
+                    fill="#9bb2c9" fontSize={9}
                     fontFamily="Consolas, monospace">
                     {name} · S{geometry.id}
                   </text>
@@ -544,23 +508,18 @@ export default function StationCoreTopologyCanvas({
             );
           })}
 
-          {schematic.switchGeometry.map(({ item, point }) => {
+          {schematic.switchGeometry.map(({ item, point, lane }) => {
             const selected = selectedEntity?.type === 'switch' && String(selectedEntity.id) === String(item.id);
             const normal = schematic.segmentGeometry.get(item.normalSegId);
             const reverse = schematic.segmentGeometry.get(item.reverseSegId);
             const normalOther = normal ? segmentOtherPoint(normal, point, item) : null;
             const reverseOther = reverse ? segmentOtherPoint(reverse, point, item) : null;
-            const leg = (target: Point | null, active: boolean, key: string) => {
-              if (!target) return null;
-              const dx = target.x - point.x;
-              const dy = target.y - point.y;
-              const length = Math.max(1, Math.hypot(dx, dy));
-              return (
-                <line key={key} x1={point.x} y1={point.y}
-                  x2={point.x + (dx / length) * 24} y2={point.y + (dy / length) * 24}
-                  stroke={active ? C.green : '#56677b'} strokeWidth={active ? 5 : 3} />
-              );
-            };
+            const anchored = normalOther || reverseOther;
+            const direction = anchored && anchored.x < point.x ? -1 : 1;
+            const branchY = lane === 'UP' ? -34 : 34;
+            const fallback = { x: point.x + direction * 34, y: point.y + branchY };
+            const branchEnd = reverseOther || normalOther || fallback;
+            const normalState = item.state !== 'REVERSE';
             return (
               <g key={item.id} className="il-hit" data-switch-id={item.id}
                 data-merge-seg-id={item.mergeSegId} data-normal-seg-id={item.normalSegId}
@@ -570,12 +529,20 @@ export default function StationCoreTopologyCanvas({
                   event.stopPropagation();
                   onSelect({ type: 'switch', id: String(item.id) });
                 }}>
-                {leg(normalOther, item.state !== 'REVERSE', 'normal')}
-                {leg(reverseOther, item.state === 'REVERSE', 'reverse')}
-                <circle cx={point.x} cy={point.y} r={selected ? 8 : 6}
+                <line x1={point.x - direction * 18} y1={point.y}
+                  x2={point.x + direction * 18} y2={point.y}
+                  stroke="#53657b" strokeWidth={3} />
+                <line x1={point.x} y1={point.y}
+                  x2={point.x + direction * 25} y2={point.y + branchY * 0.72}
+                  stroke={normalState ? C.green : '#53657b'} strokeWidth={normalState ? 5 : 3} />
+                <line x1={point.x} y1={point.y}
+                  x2={branchEnd.x} y2={branchEnd.y}
+                  stroke={!normalState ? '#f59e0b' : '#53657b'} strokeWidth={!normalState ? 5 : 3}
+                  strokeDasharray={reverseOther ? undefined : '4 3'} />
+                <circle cx={point.x} cy={point.y} r={selected ? 8 : 6.5}
                   fill={item.state === 'REVERSE' ? '#f59e0b' : C.green}
-                  stroke={selected ? '#ffffff' : '#07111d'} strokeWidth={selected ? 2 : 1} />
-                <text x={point.x + 9} y={point.y + 19} fill="#d6dce6" fontSize={9}
+                  stroke={selected ? '#ffffff' : '#07111d'} strokeWidth={selected ? 2 : 1.5} />
+                <text x={point.x + direction * 10} y={point.y + (lane === 'UP' ? -17 : 21)} fill="#d6dce6" fontSize={9}
                   fontWeight={700}>W{item.id}</text>
               </g>
             );
@@ -594,7 +561,7 @@ export default function StationCoreTopologyCanvas({
             const length = Math.max(1, Math.hypot(dx, dy));
             const normal = { x: -dy / length, y: dx / length };
             const side = signal.protectDir === 0xAA ? -1 : 1;
-            const lamp = { x: point.x + normal.x * 26 * side, y: point.y + normal.y * 26 * side };
+            const lamp = { x: point.x + normal.x * 32 * side, y: point.y + normal.y * 32 * side };
             const color = aspectColor(signal.aspect,
               openSignalIds.has(signal.id), protectedSignalIds.has(signal.id));
             const selected = selectedEntity?.type === 'signal' && Number(selectedEntity.id) === signal.id;
@@ -609,27 +576,60 @@ export default function StationCoreTopologyCanvas({
                   onSelect({ type: 'signal', id: signal.id });
                 }}>
                 <line x1={point.x} y1={point.y} x2={lamp.x} y2={lamp.y}
-                  stroke="#e5e7eb" strokeWidth={1} />
-                {routeSelected && <circle cx={lamp.x} cy={lamp.y} r={10} fill="none"
+                  stroke="#dbe7f4" strokeWidth={1.4} />
+                {routeSelected && <circle cx={lamp.x} cy={lamp.y} r={13} fill="none"
                   stroke={routeStartSignalId === signal.id ? '#60a5fa' : '#22d3ee'} strokeWidth={2} />}
-                <circle cx={lamp.x} cy={lamp.y} r={selected ? 7 : 5.5}
-                  fill={color} stroke="#f8fafc" strokeWidth={1} />
-                <text x={lamp.x + 8} y={lamp.y + 3} fill={color} fontSize={9} fontWeight={700}>
+                <rect x={lamp.x - 8} y={lamp.y - 8} width={16} height={16} rx={2}
+                  fill="#101a27" stroke="#e7eef7" strokeWidth={1.2} />
+                <circle cx={lamp.x} cy={lamp.y} r={selected ? 6.3 : 5.2}
+                  fill={color} stroke={color} strokeWidth={1.5} />
+                <text x={lamp.x + 11} y={lamp.y + 4} fill={color} fontSize={10} fontWeight={800}>
                   {signal.name}
                 </text>
               </g>
             );
           })}
 
-          {trains.slice(0, 5).map((train, index) => {
-            const ma = maMap[train.trainId];
+          {stationTrains.map((train) => {
+            const progress = Math.max(0, Math.min(1,
+              (train.positionM - stationRangeStartM) / Math.max(1, stationRangeEndM - stationRangeStartM),
+            ));
+            const x = TRACK_LEFT + progress * (TRACK_RIGHT - TRACK_LEFT);
+            const y = train.direction === 'DOWN' ? DOWN_Y : UP_Y;
+            const directionSign = train.direction === 'DOWN' ? -1 : 1;
+            const carWidth = 16;
+            const gap = 2;
+            const totalWidth = carWidth * 6 + gap * 5;
+            const left = x - totalWidth / 2;
+            const selected = selectedEntity?.type === 'train' && selectedEntity.id === train.trainId;
             return (
-              <g key={train.trainId} transform={`translate(${1120 + (index % 2) * 118}, ${18 + Math.floor(index / 2) * 29})`}
-                className="il-hit" onClick={() => onSelect({ type: 'train', id: train.trainId })}>
-                <rect width={108} height={22} fill="#071e2b" stroke={C.train} />
-                <text x={7} y={15} fill={C.train} fontSize={10} fontWeight={800}>{train.trainId}</text>
-                <text x={101} y={15} textAnchor="end" fill={ma ? C.green : C.muted} fontSize={9}>
-                  {ma ? `MA ${ma.maxSpeedKmh.toFixed(0)}` : `${train.speedKmh.toFixed(0)}km/h`}
+              <g key={train.trainId} className="il-hit"
+                onClick={(event) => { event.stopPropagation(); onSelect({ type: 'train', id: train.trainId }); }}>
+                <rect x={left - 6} y={y - 20} width={totalWidth + 12} height={40} rx={5}
+                  fill="rgba(0, 184, 230, 0.1)" stroke={selected ? '#fff' : '#17c7ea'}
+                  strokeWidth={selected ? 2 : 1} />
+                {Array.from({ length: 6 }).map((_, carIndex) => {
+                  const carX = left + carIndex * (carWidth + gap);
+                  const isFront = carIndex === (directionSign > 0 ? 5 : 0);
+                  const points = isFront
+                    ? directionSign > 0
+                      ? `${carX},${y - 10} ${carX + carWidth - 5},${y - 10} ${carX + carWidth},${y} ${carX + carWidth - 5},${y + 10} ${carX},${y + 10}`
+                      : `${carX + 5},${y - 10} ${carX + carWidth},${y - 10} ${carX + carWidth},${y + 10} ${carX + 5},${y + 10} ${carX},${y}`
+                    : `${carX},${y - 10} ${carX + carWidth},${y - 10} ${carX + carWidth},${y + 10} ${carX},${y + 10}`;
+                  return (
+                    <g key={carIndex}>
+                      <polygon points={points} fill="#18bde4" stroke="#b9f4ff" strokeWidth={0.8} />
+                      <rect x={carX + 3} y={y - 6} width={carWidth - 6} height={5} rx={1} fill="#062538" />
+                    </g>
+                  );
+                })}
+                <rect x={x - 26} y={y - 36} width={52} height={14} rx={2} fill="#06131f" stroke="#24caed" />
+                <text x={x} y={y - 26} textAnchor="middle" fill="#a9f2ff" fontSize={10} fontWeight={800}>
+                  {train.trainId}
+                </text>
+                <text x={x} y={train.direction === 'DOWN' ? y + 34 : y + 54}
+                  textAnchor="middle" fill="#49e6ff" fontSize={10} fontWeight={700}>
+                  {train.speedKmh.toFixed(1)} km/h
                 </text>
               </g>
             );

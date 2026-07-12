@@ -12,6 +12,7 @@
 用法：
   python scripts/lab_start_train.py
   python scripts/lab_start_train.py --train-id LAB1 --watch 30
+  python scripts/lab_start_train.py --train-id LAB1 --skip-connect --drive-seconds 15
 """
 
 from __future__ import annotations
@@ -57,6 +58,10 @@ def main() -> int:
     p.add_argument("--to-station", type=int, default=4)
     p.add_argument("--watch", type=float, default=25.0, help="连接 PLC 后观察秒数")
     p.add_argument("--skip-connect", action="store_true", help="只做软件帧验证，不连实体 PLC")
+    p.add_argument(
+        "--drive-seconds", type=float, default=0.0,
+        help="本地演示：重复注入牵引帧的秒数；必须与 --skip-connect 一起使用",
+    )
     args = p.parse_args()
     tid = args.train_id
 
@@ -85,6 +90,7 @@ def main() -> int:
         "fromStationId": args.from_station,
         "toStationId": args.to_station,
         "dwellTimeSeconds": 5,
+        "hardwareControlEnabled": True,
     }
     print(f"[{ts()}] simulation/run {run_body} ...", flush=True)
     try:
@@ -136,6 +142,39 @@ def main() -> int:
         print(f"[{ts()}] ✓ 软件侧已发动，当前速度 v={v1} m/s", flush=True)
 
     if args.skip_connect:
+        if args.drive_seconds < 0:
+            print(f"[{ts()}] --drive-seconds 不能小于 0", flush=True)
+            return 2
+        if args.drive_seconds > 0:
+            try:
+                http_json("POST", f"{API}/simulations/start", {"simulationDuration": max(60, int(args.drive_seconds) + 30)})
+                print(f"[{ts()}] 调度仿真时钟已启动；线路信号页会接收 LAB1 的同步位置", flush=True)
+            except Exception as e:
+                print(f"[{ts()}] 启动调度仿真失败: {e}", flush=True)
+                return 1
+
+            print(f"[{ts()}] 本地保持牵引 {args.drive_seconds:.1f}s（不连接实体 PLC）...", flush=True)
+            deadline = time.time() + args.drive_seconds
+            while time.time() < deadline:
+                st = inject("traction")
+                life = (st.get("lastCommandLifecycle") or {})
+                if life.get("status") != "EXECUTED":
+                    print(f"[{ts()}] 本地牵引被拒绝: {life.get('rejectionReason')}", flush=True)
+                    return 2
+                time.sleep(0.5)
+            try:
+                snap = http_json("GET", f"{API}/simulations/snapshot")
+                trains = ((snap or {}).get("data") or {}).get("trains") or []
+                lab = next((x for x in trains if x.get("trainId") == tid), None)
+                print(
+                    f"[{ts()}] 线路图同步: train={tid} "
+                    f"positionM={lab.get('positionMeters') if lab else None} "
+                    f"speedKmh={lab.get('speed') if lab else None}",
+                    flush=True,
+                )
+            except Exception as e:
+                print(f"[{ts()}] 读取线路图快照失败: {e}", flush=True)
+                return 1
         print(f"[{ts()}] --skip-connect：不连实体 PLC", flush=True)
         return 0
 
