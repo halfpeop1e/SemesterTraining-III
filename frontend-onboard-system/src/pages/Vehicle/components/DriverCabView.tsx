@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { SidingStatus, StationStop, StopResult, TrainState } from '../../../types/vehicle';
 import { STATIONS } from '../data/lineMap';
@@ -697,6 +697,17 @@ function DriverCabView({
   const [brakeLevelUI, setBrakeLevelUI] = useState(0);
   const [emergencyActive, setEmergencyActive] = useState(false);
   const [manualRequestState, setManualRequestState] = useState<'idle' | 'pending'>('idle');
+  const [modeSwitching, setModeSwitching] = useState(false);
+  const [modeSwitchHint, setModeSwitchHint] = useState<string | null>(null);
+  const beginModeSwitchCooldown = useCallback((targetMode: string) => {
+    setModeSwitching(true);
+    setModeSwitchHint(`正在切换至${targetMode === 'ato' ? 'ATO' : '人工'}模式…`);
+    setTimeout(() => {
+      setModeSwitching(false);
+      setModeSwitchHint(`已切换至${targetMode === 'ato' ? 'ATO' : '人工'}模式`);
+      setTimeout(() => setModeSwitchHint(null), 2000);
+    }, 1500);
+  }, []);
   const isEmergencyMode = externalDriveMode === 'emergency';
   const isModeControlled = externalDriveMode === 'ato' || externalDriveMode === 'manual' || isEmergencyMode;
   const effectiveDriveMode: DriveMode =
@@ -709,12 +720,18 @@ function DriverCabView({
       if (driveMode !== 'manual') setDriveMode('manual');
       setEmergencyActive(false);
       setManualRequestState('idle');
+      setModeSwitchHint((prev) => (prev && prev.includes('人工') ? prev : '已切换至人工'));
     } else if (externalDriveMode === 'ato') {
       if (driveMode !== 'ato') setDriveMode('ato');
       setEmergencyActive(false);
-      setManualRequestState('idle');
+      // Keep "等待批准" while still ATO after a manual request; only clear when
+      // mode actually changes away from pending (manual/emergency) or on explicit reset.
+      if (manualRequestState !== 'pending') {
+        setManualRequestState('idle');
+      }
     } else if (externalDriveMode === 'emergency') {
       setEmergencyActive(true);
+      setManualRequestState('idle');
     }
   }, [externalDriveMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1220,19 +1237,46 @@ function DriverCabView({
                 </button>
               </div>
 
+              {/* Bug#8: EB latch banner + reset */}
+              {isEmergencyMode && (
+                <div className="dcp-section dcp-section--eb-banner" role="alert">
+                  <strong>紧急制动已激活</strong>
+                  {canResetEmergency && onResetEmergency ? (
+                    <button
+                      type="button"
+                      className="dcp-reset-emergency-btn"
+                      disabled={modeSwitching}
+                      onClick={() => {
+                        if (modeSwitching) return;
+                        beginModeSwitchCooldown('manual');
+                        if (onResetEmergency) onResetEmergency();
+                      }}>
+                      {modeSwitching ? '切换中…' : '复位紧急制动'}
+                    </button>
+                  ) : (
+                    <span>等待停稳后可复位</span>
+                  )}
+                </div>
+              )}
+
               {/* ATO 模式：申请人工接管（ATO → MANUAL）*/}
               {!isEmergencyMode && effectiveDriveMode === 'ato' && (
                 <div className="dcp-section dcp-section--manual-req">
                   <button
                     type="button"
                     className={`dcp-manual-req-btn ${manualRequestState === 'pending' ? 'is-pending' : ''}`}
-                    disabled={controlLocked}
+                    disabled={controlLocked || modeSwitching || manualRequestState === 'pending'}
                     onClick={() => {
-                      const next: 'idle' | 'pending' = manualRequestState === 'idle' ? 'pending' : 'idle';
-                      setManualRequestState(next);
-                      if (next === 'pending' && onRequestManual) onRequestManual();
+                      if (modeSwitching) return;
+                      setManualRequestState('pending');
+                      beginModeSwitchCooldown('manual');
+                      if (onRequestManual) onRequestManual();
                     }}>
-                    {manualRequestState === 'pending' ? '等待批准…' : '申请人工接管'}
+                    {modeSwitching
+                      ? '切换中…'
+                      : manualRequestState === 'pending'
+                        ? '等待批准…'
+                        : '申请人工接管'}
                   </button>
                 </div>
               )}
@@ -1243,11 +1287,13 @@ function DriverCabView({
                   <button
                     type="button"
                     className="dcp-ato-resume-btn"
-                    disabled={controlLocked}
+                    disabled={controlLocked || modeSwitching}
                     onClick={() => {
+                      if (modeSwitching) return;
+                      beginModeSwitchCooldown('ato');
                       if (onRequestAto) onRequestAto();
                     }}>
-                    恢复 ATO
+                    {modeSwitching ? '切换中…' : '恢复 ATO'}
                   </button>
                 </div>
               )}
@@ -1258,15 +1304,20 @@ function DriverCabView({
                   <button
                     type="button"
                     className="dcp-reset-emergency-btn"
-                    disabled={controlLocked}
+                    disabled={controlLocked || modeSwitching}
                     onClick={() => {
+                      if (modeSwitching) return;
+                      beginModeSwitchCooldown('manual');
                       if (onResetEmergency) onResetEmergency();
                     }}>
-                    复位到人工
+                    {modeSwitching ? '切换中…' : '复位到人工'}
                   </button>
                 </div>
               )}
             </div>
+            {modeSwitchHint && (
+              <div className="dcp-handle-hint" role="status">{modeSwitchHint}</div>
+            )}
           </div>
 
         </aside>

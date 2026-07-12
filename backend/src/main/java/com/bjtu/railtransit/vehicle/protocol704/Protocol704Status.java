@@ -29,6 +29,9 @@ public class Protocol704Status {
     private long simulationContextUpdatedAt;
     private boolean staleInputFailSafeTriggered;
     private long staleInputFailSafeTime;
+    private String lastOutputFrame;
+    private String lastOutputHmi;
+    private boolean outputEnabled;
 
     public String getTrainId() { return trainId; }
     public void setTrainId(String trainId) { this.trainId = trainId; }
@@ -88,4 +91,10 @@ public class Protocol704Status {
     public void setStaleInputFailSafeTriggered(boolean value) { this.staleInputFailSafeTriggered = value; }
     public long getStaleInputFailSafeTime() { return staleInputFailSafeTime; }
     public void setStaleInputFailSafeTime(long value) { this.staleInputFailSafeTime = value; }
+    public String getLastOutputFrame() { return lastOutputFrame; }
+    public void setLastOutputFrame(String lastOutputFrame) { this.lastOutputFrame = lastOutputFrame; }
+    public String getLastOutputHmi() { return lastOutputHmi; }
+    public void setLastOutputHmi(String lastOutputHmi) { this.lastOutputHmi = lastOutputHmi; }
+    public boolean isOutputEnabled() { return outputEnabled; }
+    public void setOutputEnabled(boolean outputEnabled) { this.outputEnabled = outputEnabled; }
 }

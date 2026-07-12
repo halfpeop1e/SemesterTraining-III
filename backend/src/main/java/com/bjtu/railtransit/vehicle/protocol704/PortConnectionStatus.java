@@ -15,6 +15,11 @@ public class PortConnectionStatus {
     private long frameCount;
     private long lastSendTime;
     private String lastError;
+    private String lastOutputHex;
+    private long lastOutputTime;
+    private long outputFrameCount;
+    private long outputErrorCount;
+    private String lastOutputError;
 
     public int getPort() { return port; }
     public void setPort(int port) { this.port = port; }
@@ -52,4 +57,18 @@ public class PortConnectionStatus {
 
     public String getLastError() { return lastError; }
     public void setLastError(String lastError) { this.lastError = lastError; }
+    public String getLastOutputHex() { return lastOutputHex; }
+    public void setLastOutputHex(String lastOutputHex) { this.lastOutputHex = lastOutputHex; }
+
+    public long getLastOutputTime() { return lastOutputTime; }
+    public void setLastOutputTime(long lastOutputTime) { this.lastOutputTime = lastOutputTime; }
+
+    public long getOutputFrameCount() { return outputFrameCount; }
+    public void setOutputFrameCount(long outputFrameCount) { this.outputFrameCount = outputFrameCount; }
+
+    public long getOutputErrorCount() { return outputErrorCount; }
+    public void setOutputErrorCount(long outputErrorCount) { this.outputErrorCount = outputErrorCount; }
+
+    public String getLastOutputError() { return lastOutputError; }
+    public void setLastOutputError(String lastOutputError) { this.lastOutputError = lastOutputError; }
 }

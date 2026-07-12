@@ -13,7 +13,7 @@ export interface LineRunViewProps {
   stopResult: StopResult | null;
   positionOffset?: number;
   stationStops?: StationStop[];
-  /** Shared dispatch-side siding state; reserved for the line diagram overlay. */
+  /** Shared siding snapshot passed through the vehicle page. */
   sidingStatuses?: SidingStatus[];
 }
 

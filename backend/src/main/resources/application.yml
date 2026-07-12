@@ -11,6 +11,15 @@ rail:
     # false: laboratory/HIL mode; missing live signal aspects remain fail-safe.
     simulated-interlocking: true
 
+signal:
+  udp:
+    send-port: 5001
+    listen-port: 5002
+    send-interval-ms: 100
+    receive-timeout-ms: 300
+    remote-host: 127.0.0.1
+    enabled: false
+
 vehicle:
   protocol704:
     host: 192.168.100.123

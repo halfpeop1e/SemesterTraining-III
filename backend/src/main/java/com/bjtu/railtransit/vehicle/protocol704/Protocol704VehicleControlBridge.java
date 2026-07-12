@@ -19,15 +19,18 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * The sole local-v1 business bridge: parsed PLC intent -> existing vehicle continuation service.
- * It contains no kinematics and never calls a web controller.
- */
 @Service
 public class Protocol704VehicleControlBridge {
+    public static final String SOURCE_WEB_HMI = "WEB_HMI";
+    public static final String SOURCE_PLC = "PLC_704_LOCAL_V1";
+    public static final String SOURCE_ATO = "ATO";
+    public static final String SOURCE_EMERGENCY = "EMERGENCY";
+    public static final String SOURCE_LOCAL_TEST = "LOCAL_TEST";
+
     private static final long STALE_CONTEXT_MS = 5 * 60 * 1000L;
     /** PLC emits at about 100 ms; the vehicle integrator samples at 0.5 s. */
     private static final long MIN_CONTINUATION_INTERVAL_MS = 450L;
@@ -40,6 +43,7 @@ public class Protocol704VehicleControlBridge {
     private final LineProfileJsonLoader lineProfileJsonLoader;
     private final SimulationService dispatchSimulationService;
     private final Map<String, ActiveSimulationContext> contexts = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> turnbackInProgress = new ConcurrentHashMap<>();
 
     public Protocol704VehicleControlBridge(VehicleSimulationService vehicleSimulationService,
                                            DemoScenarioProvider demoScenarioProvider,
@@ -63,7 +67,6 @@ public class Protocol704VehicleControlBridge {
         registerSimulation(trainId, fromStationId, toStationId, result, mode, true);
     }
 
-    /** Production run registration starts READY_TO_DEPART; tests/legacy callers may opt in explicitly. */
     public void registerSimulation(String trainId, int fromStationId, int toStationId,
                                    SimulationResult result, DrivingMode mode, boolean departureAuthorized) {
         if (trainId == null || trainId.isBlank() || result == null || result.getStates() == null
@@ -83,9 +86,15 @@ public class Protocol704VehicleControlBridge {
         // A context is created only by a simulation run that opts in explicitly.
         if (context == null) return;
         synchronized (context) {
+            if (context.emergencyLatched) {
+                return;
+            }
+            if (context.plcConnectionId != null && !SOURCE_WEB_HMI.equals(context.controlSource)) {
+                return;
+            }
             context.currentState = copy(request.getCurrentState());
             context.mode = request.getCurrentMode();
-            context.controlSource = "WEB_HMI";
+            context.controlSource = SOURCE_WEB_HMI;
             context.lastUpdatedAt = System.currentTimeMillis();
         }
         publishToDispatch(context);
@@ -93,7 +102,127 @@ public class Protocol704VehicleControlBridge {
 
     public boolean isPlcControlOwner(String trainId) {
         ActiveSimulationContext context = contexts.get(trainId);
-        return context != null && "PLC_704_LOCAL_V1".equals(context.controlSource);
+        return context != null && SOURCE_PLC.equals(context.controlSource);
+    }
+
+    public boolean isEmergencyLatched(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        return context != null && context.emergencyLatched;
+    }
+
+    public void triggerTurnback(String trainId) {
+        if (trainId == null) return;
+        turnbackInProgress.put(trainId, Boolean.TRUE);
+    }
+
+    public void completeTurnback(String trainId) {
+        if (trainId == null) return;
+        turnbackInProgress.remove(trainId);
+    }
+
+    public boolean isTurnbackInProgress(String trainId) {
+        return Boolean.TRUE.equals(turnbackInProgress.get(trainId));
+    }
+
+    public void resetEmergencyLatch(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) return;
+        synchronized (context) {
+            context.emergencyLatched = false;
+            if (context.mode == DrivingMode.EMERGENCY) {
+                context.mode = DrivingMode.MANUAL;
+            }
+            context.lastUpdatedAt = System.currentTimeMillis();
+        }
+    }
+
+    /**
+     * External mode sync from WEB_HMI / control API into the Bridge context.
+     * Keeps Protocol704 test frames and driver-cab control on the same mode.
+     */
+    public void syncMode(String trainId, DrivingMode mode, String source) {
+        if (trainId == null || trainId.isBlank() || mode == null) return;
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) return;
+        synchronized (context) {
+            context.mode = mode;
+            if (source != null && !source.isBlank()) {
+                context.controlSource = source;
+            }
+            if (mode == DrivingMode.EMERGENCY) {
+                context.emergencyLatched = true;
+                context.controlSource = SOURCE_EMERGENCY;
+            } else if (mode == DrivingMode.ATO) {
+                context.controlSource = SOURCE_ATO;
+                context.plcConnectionId = null;
+                context.plcPort = -1;
+            } else if (mode == DrivingMode.MANUAL && SOURCE_EMERGENCY.equals(context.controlSource)) {
+                context.controlSource = source != null ? source : SOURCE_WEB_HMI;
+            }
+            context.lastUpdatedAt = System.currentTimeMillis();
+        }
+    }
+
+    /** External departure-authorization sync (dispatch DEPART → vehicle confirm). */
+    public void syncDepartureAuth(String trainId, boolean authorized) {
+        if (trainId == null || trainId.isBlank()) return;
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) return;
+        synchronized (context) {
+            context.departureAuthorized = authorized;
+            context.departureState = authorized ? "RUNNING" : "READY_TO_DEPART";
+            context.lastUpdatedAt = System.currentTimeMillis();
+        }
+    }
+
+    /**
+     * Sync the current simulation state from the frontend ATO playback into the Bridge context.
+     * <p>Only updates state/mode/station context — does NOT trigger simulation, does NOT clear
+     * emergencyLatched, does NOT call reset. Used before sending 704 test frames so EB starts
+     * from the actual current position rather than the initial registered state.</p>
+     *
+     * <p>坐标语义：currentState.position 是累计相对里程（从线路起点算），
+     * currentState.absolutePosition 是绝对里程。两者语义不同，不可互换。
+     * syncCurrentState 原样保存，runContinuation 会以 position 作为 currentCumulativePos。</p>
+     */
+    public void syncCurrentState(String trainId, TrainState currentState, DrivingMode mode,
+                                 Integer fromStationId, Integer toStationId, Boolean departureAuthorized) {
+        if (trainId == null || trainId.isBlank() || currentState == null) return;
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) {
+            int fromId = fromStationId != null ? fromStationId : 1;
+            int toId = toStationId != null ? toStationId : 2;
+            context = new ActiveSimulationContext(trainId, fromId, toId,
+                    copy(currentState), mode == null ? DrivingMode.ATO : mode);
+            if (departureAuthorized != null) {
+                context.departureAuthorized = departureAuthorized;
+                context.departureState = departureAuthorized ? "RUNNING" : "READY_TO_DEPART";
+            }
+            contexts.put(trainId, context);
+            return;
+        }
+        synchronized (context) {
+            // 不清除 emergencyLatched —— 只有 resetEmergencyLatch 可以清除
+            context.currentState = copy(currentState);
+            if (mode != null) {
+                context.mode = mode;
+            }
+            if (departureAuthorized != null) {
+                context.departureAuthorized = departureAuthorized;
+                context.departureState = departureAuthorized ? "RUNNING" : "READY_TO_DEPART";
+            }
+            context.lastUpdatedAt = System.currentTimeMillis();
+        }
+    }
+
+    public DrivingMode getMode(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        return context == null ? null : context.mode;
+    }
+
+    public boolean isDepartureAuthorized(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        return context != null && context.departureAuthorized;
     }
 
     /** True while this train was deliberately configured for laboratory desk control. */
@@ -147,32 +276,72 @@ public class Protocol704VehicleControlBridge {
                                    String departureState, String controlSource, long lastUpdatedAt) {}
 
     public Protocol704CommandLifecycle execute(String trainId, MappedControlCommand mapped) {
-        Protocol704CommandLifecycle lifecycle = lifecycle(trainId, mapped);
+        return execute(trainId, mapped, SOURCE_ATO, "legacy-2arg", -1);
+    }
+
+    public Protocol704CommandLifecycle executeFromTestFrame(String trainId, MappedControlCommand mapped) {
+        Protocol704CommandLifecycle lifecycle = lifecycle(trainId, mapped, SOURCE_LOCAL_TEST, "local-test", -1);
+        lifecycle.setSource(SOURCE_LOCAL_TEST);
+        return execute(trainId, mapped, SOURCE_LOCAL_TEST, "local-test", -1);
+    }
+
+    public Protocol704CommandLifecycle execute(String trainId, MappedControlCommand mapped,
+                                               String source, String connectionId, int port) {
+        Protocol704CommandLifecycle lifecycle = lifecycle(trainId, mapped, source, connectionId, port);
         lifecycle.setStatus("RECEIVED");
         if (mapped == null || Protocol704LocalV1ControlAdapter.toLocalV1(mapped).isEmpty()) {
             return reject(lifecycle, "UNSUPPORTED_COMMAND");
         }
         lifecycle.setStatus("PARSED");
+        if (source != null) {
+            lifecycle.setSource(source);
+        }
         ActiveSimulationContext context = contexts.get(trainId);
         if (context == null) return reject(lifecycle, "NO_ACTIVE_SIMULATION");
         synchronized (context) {
             lifecycle.setActiveTrainId(context.trainId);
             lifecycle.setSessionId(context.sessionId);
             lifecycle.setPreviousMode(context.mode.name());
+            lifecycle.setPreviousControlSource(context.controlSource);
+            lifecycle.setEmergencyLatchedBefore(context.emergencyLatched);
             lifecycle.setControlSource(context.controlSource);
+            lifecycle.setResultMode(context.mode.name());
             lifecycle.setDepartureState(context.departureState);
             if (System.currentTimeMillis() - context.lastUpdatedAt > STALE_CONTEXT_MS) {
                 return reject(lifecycle, "STALE_ACTIVE_CONTEXT");
             }
             String command = mapped.getCommand();
-            if ("SET_MANUAL".equals(command) || "RESUME_ATO".equals(command)
-                    || "DEPART_CONFIRM".equals(command)) {
+            boolean emergency = "emergency_brake".equals(command);
+            boolean modeCommand = "SET_MANUAL".equals(command) || "RESUME_ATO".equals(command)
+                    || "DEPART_CONFIRM".equals(command);
+            boolean isOrdinaryMotionCommand = "traction".equals(command) || "coast".equals(command) || "brake".equals(command);
+
+            if (context.emergencyLatched && !emergency) {
+                lifecycle.setResultMode(DrivingMode.EMERGENCY.name());
+                lifecycle.setControlSource(SOURCE_EMERGENCY);
+                return reject(lifecycle, "EMERGENCY_BRAKE_LATCHED");
+            }
+
+            if (!emergency && !modeCommand && isOrdinaryMotionCommand) {
+                if (context.plcConnectionId != null && !context.plcConnectionId.equals(connectionId)) {
+                    return reject(lifecycle, "CONTROL_SOURCE_CONFLICT");
+                }
+            }
+
+            if (modeCommand) {
+                lifecycle.setStatus("VALIDATED");
                 if ("SET_MANUAL".equals(command)) {
                     context.mode = DrivingMode.MANUAL;
-                    context.controlSource = "PLC_704_LOCAL_V1";
+                    context.controlSource = source;
+                    if (connectionId != null) {
+                        context.plcConnectionId = connectionId;
+                        context.plcPort = port;
+                    }
                 } else if ("RESUME_ATO".equals(command)) {
                     context.mode = DrivingMode.ATO;
-                    context.controlSource = "PLC_704_LOCAL_V1";
+                    context.controlSource = SOURCE_ATO;
+                    context.plcConnectionId = null;
+                    context.plcPort = -1;
                 } else {
                     context.departureAuthorized = true;
                     context.departureState = "RUNNING";
@@ -180,38 +349,59 @@ public class Protocol704VehicleControlBridge {
                 context.lastCommand = command;
                 context.lastUpdatedAt = System.currentTimeMillis();
                 lifecycle.setResultMode(context.mode.name());
+                lifecycle.setControlSource(context.controlSource);
                 lifecycle.setExecutedState(copy(context.currentState));
                 lifecycle.setDepartureState(context.departureState);
+                lifecycle.setEmergencyLatchedAfter(context.emergencyLatched);
                 lifecycle.setStatus("EXECUTED");
                 publishToDispatch(context);
                 return lifecycle;
             }
+
             if (("traction".equals(command) && (!finiteInRange(mapped.getLevelPercent()) || mapped.getTractionLevelRaw() > 100))
                     || ("brake".equals(command) && (!finiteInRange(mapped.getLevelPercent()) || mapped.getBrakeLevelRaw() > 100))) {
                 return reject(lifecycle, "INVALID_LEVEL");
             }
-            boolean emergency = "emergency_brake".equals(command);
+
             if (mapped.getDirection() != null && !"FORWARD".equals(mapped.getDirection())
                     && !"ZERO".equals(mapped.getDirection()) && !"REVERSE".equals(mapped.getDirection())) {
                 return reject(lifecycle, "UNKNOWN_DIRECTION");
             }
-            if (!emergency && context.emergencyLatched) return reject(lifecycle, "EMERGENCY_BRAKE_LATCHED");
+
             if (!emergency && !context.departureAuthorized) return reject(lifecycle, "NOT_READY_TO_DEPART");
             if (!emergency && context.mode != DrivingMode.MANUAL) return reject(lifecycle, "MODE_NOT_MANUAL");
+
+            if (!emergency && Boolean.TRUE.equals(turnbackInProgress.get(trainId)) && isOrdinaryMotionCommand) {
+                return reject(lifecycle, "TURNBACK_IN_PROGRESS");
+            }
+
             long now = System.currentTimeMillis();
             boolean steadyInput = command.equals(context.lastCommand)
                     && Double.compare(mapped.getLevelPercent(), context.lastLevel) == 0
-                    && "PLC_704_LOCAL_V1".equals(context.controlSource);
+                    && Objects.equals(context.controlSource, source);
             // Repeated PLC frames mean the driver is holding the handle. Keep the
             // command alive, but advance at the vehicle model's 0.5 s sample rate.
-            if (steadyInput && now - context.lastPhysicalStepAt < MIN_CONTINUATION_INTERVAL_MS) {
+            if (!emergency && steadyInput && now - context.lastPhysicalStepAt < MIN_CONTINUATION_INTERVAL_MS) {
                 context.lastUpdatedAt = now;
                 lifecycle.setExecutedState(copy(context.currentState));
                 lifecycle.setResultMode(context.mode.name());
                 lifecycle.setDepartureState(context.departureState);
+                lifecycle.setEmergencyLatchedAfter(context.emergencyLatched);
                 lifecycle.setStatus("EXECUTED");
                 return lifecycle;
             }
+
+            if (emergency && context.emergencyLatched) {
+                lifecycle.setResultMode(DrivingMode.EMERGENCY.name());
+                lifecycle.setControlSource(SOURCE_EMERGENCY);
+                lifecycle.setExecutedState(copy(context.currentState));
+                lifecycle.setEmergencyLatchedAfter(true);
+                lifecycle.setStatus("EXECUTED");
+                lifecycle.setDepartureState(context.departureState);
+                context.lastUpdatedAt = now;
+                return lifecycle;
+            }
+
             lifecycle.setStatus("VALIDATED");
             try {
                 ControlCommand commandDto = Protocol704LocalV1ControlAdapter.toLocalV1(mapped).orElseThrow();
@@ -242,7 +432,19 @@ public class Protocol704VehicleControlBridge {
                 context.currentState = copy(executed);
                 context.mode = emergency ? DrivingMode.EMERGENCY
                         : result.getSummary().getCurrentMode() == null ? context.mode : result.getSummary().getCurrentMode();
-                context.controlSource = emergency ? "EMERGENCY" : "PLC_704_LOCAL_V1";
+                if (emergency) {
+                    context.controlSource = SOURCE_EMERGENCY;
+                    if (connectionId != null) {
+                        context.plcConnectionId = connectionId;
+                        context.plcPort = port;
+                    }
+                } else {
+                    context.controlSource = source;
+                    if (connectionId != null) {
+                        context.plcConnectionId = connectionId;
+                        context.plcPort = port;
+                    }
+                }
                 context.emergencyLatched = context.emergencyLatched || emergency;
                 context.lastCommand = command;
                 context.lastLevel = mapped.getLevelPercent();
@@ -253,24 +455,45 @@ public class Protocol704VehicleControlBridge {
                 lifecycle.setExecutedState(copy(context.currentState));
                 lifecycle.setResultMode(context.mode.name());
                 lifecycle.setDepartureState(context.departureState);
+                lifecycle.setEmergencyLatchedAfter(context.emergencyLatched);
+                // 存储完整 SimulationResult，前端用它把 EB 制动轨迹拼接到主 result.states 后面播放
+                lifecycle.setExecutedResult(result);
                 lifecycle.setStatus("EXECUTED");
                 publishToDispatch(context);
                 return lifecycle;
             } catch (Exception ex) {
                 lifecycle.setExecutionError(ex.getClass().getSimpleName() + ": " + ex.getMessage());
+                lifecycle.setEmergencyLatchedAfter(context.emergencyLatched);
                 lifecycle.setStatus("FAILED");
                 return lifecycle;
             }
         }
     }
 
-    private static Protocol704CommandLifecycle lifecycle(String trainId, MappedControlCommand mapped) {
+    public void notifyPlcDisconnected(String trainId, int port, String connectionId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) return;
+        synchronized (context) {
+            if (context.plcConnectionId != null && context.plcConnectionId.equals(connectionId)
+                    && context.plcPort == port) {
+                context.plcConnectionId = null;
+                context.plcPort = -1;
+            }
+            context.lastUpdatedAt = System.currentTimeMillis();
+        }
+    }
+
+    private static Protocol704CommandLifecycle lifecycle(String trainId, MappedControlCommand mapped,
+                                                          String source, String connectionId, int port) {
         Protocol704CommandLifecycle lifecycle = new Protocol704CommandLifecycle();
         lifecycle.setCommandId("704-local-v1-" + UUID.randomUUID());
         lifecycle.setReceivedAt(System.currentTimeMillis());
         lifecycle.setParsedCommand(mapped == null ? null : mapped.getCommand());
         lifecycle.setLevel(mapped == null ? 0.0 : mapped.getLevelPercent());
         lifecycle.setActiveTrainId(trainId);
+        lifecycle.setSource(source);
+        lifecycle.setConnectionId(connectionId);
+        lifecycle.setPort(port);
         return lifecycle;
     }
 
@@ -439,12 +662,14 @@ public class Protocol704VehicleControlBridge {
         final String sessionId = "protocol704-local-v1";
         TrainState currentState;
         DrivingMode mode;
-        String controlSource = "ATO";
+        String controlSource = SOURCE_ATO;
         String lastCommand = "";
         double lastLevel = Double.NaN;
         boolean emergencyLatched;
         boolean departureAuthorized;
         String departureState = "READY_TO_DEPART";
+        String plcConnectionId;
+        int plcPort = -1;
         long lastUpdatedAt = System.currentTimeMillis();
         long lastPhysicalStepAt;
         int currentStationId;

@@ -152,7 +152,8 @@ export interface SimulationControlRequest {
   /** currentState.position 必须是从 fromStation 起的全程累积里程。 */
   currentState: TrainState;
   currentMode: DrivingMode;
-  controlCommand: {
+  /** /simulation/control 必填；/protocol704/sync-state 只同步状态不需要此字段。 */
+  controlCommand?: {
     // 牵引/惰行/制动/紧急制动；模式恢复：resume_ato（MANUAL→ATO）、reset_emergency（EMERGENCY→MANUAL）
     command: string;      // traction / coast / brake / emergency_brake / resume_ato / reset_emergency
     targetDecel: number;  // m/s2
@@ -163,10 +164,13 @@ export interface SimulationControlRequest {
    * 本次续算目标站累计里程（通常是下一未到达站）。
    * Bug B2 修复：多站仿真中传"下一未到达站的累计里程"，而非末站里程，避免 ATO 跳过中间站。
    * 单区间仿真时仍可传 stopResult.targetStopPosition。
+   * /protocol704/sync-state 不需要此字段。
    */
-  totalTargetPosition: number;
+  totalTargetPosition?: number;
   /** 下一目标站 id（前端计算后传入，供后端日志/返回使用）。可选。 */
   nextStationId?: number;
   /** 下一目标站名（前端计算后传入，供后端日志/返回使用）。可选。 */
   nextStationName?: string;
+  /** 车载确认发车后才允许仿真进入 RUNNING；sync-state 用此字段同步 Bridge 发车授权。 */
+  departureConfirmed?: boolean;
 }

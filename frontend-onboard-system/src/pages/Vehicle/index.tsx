@@ -9,6 +9,7 @@ import {
   callVehicleControl,
   getAllSidingStatuses,
   reportOnboardEvent,
+  resetVehicleSimulation,
   runVehicleSimulation,
 } from "../../api/vehicle";
 import { disconnectProtocol704, resetProtocol704 } from "../../api/protocol704";
@@ -459,7 +460,18 @@ function Vehicle() {
       } = refs;
       if (!cs || !res) return;
 
-      const totalTarget = res.stopResult?.targetStopPosition ?? 0;
+      let totalTarget = res.stopResult?.targetStopPosition ?? 0;
+      let nextStationId: number | undefined;
+      let nextStationName: string | undefined;
+      const stationStops = res.stationStops;
+      if (stationStops && stationStops.length > 0) {
+        const nextStation = stationStops.find((s) => s.targetPosition > cs.position + 0.5);
+        if (nextStation) {
+          totalTarget = nextStation.targetPosition;
+          nextStationId = nextStation.stationId;
+          nextStationName = nextStation.stationName;
+        }
+      }
 
       try {
         const controlResult = await callVehicleControl({
@@ -470,11 +482,46 @@ function Vehicle() {
           currentMode: mode,
           controlCommand: { command, targetDecel, levelPercent },
           totalTargetPosition: totalTarget,
+          nextStationId,
+          nextStationName,
         });
+
+        if (controlResult && "status" in controlResult && controlResult.status === "PENDING_APPROVAL") {
+          updateInstance(trainId, (cur) => ({
+            ...cur,
+            errorMessage: controlResult.message || "已向中控发送人工接管请求",
+          }));
+          return;
+        }
+
+        if (
+          !controlResult ||
+          !("states" in controlResult) ||
+          !Array.isArray(controlResult.states) ||
+          controlResult.states.length === 0 ||
+          !controlResult.summary
+        ) {
+          throw new Error("控制接口返回的仿真结果不完整，未切换驾驶模式");
+        }
 
         updateInstance(trainId, (cur) => {
           if (!cur.result) return cur;
           const before = cur.result.states.slice(0, fi + 1);
+          const prevStops = Array.isArray(cur.result.stationStops)
+            ? cur.result.stationStops
+            : [];
+          const incomingStops = Array.isArray(controlResult.stationStops)
+            ? controlResult.stationStops
+            : [];
+          const incomingSafetyEvents = Array.isArray(controlResult.safetyEvents)
+            ? controlResult.safetyEvents
+            : [];
+          const mergedStopsMap = new Map<number, StationStop>();
+          prevStops.forEach((stop) => mergedStopsMap.set(stop.stationId, stop));
+          incomingStops.forEach((stop) => mergedStopsMap.set(stop.stationId, stop));
+          const mergedStops = Array.from(mergedStopsMap.values()).sort(
+            (left, right) => left.targetPosition - right.targetPosition,
+          );
           return {
             ...cur,
             result: {
@@ -486,9 +533,9 @@ function Vehicle() {
               stopResult: controlResult.stopResult,
               safetyEvents: [
                 ...(cur.result.safetyEvents ?? []),
-                ...(controlResult.safetyEvents ?? []),
+                ...incomingSafetyEvents,
               ],
-              stationStops: controlResult.stationStops,
+              stationStops: mergedStops,
               summary: {
                 ...cur.result.summary,
                 currentMode:
@@ -500,7 +547,7 @@ function Vehicle() {
             },
             allSafetyEvents: [
               ...cur.allSafetyEvents,
-              ...(controlResult.safetyEvents ?? []),
+              ...incomingSafetyEvents,
             ],
             trajectoryVersion: cur.trajectoryVersion + 1,
             drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
@@ -509,6 +556,11 @@ function Vehicle() {
                 ? cur.handleResetToken + 1
                 : cur.handleResetToken,
             status: "playing",
+            isPaused:
+              controlResult.summary.currentMode === "emergency"
+                ? true
+                : cur.isPaused,
+            errorMessage: null,
           };
         });
       } catch (err) {
@@ -524,22 +576,41 @@ function Vehicle() {
   const handleReset = useCallback(
     (trainId: string) => {
       void resetProtocol704(trainId).catch(() => undefined);
-      updateInstance(trainId, (cur) => ({
-        ...cur,
-        status: "idle",
-        errorMessage: null,
-        result: null,
-        trajectoryVersion: 0,
-        frameIndex: 0,
-        isPaused: false,
-        holdAfterBraking: false,
-        departureAuthorized: false,
-        speedMultiplier: 1,
-        drivingMode: "ato",
-        controlSourceMode: "SIMULATION",
-        allSafetyEvents: [],
-        handleResetToken: cur.handleResetToken + 1,
-      }));
+      const refs = instanceRefs.current.get(trainId);
+      const lineStart = refs?.resultRef?.summary?.lineStartPosition ?? 0;
+      const positionMeters = refs?.stateRef
+        ? refs.stateRef.absolutePosition ?? lineStart + refs.stateRef.position
+        : lineStart;
+      updateInstance(trainId, (cur) => {
+        if (cur.timerId !== null) window.clearInterval(cur.timerId);
+        return {
+          ...cur,
+          status: "idle",
+          errorMessage: null,
+          result: null,
+          trajectoryVersion: 0,
+          frameIndex: 0,
+          timerId: null,
+          isPaused: false,
+          holdAfterBraking: false,
+          departureAuthorized: false,
+          speedMultiplier: 1,
+          drivingMode: "ato",
+          controlSourceMode: "SIMULATION",
+          allSafetyEvents: [],
+          handleResetToken: cur.handleResetToken + 1,
+        };
+      });
+      void resetVehicleSimulation(trainId, positionMeters).catch(() => undefined);
+      void reportOnboardEvent({
+        trainId,
+        eventType: "SIMULATION_RESET",
+        timestampSeconds: 0,
+        positionMeters,
+        speedKmh: 0,
+        severity: "INFO",
+        details: `车载复位 position=${positionMeters.toFixed(1)}m`,
+      }).catch(() => undefined);
     },
     [updateInstance],
   );
@@ -577,11 +648,20 @@ function Vehicle() {
   );
 
   const handleDepartAuthorized = useCallback(
-    (trainId: string) => {
+    (trainId: string, departureState = "RUNNING") => {
       updateInstance(trainId, (cur) => ({
         ...cur,
         departureAuthorized: true,
         isPaused: false,
+        result: cur.result
+          ? {
+              ...cur.result,
+              summary: {
+                ...cur.result.summary,
+                departureState: departureState as "RUNNING",
+              },
+            }
+          : cur.result,
       }));
     },
     [updateInstance],
@@ -627,9 +707,9 @@ function Vehicle() {
 
   const handleRequestManual = useCallback(
     (trainId: string) => {
-      updateInstance(trainId, (cur) => ({ ...cur, drivingMode: "manual" }));
+      void handleControl(trainId, "set_manual", 0, "ato");
     },
-    [updateInstance],
+    [handleControl],
   );
 
   const handleTractionLevel = useCallback(
@@ -1101,10 +1181,19 @@ function Vehicle() {
               drivingMode={inst.drivingMode}
               departureState={inst.result?.summary?.departureState}
               departureAuthorized={inst.departureAuthorized}
-              onDepartAuthorized={() => handleDepartAuthorized(tid)}
+              onDepartAuthorized={(state) => handleDepartAuthorized(tid, state)}
               onDispatchHold={() => handleDispatchHold(tid)}
               onDispatchRecovery={() => handleDispatchRecovery(tid)}
               externalControl={inst.controlSourceMode === "LAB_DRIVER_DESK"}
+              onManualApproved={() => {
+                updateInstance(tid, (cur) => ({
+                  ...cur,
+                  drivingMode: "manual" as DrivingMode,
+                }));
+              }}
+              onManualRejected={() => {
+                console.log("人工接管被中控拒绝");
+              }}
             />
           </div>
         );
@@ -1121,7 +1210,19 @@ function Vehicle() {
             onError={(message) => {
               updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
             }}
-            onExecutedState={(state, mode, departureState) => {
+            getCurrentState={() => {
+              const refs = instanceRefs.current.get(tid);
+              if (!refs?.stateRef) return null;
+              return {
+                trainId: tid,
+                fromStationId: refs.fromStationIdRef,
+                toStationId: refs.toStationIdRef,
+                currentState: refs.stateRef,
+                currentMode: refs.drivingModeRef,
+                departureConfirmed: instances.get(tid)?.departureAuthorized ?? false,
+              };
+            }}
+            onExecutedState={(state, mode, departureState, latched, result) => {
               setDisplayState({ ...state, trainId: tid });
               if (mode === "MANUAL" || mode === "EMERGENCY" || mode === "ATO") {
                 updateInstance(tid, (cur) => ({
@@ -1134,6 +1235,48 @@ function Vehicle() {
                     : departureState !== "RUNNING",
                   departureAuthorized: departureState === "RUNNING",
                 }));
+              }
+
+              if (result && result.states && result.states.length > 0) {
+                updateInstance(tid, (cur) => {
+                  if (!cur.result) return cur;
+                  const refs = instanceRefs.current.get(tid);
+                  const frameIndex = refs?.frameIndexRef ?? cur.frameIndex;
+                  const before = cur.result.states.slice(0, frameIndex + 1);
+                  const incomingSafetyEvents = Array.isArray(result.safetyEvents)
+                    ? result.safetyEvents
+                    : [];
+                  return {
+                    ...cur,
+                    result: {
+                      ...cur.result,
+                      states: [
+                        ...before,
+                        ...result.states.map((snapshot) => ({
+                          ...snapshot,
+                          trainId: tid,
+                        })),
+                      ],
+                      stopResult: result.stopResult ?? cur.result.stopResult,
+                      safetyEvents: [
+                        ...(cur.result.safetyEvents ?? []),
+                        ...incomingSafetyEvents,
+                      ],
+                      summary: {
+                        ...cur.result.summary,
+                        currentMode:
+                          result.summary.currentMode ?? cur.result.summary.currentMode,
+                        nextMode: result.summary.nextMode ?? cur.result.summary.nextMode,
+                      },
+                    },
+                    allSafetyEvents: [...cur.allSafetyEvents, ...incomingSafetyEvents],
+                    trajectoryVersion: cur.trajectoryVersion + 1,
+                    isPaused: latched ? false : cur.isPaused,
+                    holdAfterBraking: latched ? true : cur.holdAfterBraking,
+                    status: "playing",
+                    errorMessage: null,
+                  };
+                });
               }
             }}
           />
