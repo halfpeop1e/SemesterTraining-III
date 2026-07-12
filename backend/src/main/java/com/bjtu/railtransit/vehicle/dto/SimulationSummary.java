@@ -169,6 +169,8 @@ public class SimulationSummary {
 
     /** 已完成停车的站数（含终点站）。 */
     private int completedStops;
+    /** READY_TO_DEPART / RUNNING / STOPPED; authoritative vehicle-side lifecycle. */
+    private String departureState = "READY_TO_DEPART";
 
     public com.bjtu.railtransit.vehicle.enums.DrivingMode getCurrentMode() { return currentMode; }
     public void setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode currentMode) { this.currentMode = currentMode; }
@@ -181,4 +183,6 @@ public class SimulationSummary {
 
     public int getCompletedStops() { return completedStops; }
     public void setCompletedStops(int completedStops) { this.completedStops = completedStops; }
+    public String getDepartureState() { return departureState; }
+    public void setDepartureState(String departureState) { this.departureState = departureState; }
 }

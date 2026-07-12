@@ -5,9 +5,9 @@
 // 3. 每实例独立运行仿真、独立与总控通信
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { callVehicleControl, reportOnboardEvent, runVehicleSimulation } from '../../api/vehicle';
+import { callVehicleControl, getAllSidingStatuses, reportOnboardEvent, runVehicleSimulation } from '../../api/vehicle';
 import { disconnectProtocol704 } from '../../api/protocol704';
-import type { DrivingMode, SafetyEvent, SimulationResult, TrainState } from '../../types/vehicle';
+import type { DrivingMode, SafetyEvent, SidingStatus, SimulationResult, StationStop, TrainState } from '../../types/vehicle';
 import { STATIONS } from './data/lineMap';
 import DriverCabView from './components/DriverCabView';
 import LineRunView from './components/LineRunView';
@@ -122,10 +122,41 @@ function Vehicle() {
   });
   const [activeTrainId, setActiveTrainId] = useState<string>(urlTrainId);
   const [displayState, setDisplayState] = useState<TrainState | null>(null);
+  const [sidingStatuses, setSidingStatuses] = useState<SidingStatus[]>([]);
 
   // 用 ref 跟踪最新 instances，供 unmount cleanup 使用
   const instancesRef = useRef(instances);
   instancesRef.current = instances;
+
+  // 父组件统一轮询，保证 2D/3D 视图消费同一份侧线快照。
+  // 请求失败时保留上次已知数据；递归 setTimeout 避免慢请求重叠。
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const tick = async () => {
+      try {
+        const data = await getAllSidingStatuses();
+        if (!cancelled && data.length > 0) {
+          setSidingStatuses(data);
+        }
+      } catch {
+        // 降级策略：保留上次成功快照，不清空视图状态。
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(tick, 4000);
+        }
+      }
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
 
   // ── 每实例可变引用（render 时同步，handler 中通过此 ref 获取最新值）──
   const instanceRefs = useRef<Map<string, {
@@ -313,6 +344,7 @@ function Vehicle() {
 
     try {
       const simulationResult = await runVehicleSimulation({
+        trainId,
         fromStationId: inst.fromStationId,
         toStationId: inst.toStationId,
       });
@@ -350,21 +382,50 @@ function Vehicle() {
     const { stateRef: cs, frameIndexRef: fi, fromStationIdRef: fromId, toStationIdRef: toId, resultRef: res } = refs;
     if (!cs || !res) return;
 
-    const totalTarget = res.stopResult?.targetStopPosition ?? 0;
+    // Bug B2 修复：不再使用 stopResult.targetStopPosition（末站累计里程），
+    // 而是从 stationStops 中找出下一未到达站，以该站的累计里程作为续算目标。
+    let totalTarget = res.stopResult?.targetStopPosition ?? 0;
+    let nextStationId: number | undefined;
+    let nextStationName: string | undefined;
+    const stationStops = res.stationStops;
+    if (stationStops && stationStops.length > 0) {
+      // 加 0.5m 容差避免抖动：当前位置已非常接近某站时，跳到下一站
+      const nextStation = stationStops.find((s) => s.targetPosition > cs.position + 0.5);
+      if (nextStation) {
+        totalTarget = nextStation.targetPosition;
+        nextStationId = nextStation.stationId;
+        nextStationName = nextStation.stationName;
+      }
+    }
 
     try {
       const controlResult = await callVehicleControl({
+        trainId,
         fromStationId: fromId,
         toStationId: toId,
         currentState: cs,
         currentMode: mode,
         controlCommand: { command, targetDecel, levelPercent },
         totalTargetPosition: totalTarget,
+        nextStationId,
+        nextStationName,
       });
 
       updateInstance(trainId, (cur) => {
         if (!cur.result) return cur;
         const before = cur.result.states.slice(0, fi + 1);
+        // stationStops 合并而非整体覆盖：控制接口对多站续算返回的是"后续未到站完整列表"
+        // （首元素为本次目标站，带 actualPosition；其余为哨兵 actualPosition=-1）。
+        // 按 stationId 去重合并，保留前端已有、后端未返回的站（如已到站历史记录），
+        // 用控制结果更新对应站信息，避免一次续算丢失完整路线导致下次手动→ATO 找不到下一站。
+        const prevStops = cur.result.stationStops ?? [];
+        const incomingStops = controlResult.stationStops ?? [];
+        const mergedStopsMap = new Map<number, StationStop>();
+        prevStops.forEach((s) => mergedStopsMap.set(s.stationId, s));
+        incomingStops.forEach((s) => mergedStopsMap.set(s.stationId, s));
+        const mergedStops = Array.from(mergedStopsMap.values()).sort(
+          (a, b) => a.targetPosition - b.targetPosition,
+        );
         return {
           ...cur,
           result: {
@@ -375,7 +436,7 @@ function Vehicle() {
             ],
             stopResult: controlResult.stopResult,
             safetyEvents: [...(cur.result.safetyEvents ?? []), ...(controlResult.safetyEvents ?? [])],
-            stationStops: controlResult.stationStops,
+            stationStops: mergedStops,
             summary: {
               ...cur.result.summary,
               currentMode: controlResult.summary.currentMode ?? cur.result.summary.currentMode,
@@ -425,11 +486,12 @@ function Vehicle() {
     });
   }, [updateInstance]);
 
-  const handleDepartAuthorized = useCallback((trainId: string) => {
+  const handleDepartAuthorized = useCallback((trainId: string, departureState = 'RUNNING') => {
     updateInstance(trainId, (cur) => ({
       ...cur,
       departureAuthorized: true,
       isPaused: false,
+      result: cur.result ? { ...cur.result, summary: { ...cur.result.summary, departureState: departureState as 'RUNNING' } } : cur.result,
     }));
   }, [updateInstance]);
 
@@ -452,8 +514,8 @@ function Vehicle() {
   }, [updateInstance, handleControl]);
 
   const handleRequestManual = useCallback((trainId: string) => {
-    updateInstance(trainId, (cur) => ({ ...cur, drivingMode: 'manual' }));
-  }, [updateInstance]);
+    void handleControl(trainId, 'set_manual', 0, 'ato');
+  }, [handleControl]);
 
   const handleTractionLevel = useCallback((trainId: string, _level: number, levelPercent: number) => {
     const refs = instanceRefs.current.get(trainId);
@@ -767,8 +829,9 @@ function Vehicle() {
               toStationName={instToName}
               lineStartPosition={instLineStart}
               drivingMode={inst.drivingMode}
+              departureState={inst.result?.summary?.departureState}
               departureAuthorized={inst.departureAuthorized}
-              onDepartAuthorized={() => handleDepartAuthorized(tid)}
+              onDepartAuthorized={(state) => handleDepartAuthorized(tid, state)}
               onDispatchHold={() => handleDispatchHold(tid)}
               onDispatchRecovery={() => handleDispatchRecovery(tid)}
             />
@@ -782,6 +845,12 @@ function Vehicle() {
             trainId={tid}
             onError={(message) => {
               updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
+            }}
+            onExecutedState={(state, mode) => {
+              setDisplayState({ ...state, trainId: tid });
+              if (mode === 'MANUAL' || mode === 'EMERGENCY' || mode === 'ATO') {
+                updateInstance(tid, (cur) => ({ ...cur, drivingMode: mode.toLowerCase() as DrivingMode }));
+              }
             }}
           />
         </div>
@@ -819,6 +888,7 @@ function Vehicle() {
           safetyEventCount={ai.allSafetyEvents.length}
           isPaused={ai.isPaused}
           stationStops={ai.result?.stationStops}
+          sidingStatuses={sidingStatuses}
           externalDriveMode={ai.drivingMode}
           onRequestManual={() => handleRequestManual(activeTrainId)}
           onTractionLevel={(level, percent) => handleTractionLevel(activeTrainId, level, percent)}
@@ -840,6 +910,7 @@ function Vehicle() {
           stopResult={ai.result?.stopResult ?? null}
           positionOffset={lineStartPosition}
           stationStops={ai.result?.stationStops}
+          sidingStatuses={sidingStatuses}
         />
       </div>
 

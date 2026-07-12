@@ -27,6 +27,8 @@ public class SimulationRunRequest {
      * 默认 2（丰台科技园）。
      */
     private Integer toStationId;
+    /** Local vehicle identity used to bind an already-created simulation to local-v1 PLC input. */
+    private String trainId;
 
     public SimulationRunRequest() {
     }
@@ -51,6 +53,8 @@ public class SimulationRunRequest {
     public void setToStationId(Integer toStationId) {
         this.toStationId = toStationId;
     }
+    public String getTrainId() { return trainId; }
+    public void setTrainId(String trainId) { this.trainId = trainId; }
 
     /** 取出有效的起始站 id，null 时返回默认值 1。 */
     public int resolvedFromId() {

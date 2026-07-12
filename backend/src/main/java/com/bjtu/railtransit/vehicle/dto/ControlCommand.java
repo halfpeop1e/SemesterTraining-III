@@ -8,7 +8,7 @@ package com.bjtu.railtransit.vehicle.dto;
  */
 public class ControlCommand {
 
-    /** 指令类型：traction / coast / brake / emergency_brake。 */
+    /** 指令类型：traction / coast / brake / emergency_brake / SET_MANUAL / RESUME_ATO / DEPART_CONFIRM。 */
     private String command;
 
     /** 目标减速度，单位 m/s2（牵引/惰行指令下可为 0 或不使用）。 */
@@ -25,6 +25,9 @@ public class ControlCommand {
      * 任何网络/字节序相关代码。</p>
      */
     private double levelPercent;
+
+    /** local-v1 direction semantic: FORWARD / ZERO / REVERSE. */
+    private String direction;
 
     public ControlCommand() {
     }
@@ -63,4 +66,7 @@ public class ControlCommand {
     public void setLevelPercent(double levelPercent) {
         this.levelPercent = levelPercent;
     }
+
+    public String getDirection() { return direction; }
+    public void setDirection(String direction) { this.direction = direction; }
 }

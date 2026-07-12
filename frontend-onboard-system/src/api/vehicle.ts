@@ -1,6 +1,7 @@
 // 郭逸晨车载模块（成员三）——车辆仿真 API 调用
 
 import type {
+  SidingStatus,
   SimulationControlRequest,
   SimulationResult,
   SimulationRunRequest,
@@ -71,7 +72,7 @@ export async function runVehicleSimulation(
 /**
  * 驾驶员控制续算。
  * request.currentState.position 必须是全程累积里程。
- * request.totalTargetPosition 是本次仿真总目标距离（= stopResult.targetStopPosition）。
+ * request.totalTargetPosition 是本次续算目标站累计里程（通常是下一未到达站）。
  */
 export async function callVehicleControl(
   request: SimulationControlRequest,
@@ -85,4 +86,28 @@ export async function callVehicleControl(
   const body: SimulationRunResponse = await res.json();
   if (!body.success) throw new Error(body.message || '控制接口返回失败');
   return body.data;
+}
+
+export async function confirmVehicleDeparture(trainId: string): Promise<{ status: string; departureState?: string }> {
+  const res = await fetch(`${API_BASE}/vehicle/simulation/depart-confirm`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trainId }),
+  });
+  const body = await res.json();
+  if (!res.ok || !body.success) throw new Error(body.message || '车载发车确认失败');
+  return body.data;
+}
+
+/**
+ * 查询全部 13 站侧线占用状态（数据源 GET /api/dispatch/siding/all）。
+ * 由父组件（Vehicle/index.tsx）统一轮询后下发给 2D LineRunView 与 3D ThreeRailwayView，
+ * 保证两个视图共享同一份实时状态、无需刷新页面即可联动颜色。
+ * 字段名 status 与后端 SidingStatus.getStatus() 序列化契约一致（不得改为 state）。
+ */
+export async function getAllSidingStatuses(): Promise<SidingStatus[]> {
+  const res = await fetch(`${API_BASE}/dispatch/siding/all`);
+  if (!res.ok) throw new Error(`侧线状态接口失败: ${res.status}`);
+  const body = await res.json();
+  if (!body || !body.success) throw new Error(body?.message || '侧线状态接口返回失败');
+  return body.data as SidingStatus[];
 }

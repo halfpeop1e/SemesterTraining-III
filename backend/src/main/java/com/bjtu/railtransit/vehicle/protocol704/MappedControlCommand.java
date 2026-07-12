@@ -12,6 +12,8 @@ public class MappedControlCommand {
     private int masterHandle;
     private int tractionLevelRaw;
     private int brakeLevelRaw;
+    /** local-v1 internal semantic; PLC bit meaning awaits formal 704 confirmation. */
+    private String direction;
 
     public String getCommand() { return command; }
     public void setCommand(String command) { this.command = command; }
@@ -35,4 +37,6 @@ public class MappedControlCommand {
     public void setTractionLevelRaw(int tractionLevelRaw) { this.tractionLevelRaw = tractionLevelRaw; }
     public int getBrakeLevelRaw() { return brakeLevelRaw; }
     public void setBrakeLevelRaw(int brakeLevelRaw) { this.brakeLevelRaw = brakeLevelRaw; }
+    public String getDirection() { return direction; }
+    public void setDirection(String direction) { this.direction = direction; }
 }

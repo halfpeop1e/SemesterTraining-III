@@ -43,6 +43,7 @@ export interface SimulationSummary {
   // 多站汇总字段
   totalStations?: number;
   completedStops?: number;
+  departureState?: 'READY_TO_DEPART' | 'RUNNING' | 'STOPPED';
   // 驾驶模式（/control 接口返回时填充）
   currentMode?: DrivingMode | null;
   nextMode?: DrivingMode | null;
@@ -107,7 +108,22 @@ export interface StationOption {
   km: number;
 }
 
+/**
+ * 侧线（存车线/折返线）占用状态。数据来源：GET /api/dispatch/siding/{stationId}。
+ *
+ * 后端 DTO 字段为 `status`（SidingStatus.getStatus()），前端必须读 `status` 与之对齐。
+ * 历史上前端曾误用 `state`，导致真实 RESERVED/OCCUPIED 被回退为 AVAILABLE（已修复）。
+ */
+export interface SidingStatus {
+  stationId: number;
+  stationName: string;
+  /** 侧线占用状态，与后端 SidingStatus.status 字段一致。 */
+  status: 'AVAILABLE' | 'OCCUPIED' | 'RESERVED';
+  occupiedTrainId: string | null;
+}
+
 export interface SimulationRunRequest {
+  trainId?: string;
   fromStationId?: number;
   toStationId?: number;
   dwellTimeSeconds?: number;
@@ -118,6 +134,7 @@ export type DrivingMode = 'ato' | 'manual' | 'emergency';
 
 /** POST /api/vehicle/simulation/control 请求体。 */
 export interface SimulationControlRequest {
+  trainId?: string;
   fromStationId: number;
   toStationId: number;
   /** currentState.position 必须是从 fromStation 起的全程累积里程。 */
@@ -128,7 +145,16 @@ export interface SimulationControlRequest {
     command: string;      // traction / coast / brake / emergency_brake / resume_ato / reset_emergency
     targetDecel: number;  // m/s2
     levelPercent?: number; // 0~100，牵引/制动级位百分比
+    direction?: 'FORWARD' | 'ZERO' | 'REVERSE';
   };
-  /** 本次仿真从 fromStation 到 toStation 的总目标距离，= stopResult.targetStopPosition。 */
+  /**
+   * 本次续算目标站累计里程（通常是下一未到达站）。
+   * Bug B2 修复：多站仿真中传"下一未到达站的累计里程"，而非末站里程，避免 ATO 跳过中间站。
+   * 单区间仿真时仍可传 stopResult.targetStopPosition。
+   */
   totalTargetPosition: number;
+  /** 下一目标站 id（前端计算后传入，供后端日志/返回使用）。可选。 */
+  nextStationId?: number;
+  /** 下一目标站名（前端计算后传入，供后端日志/返回使用）。可选。 */
+  nextStationName?: string;
 }

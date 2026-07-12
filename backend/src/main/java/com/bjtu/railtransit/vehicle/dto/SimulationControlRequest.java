@@ -33,8 +33,22 @@ public class SimulationControlRequest {
     /**
      * 本次仿真从 fromStation 到最终 toStation 的总目标距离，单位 m。
      * 等于原 stopResult.targetStopPosition。续算时以此为制动目标。
+     *
+     * <p>Bug B2 修复后语义：前端在多站仿真中应传"下一未到达站的累计里程"，
+     * 而非最终终点里程，以避免 ATO 跳过中间站。</p>
      */
     private double totalTargetPosition;
+
+    /** 下一目标站 id（前端计算后传入，供日志/返回使用）。可选字段，不传时按原逻辑处理。 */
+    private Integer nextStationId;
+
+    /** 下一目标站名（前端计算后传入，供日志/返回使用）。可选字段。 */
+    private String nextStationName;
+    /** Optional local vehicle identity; used only for WEB_HMI/PLC control arbitration. */
+    private String trainId;
+
+    /** 车载确认发车后才允许仿真进入 RUNNING；兼容旧请求时默认为 false。 */
+    private boolean departureConfirmed;
 
     public SimulationControlRequest() {
     }
@@ -56,4 +70,14 @@ public class SimulationControlRequest {
 
     public double getTotalTargetPosition() { return totalTargetPosition; }
     public void setTotalTargetPosition(double totalTargetPosition) { this.totalTargetPosition = totalTargetPosition; }
+
+    public Integer getNextStationId() { return nextStationId; }
+    public void setNextStationId(Integer nextStationId) { this.nextStationId = nextStationId; }
+
+    public String getNextStationName() { return nextStationName; }
+    public void setNextStationName(String nextStationName) { this.nextStationName = nextStationName; }
+    public String getTrainId() { return trainId; }
+    public void setTrainId(String trainId) { this.trainId = trainId; }
+    public boolean isDepartureConfirmed() { return departureConfirmed; }
+    public void setDepartureConfirmed(boolean departureConfirmed) { this.departureConfirmed = departureConfirmed; }
 }

@@ -54,6 +54,25 @@ export interface Protocol704LogEntry {
   source?: string;
 }
 
+export interface Protocol704CommandLifecycle {
+  commandId: string;
+  source: 'PLC_704_LOCAL_V1';
+  receivedAt: number;
+  parsedCommand?: string;
+  level: number;
+  activeTrainId?: string;
+  sessionId?: string;
+  previousMode?: string;
+  resultMode?: string;
+  status: 'RECEIVED' | 'PARSED' | 'VALIDATED' | 'EXECUTED' | 'REJECTED' | 'FAILED';
+  rejectionReason?: string;
+  executionError?: string;
+  executedState?: {
+    time: number; position: number; velocity: number; acceleration: number; phase: string; trainId: string;
+    absolutePosition?: number;
+  };
+}
+
 export interface Parsed704Frame {
   frameLength: number;
   fields?: Record<string, unknown>;
@@ -78,4 +97,8 @@ export interface Protocol704Status {
   realtimeVehicleState?: RealtimeVehicleState704;
   recentLogs?: Protocol704LogEntry[];
   connectionNote?: string;
+  receivedValidFrame?: boolean;
+  lastValidFrameTime?: number;
+  lastCommandLifecycle?: Protocol704CommandLifecycle;
+  activeBinding?: string;
 }

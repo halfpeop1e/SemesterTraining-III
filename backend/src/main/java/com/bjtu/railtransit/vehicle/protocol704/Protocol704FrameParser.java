@@ -7,6 +7,12 @@ import java.util.Map;
 
 public class Protocol704FrameParser {
 
+    // local-v1 project convention only; formal PLC protocol semantics remain to be confirmed.
+    private static final int BYTE34_MODE_MANUAL = 0x08; // mode_downgrade_confirm
+    private static final int BYTE34_MODE_ATO = 0x04;    // mode_upgrade_confirm
+    private static final int BYTE34_DEPART = 0x10;      // confirm_btn
+    private static final int BYTE34_ATO_START = 0x80;   // ato_start_btn
+
     private static final int EXPECTED_FRAME_LENGTH = 46;
     private static final int FRAME_HEADER_MAGIC = 0xAA55AA55;
 
@@ -82,6 +88,7 @@ public class Protocol704FrameParser {
         mapped.setVerified(false);
         mapped.setTriggerByteOffset(-1);
         mapped.setTriggerByteValue(-1);
+        mapped.setDirection("ZERO");
 
         if (data.length >= EXPECTED_FRAME_LENGTH) {
             parseDataArea(data, fields, mapped, note);
@@ -193,8 +200,39 @@ public class Protocol704FrameParser {
         cmd.setMasterHandle(masterHandle);
         cmd.setTractionLevelRaw(tractionLevel);
         cmd.setBrakeLevelRaw(brakeLevel);
+        String direction = switch (directionHandle) {
+            case 1 -> "FORWARD";
+            case 0 -> "ZERO";
+            case 2 -> "REVERSE";
+            default -> "UNKNOWN";
+        };
+        cmd.setDirection(direction);
+        fields.put("direction_semantic", direction);
 
-        if (ebButtonLocked || masterHandle == 0x0004) {
+        // Mode/departure commands have priority over the ordinary master handle.
+        // These bit meanings are local-v1 project conventions, not a claim about the formal PLC protocol.
+        if ((byte34 & BYTE34_MODE_MANUAL) != 0) {
+            cmd.setCommand("SET_MANUAL");
+            cmd.setNote("LOCAL_V1_UNCONFIRMED: byte34 bit3 -> SET_MANUAL");
+            fields.put("control_mode_request", "MANUAL");
+        } else if ((byte34 & (BYTE34_MODE_ATO | BYTE34_ATO_START)) != 0) {
+            cmd.setCommand("RESUME_ATO");
+            cmd.setNote("LOCAL_V1_UNCONFIRMED: byte34 bit2/bit7 -> RESUME_ATO");
+            fields.put("control_mode_request", "ATO");
+        } else if ((byte34 & BYTE34_DEPART) != 0) {
+            cmd.setCommand("DEPART_CONFIRM");
+            cmd.setNote("LOCAL_V1_UNCONFIRMED: byte34 bit4 -> DEPART_CONFIRM");
+            fields.put("departure_confirm", true);
+        } else if (direction.equals("UNKNOWN")) {
+            cmd.setCommand("UNSUPPORTED");
+            cmd.setNote("LOCAL_V1_UNCONFIRMED: unknown direction handle=" + directionHandle);
+            note.append("UNKNOWN direction handle=").append(directionHandle).append("; ");
+        }
+
+        if ("UNSUPPORTED".equals(cmd.getCommand()) || "SET_MANUAL".equals(cmd.getCommand())
+                || "RESUME_ATO".equals(cmd.getCommand()) || "DEPART_CONFIRM".equals(cmd.getCommand())) {
+            // already mapped above
+        } else if (ebButtonLocked || masterHandle == 0x0004) {
             cmd.setCommand("emergency_brake");
             cmd.setLevelPercent(100);
             cmd.setTargetDecel(2.5);
@@ -229,11 +267,11 @@ public class Protocol704FrameParser {
             cmd.setNote("DOC_DEFINED: coast/zero from master_handle=0x0000; FIELD POSITIONS from 704 PLC protocol doc, value ranges require on-site verification");
             note.append("COAST/zero detected; ");
         } else {
-            cmd.setCommand("coast");
+            cmd.setCommand("UNSUPPORTED");
             cmd.setLevelPercent(0);
             cmd.setTargetDecel(0);
-            cmd.setNote("UNKNOWN master_handle value=" + masterHandle + "; defaulting to coast; ON-SITE VERIFICATION REQUIRED");
-            note.append("UNKNOWN master_handle=").append(masterHandle).append("; default coast; ");
+            cmd.setNote("LOCAL_V1_UNCONFIRMED: unknown master_handle value=" + masterHandle);
+            note.append("UNKNOWN master_handle=").append(masterHandle).append("; rejected; ");
         }
 
         fields.put("mapped_command", cmd.getCommand());

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ackDispatchCommand,
+  confirmVehicleDeparture,
   getOnboardSnapshot,
   reportOnboardEvent,
   reportOnboardStatus,
@@ -21,7 +22,8 @@ interface IntegrationPanelProps {
   lineStartPosition: number;
   drivingMode: DrivingMode;
   departureAuthorized: boolean;
-  onDepartAuthorized: () => void;
+  onDepartAuthorized: (departureState?: string) => void;
+  departureState?: string;
   onDispatchHold: () => void;
   onDispatchRecovery: () => void;
 }
@@ -44,6 +46,7 @@ export default function IntegrationPanel({
   drivingMode,
   departureAuthorized,
   onDepartAuthorized,
+  departureState,
   onDispatchHold,
   onDispatchRecovery,
 }: IntegrationPanelProps) {
@@ -92,9 +95,10 @@ export default function IntegrationPanel({
     }
     processedCommandsRef.current.add(depart.commandId);
     void ackDispatchCommand(depart.commandId, "EXECUTING")
-      .then(() => {
-        setMessage("调度已授权发车");
-        onDepartAuthorized();
+      .then(() => confirmVehicleDeparture(trainId))
+      .then((confirmation) => {
+        setMessage("调度已授权，车载已确认发车");
+        onDepartAuthorized(confirmation.departureState);
       })
       .catch((error) => {
         processedCommandsRef.current.delete(depart.commandId);
@@ -205,7 +209,7 @@ export default function IntegrationPanel({
     <section className="integration-panel" aria-label="总控联调">
       <div>
         <strong>总控联调 · {trainId}</strong>　<span>{message}</span>　
-        <span>ATP {snapshot?.safetyStatus ?? "--"}</span>
+        <span>ATP {snapshot?.safetyStatus ?? "--"} · 发车状态 {departureState ?? "READY_TO_DEPART"}</span>
       </div>
       <div>
         线路 {fromStationName} → {toStationName} · 速度{" "}

@@ -198,4 +198,27 @@ public class Protocol704FrameParserTest {
         assertEquals("emergency_brake", cmd.getCommand());
         assertEquals(true, result.getFields().get("eb_button_locked"));
     }
+
+    @Test
+    public void localV1ModeDepartureAndDirectionCommandsAreMapped() {
+        byte[] manual = buildValidPlcFrame(0, 0, 0, false);
+        manual[34] = 0x08;
+        assertEquals("SET_MANUAL", Protocol704FrameParser.parseFrame(manual).getMappedCommand().getCommand());
+
+        byte[] ato = buildValidPlcFrame(0, 0, 0, false);
+        ato[34] = (byte) 0x80;
+        assertEquals("RESUME_ATO", Protocol704FrameParser.parseFrame(ato).getMappedCommand().getCommand());
+
+        byte[] depart = buildValidPlcFrame(0, 0, 0, false);
+        depart[34] = 0x10;
+        assertEquals("DEPART_CONFIRM", Protocol704FrameParser.parseFrame(depart).getMappedCommand().getCommand());
+
+        byte[] reverse = buildValidPlcFrame(0, 0, 0, false);
+        ByteBuffer.wrap(reverse).order(ByteOrder.LITTLE_ENDIAN).putShort(36, (short) 2);
+        assertEquals("REVERSE", Protocol704FrameParser.parseFrame(reverse).getMappedCommand().getDirection());
+
+        byte[] unknown = buildValidPlcFrame(0, 0, 0, false);
+        ByteBuffer.wrap(unknown).order(ByteOrder.LITTLE_ENDIAN).putShort(36, (short) 9);
+        assertEquals("UNSUPPORTED", Protocol704FrameParser.parseFrame(unknown).getMappedCommand().getCommand());
+    }
 }
