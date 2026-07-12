@@ -46,4 +46,9 @@ public class MovementAuthorityRegistry {
         source = "UNINITIALIZED";
         generation = 0;
     }
+
+    public synchronized void remove(String trainId) {
+        latest.remove(trainId);
+        generation++;
+    }
 }

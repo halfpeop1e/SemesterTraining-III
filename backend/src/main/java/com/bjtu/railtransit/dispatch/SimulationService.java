@@ -272,6 +272,95 @@ public class SimulationService {
         return trains.get(trainId);
     }
 
+    public synchronized TrainState addTrain(String trainId, int headLinkId, String direction,
+                                            int stationId, String routePattern) {
+        if (trainId == null || trainId.isBlank()) throw new IllegalArgumentException("trainId 不能为空");
+        if (trains.containsKey(trainId)) throw new IllegalStateException("列车已存在: " + trainId);
+        if (lineProfile == null) lineProfile = lineDataService.getLineProfile();
+        List<LineProfile.Station> stations = lineProfile.getStations();
+        int stationIndex = Math.max(0, Math.min(stations.size() - 1, stationId - 1));
+        boolean up = !"DOWN".equalsIgnoreCase(direction);
+        int nextIndex = up ? Math.min(stations.size() - 1, stationIndex + 1)
+                : Math.max(0, stationIndex - 1);
+
+        TrainState train = new TrainState();
+        train.setTrainId(trainId);
+        train.setTrainName(trainId);
+        train.setTrainNumber(trainId);
+        train.setDirection(up ? "UP" : "DOWN");
+        train.setRoutePattern(normalizeRoutePattern(routePattern));
+        train.setHeadLinkId(headLinkId);
+        train.setOperationLevel(OperationLevel.NORMAL);
+        train.setPositionMeters(stations.get(stationIndex).getKm() * 1000.0);
+        train.setSpeed(0);
+        train.setAcceleration(0);
+        train.setStatus("READY_TO_DEPART");
+        train.setCurrentStationIndex(stationIndex);
+        train.setNextStationIndex(nextIndex);
+        train.setNextStationKm(stations.get(nextIndex).getKm());
+        train.setMaxSpeedLimit(CRUISE_SPEED);
+        train.setTargetSpeed(CRUISE_SPEED);
+        train.setPlannedDwellSeconds(30);
+        train.setMinDwellSeconds(30);
+        train.setTripId(trainId + "-" + (up ? "U" : "D") + "1");
+        train.setStateSource("DISPATCH_ESTIMATED");
+
+        List<TrainCar> cars = multiParticleSimulationService.initConsistWithLoad(0.5);
+        multiParticleSimulationService.initCarPositions(cars, train.getPositionMeters(), 0);
+        train.setCars(cars);
+        consistMap.put(trainId, cars);
+        TractionSystemState ts = TractionSystemState.createDefault(trainId, 6);
+        BrakingSystemState bs = BrakingSystemState.createDefault(trainId, 6);
+        train.setTractionState(ts);
+        train.setBrakeState(bs);
+        tractionStates.put(trainId, ts);
+        brakeStates.put(trainId, bs);
+        trains.put(trainId, train);
+        dispatchEngine.generateSingleTrainTimetable(lineProfile, trainId, stationIndex, up, simulationTimeSeconds);
+        TrainState result = copyTrainState(train);
+        broadcastCurrentSnapshot();
+        return result;
+    }
+
+    public synchronized TrainState removeTrain(String trainId) {
+        TrainState removed = trains.remove(trainId);
+        if (removed == null) throw new NoSuchElementException("列车不存在: " + trainId);
+        consistMap.remove(trainId);
+        tractionStates.remove(trainId);
+        brakeStates.remove(trainId);
+        activeCommands.remove(trainId);
+        fusedOnboardReportRevisions.remove(trainId);
+        movementAuthorityRegistry.remove(trainId);
+        broadcastCurrentSnapshot();
+        return removed;
+    }
+
+    public synchronized int clearTrains() {
+        int count = trains.size();
+        for (String trainId : new ArrayList<>(trains.keySet())) removeTrain(trainId);
+        broadcastCurrentSnapshot();
+        return count;
+    }
+
+    public synchronized TrainState setTrainRoutePattern(String trainId, String routePattern) {
+        TrainState train = trains.get(trainId);
+        if (train == null) throw new NoSuchElementException("列车不存在: " + trainId);
+        train.setRoutePattern(normalizeRoutePattern(routePattern));
+        TrainState result = copyTrainState(train);
+        broadcastCurrentSnapshot();
+        return result;
+    }
+
+    private void broadcastCurrentSnapshot() {
+        if (webSocketHandler != null) webSocketHandler.broadcast(getSnapshot());
+    }
+
+    private String normalizeRoutePattern(String routePattern) {
+        if (RoutePattern.SHORT_N.equals(routePattern) || RoutePattern.SHORT_S.equals(routePattern)
+                || RoutePattern.EXPRESS.equals(routePattern)) return routePattern;
+        return RoutePattern.FULL;
+    }
+
     /**
      * 融合车载上报：对已有列车更新位置/速度；对新上报 trainId 动态创建列车。
      * 列车由独立车载仿真器（HMI）通过上报首次出现时创建，信号/能源/安全等算法照常运行。
@@ -2372,6 +2461,10 @@ public class SimulationService {
         c.setEmergencyBraking(src.isEmergencyBraking());
         c.setMovementAuthority(src.getMovementAuthority());
         c.setTripId(src.getTripId());
+        c.setLineId(src.getLineId());
+        c.setRouteId(src.getRouteId());
+        c.setHeadLinkId(src.getHeadLinkId());
+        c.setCurrentSegmentId(src.getCurrentSegmentId());
         c.setTrainLengthMeters(src.getTrainLengthMeters());
         c.setLoadFactor(src.getLoadFactor());
         c.setActiveCommand(src.getActiveCommand());
@@ -2401,6 +2494,8 @@ public class SimulationService {
     public boolean isRunning() {
         return simulationRunning;
     }
+
+    public boolean hasTrains() { return !trains.isEmpty(); }
 
     /** 重置仿真 (停止并清空所有状态) */
     // ================================================================

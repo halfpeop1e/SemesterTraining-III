@@ -187,6 +187,8 @@ export interface AxleCounterSection {
   id: string;
   occupied?: boolean;
   segId?: number;
+  name?: string;
+  segIds?: number[];
   [key: string]: unknown;
 }
 
@@ -203,6 +205,7 @@ export interface Route {
   axleSectionIds?: number[];
   overlapIds?: number[];
   pathSegIds?: number[];
+  ciZoneId?: number;
   built?: boolean;
   cancelled?: boolean;
   [key: string]: unknown;
@@ -215,7 +218,9 @@ export interface OverlapSection {
 
 export interface PhysicalSection {
   id: string;
+  name?: string;
   segIds?: number[];
+  axleSectionIds?: number[];
   [key: string]: unknown;
 }
 

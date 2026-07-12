@@ -59,6 +59,7 @@ export default function Protocol704Panel({
     [status?.portStatuses],
   );
   const connected = status?.connected ?? false;
+  const simulationReady = status?.simulationReady ?? false;
   const lastMappedCommand = status?.lastMappedCommand;
   const realtimeState = status?.realtimeVehicleState;
 
@@ -131,6 +132,9 @@ export default function Protocol704Panel({
             {status?.host ?? '192.168.100.123'}:
             {portStatuses.map((port) => port.port).join('/') || '8001/8002/8003'}
           </span>
+          <span className={`vehicle-704-readiness ${simulationReady ? 'vehicle-704-readiness--ready' : 'vehicle-704-readiness--pending'}`}>
+            {simulationReady ? '仿真已准备' : '仿真未准备'}
+          </span>
           {!expanded && lastMappedCommand && (
             <span className="vehicle-704-last-command">
               最近命令 {lastMappedCommand.command}
@@ -177,6 +181,14 @@ export default function Protocol704Panel({
 
       {expanded && (
         <div className="vehicle-704-panel__body">
+          <div className="vehicle-704-section">
+            <div className="vehicle-704-section__title">联调前置条件</div>
+            <div className="vehicle-704-preflight">
+              <strong>{simulationReady ? '当前列车可接收 PLC 控制' : '当前列车尚未准备好'}</strong>
+              <span>{status?.simulationReadiness ?? '正在检查仿真状态'}</span>
+            </div>
+          </div>
+
           <div className="vehicle-704-section">
             <div className="vehicle-704-section__title">端口状态</div>
             <div className="vehicle-704-port-grid">

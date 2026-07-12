@@ -101,4 +101,7 @@ export interface Protocol704Status {
   lastValidFrameTime?: number;
   lastCommandLifecycle?: Protocol704CommandLifecycle;
   activeBinding?: string;
+  simulationReady?: boolean;
+  simulationReadiness?: string;
+  simulationContextUpdatedAt?: number;
 }

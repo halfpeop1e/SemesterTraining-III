@@ -2,15 +2,12 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Button,
   Spin,
-  Statistic,
-  Row,
-  Col,
   message,
   Alert,
-  Card,
   Select,
+  Segmented,
 } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, AimOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   getLine,
   computeMa,
@@ -45,11 +42,14 @@ import type {
 } from '../../types/signal';
 import type { TrainState as DispatchTrainState } from '../../types/dispatch';
 import type { SelectedEntity } from './components/TrackDiagram';
-import RealStationDiagram from './components/RealStationDiagram';
+import InterlockingTopologyDiagram from './components/InterlockingTopologyDiagram';
+import StationTopologyDetail from './components/StationTopologyDetail';
 import OperationsDock from './components/OperationsDock';
 import MaPanel from './components/MaPanel';
 import EventLog from './components/EventLog';
-import { pickDefaultStationId, sortedStations, stationIdForRoute, stationIdForSignal, nearestStationId } from './data/mileage';
+import { pickDefaultStationId, sortedStations, nearestStationId } from './data/mileage';
+import { topologyStationIdForRoute, topologyStationIdForSignal } from './data/realTopology';
+import { STATION_NAMES } from './data/teacherDiagramLayout';
 
 function mapDispatchTrains(src: DispatchTrainState[], simTime: number): TrainState[] {
   return src
@@ -74,7 +74,9 @@ function LineSignal() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [stationId, setStationId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'overview' | 'station'>('overview');
   const [leftMenu, setLeftMenu] = useState<'route' | 'switch' | 'signal' | 'tsr' | 'status'>('route');
+  const [opsOpen, setOpsOpen] = useState(false);
   const [builtRouteIds, setBuiltRouteIds] = useState<Set<number>>(new Set());
   const [routeBindings, setRouteBindings] = useState<Record<string, number>>({});
   const [tsrs, setTsrs] = useState<TemporarySpeedRestriction[]>([]);
@@ -161,7 +163,7 @@ function LineSignal() {
     })();
   }, [loadLine, loadBuilt, loadBindings, loadTsrs, loadEvents]);
 
-  const { snapshot, isRunning } = useSimulation();
+  const { snapshot, isRunning, step: refreshSimulation } = useSimulation();
   const [simTime, setSimTime] = useState(0);
   const [simNotStarted, setSimNotStarted] = useState(false);
   const maInflight = useRef(false);
@@ -287,7 +289,7 @@ function LineSignal() {
         setLineProfile((lp) => {
           if (!lp) return lp;
           const next = patchRouteBuilt(lp, routeId, true);
-          const jump = stationIdForRoute(next, routeId);
+          const jump = topologyStationIdForRoute(next, routeId);
           if (jump) setStationId(jump);
           return next;
         });
@@ -449,7 +451,7 @@ function LineSignal() {
         setLineProfile((lp) => {
           if (!lp) return lp;
           const next = patchSignalAspect(lp, signalId, aspect);
-          const jump = stationIdForSignal(next, signalId);
+          const jump = topologyStationIdForSignal(next, signalId);
           if (jump) setStationId(jump);
           return next;
         });
@@ -476,20 +478,9 @@ function LineSignal() {
     if (!lineProfile) return [];
     return sortedStations(lineProfile).map((s) => ({
       value: String(s.id),
-      label: `${s.name} (${(s.positionM / 1000).toFixed(2)} km)`,
+      label: `站${s.id} · ${STATION_NAMES[String(s.id)] || s.name} (${(s.positionM / 1000).toFixed(3)} km)`,
     }));
   }, [lineProfile]);
-
-  const builtRouteSignalIds = useMemo(() => {
-    const ids = new Set<number>();
-    if (!lineProfile) return ids;
-    for (const r of lineProfile.routes || []) {
-      if (!builtRouteIds.has(Number(r.id))) continue;
-      ids.add(r.startSignalId);
-      if (r.endSignalId) ids.add(r.endSignalId);
-    }
-    return ids;
-  }, [lineProfile, builtRouteIds]);
 
   const hasDegradedMa = useMemo(
     () =>
@@ -525,36 +516,99 @@ function LineSignal() {
   const activeStationId = stationId || pickDefaultStationId(lineProfile);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/40 px-4 py-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <h3 className="m-0 text-base text-slate-100">线路信号 · 联锁上位机</h3>
-          <span className="font-mono text-[11px] text-slate-500">
+    <div className="signal-page flex h-full min-h-0 flex-col">
+      {/* 顶部命令条 */}
+      <div className="signal-command-bar flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
+          <h3 className="m-0 text-base font-semibold" style={{ color: '#F5E6B8' }}>
+            线路信号 · ATS/联锁工作站
+          </h3>
+          <span className="font-mono text-[11px] text-slate-500 truncate">
             {lineProfile.lineId || 'line'} · {simLive ? '运行' : '停止'} · t=
             {Math.floor(simTime)}s · 车 {trains.length} · 已建 {builtRouteIds.size} · MA降级{' '}
             {maSummary.degraded}
           </span>
           <Select
             size="small"
-            style={{ width: 160 }}
+            style={{ width: 214 }}
+            aria-label="选择车站"
             value={activeStationId || undefined}
             options={stationOptions}
-            onChange={(v) => setStationId(v)}
+            onChange={(v) => {
+              setStationId(v);
+              setViewMode('station');
+            }}
             placeholder="选择车站"
           />
+          <Segmented
+            size="small"
+            value={viewMode}
+            options={[
+              { value: 'overview', label: '全线总览', icon: <ApartmentOutlined /> },
+              { value: 'station', label: '站场详图', icon: <AimOutlined /> },
+            ]}
+            onChange={(value) => setViewMode(value as 'overview' | 'station')}
+          />
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <span className="signal-mini-stats hidden md:flex gap-3 text-[11px] text-slate-400">
+            <span>区段 <b className="text-slate-200">{lineProfile.segments.length}</b></span>
+            <span>信号 <b className="text-slate-200">{lineProfile.signals.length}</b></span>
+            <span>
+              进路{' '}
+              <b className="text-slate-200">
+                {builtRouteIds.size}/{(lineProfile.routes || []).length}
+              </b>
+            </span>
+            <span>
+              MA <b className="text-slate-200">{maSummary.count}</b>
+            </span>
+          </span>
           <Button
-            type="primary"
+            size="small"
+            className="app-btn-gold-ghost"
+            onClick={() => setOpsOpen((v) => !v)}
+          >
+            {opsOpen ? '收起控制台' : '打开控制台'}
+          </Button>
+          <Button
             size="small"
             icon={<ReloadOutlined />}
             loading={loading || actionLoading}
             onClick={() => void refreshAll()}
+            className="app-btn-gold"
           >
             刷新 line/MA
           </Button>
         </div>
       </div>
+
+      {/* 顶部 Tab 控制台（可折叠，不占左侧） */}
+      {opsOpen && (
+        <div className="signal-ops-top shrink-0 border-b border-amber-500/20 px-3 py-2">
+          <OperationsDock
+            lineProfile={lineProfile}
+            builtRouteIds={builtRouteIds}
+            routeBindings={routeBindings}
+            trains={trains}
+            tsrs={tsrs}
+            activeMenu={leftMenu}
+            onMenuChange={setLeftMenu}
+            loading={actionLoading || loading}
+            lastMessage={lastMessage}
+            onBuildRoute={(id, tid) => void handleBuildRoute(id, tid)}
+            onCancelRoute={(id) => void handleCancelRoute(id)}
+            onAssignRoute={(tid, rid) => void handleAssignRoute(tid, rid)}
+            onUnassignRoute={(tid) => void handleUnassignRoute(tid)}
+            onOperateSwitch={(id, pos) => void handleOperateSwitch(id, pos)}
+            onSetSignal={(id, asp) => void handleSetSignal(id, asp)}
+            onSetTsr={(s, e, sp, a) => void handleSetTsr(s, e, sp, a)}
+            onCancelTsr={(id) => void handleCancelTsr(id)}
+            onRefresh={() => void refreshAll()}
+            layout="top"
+          />
+        </div>
+      )}
 
       {hasDegradedMa && (
         <Alert
@@ -584,106 +638,43 @@ function LineSignal() {
         />
       )}
 
-      <div className="px-4 py-2">
-        <Row gutter={[12, 12]}>
-          <Col xs={12} sm={6}>
-            <Card size="small" variant="borderless">
-              <Statistic title="MA 列车" value={maSummary.count} suffix="列" />
-            </Card>
-          </Col>
-          <Col xs={12} sm={6}>
-            <Card size="small" variant="borderless">
-              <Statistic
-                title="真进路/已建"
-                value={(lineProfile.routes || []).length}
-                suffix={`/ ${builtRouteIds.size}`}
-              />
-            </Card>
-          </Col>
-        </Row>
-      </div>
-
-      <div className="flex min-h-0 flex-1 gap-3 px-4 pb-4">
-          <div className="w-[380px] shrink-0 min-h-0">
-            <OperationsDock
+      {/* 全宽站场图 */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-3 pt-2">
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-amber-500/15 bg-black">
+          {viewMode === 'overview' ? (
+            <InterlockingTopologyDiagram
               lineProfile={lineProfile}
-              builtRouteIds={builtRouteIds}
-              routeBindings={routeBindings}
               trains={trains}
-              tsrs={tsrs}
-              activeMenu={leftMenu}
-              onMenuChange={setLeftMenu}
-              loading={actionLoading || loading}
-              lastMessage={lastMessage}
+              maMap={maMap}
+              builtRouteIds={builtRouteIds}
+              activeStationId={activeStationId}
+              selectedEntity={selected}
+              onSelect={handleSelect}
+              onOpenStation={(id) => {
+                setStationId(id);
+                setViewMode('station');
+              }}
+            />
+          ) : activeStationId ? (
+            <StationTopologyDetail
+              lineProfile={lineProfile}
+              stationId={activeStationId}
+              trains={trains}
+              maMap={maMap}
+              builtRouteIds={builtRouteIds}
+              selectedEntity={selected}
+              onSelect={handleSelect}
+              onStationChange={setStationId}
               onBuildRoute={(id, tid) => void handleBuildRoute(id, tid)}
               onCancelRoute={(id) => void handleCancelRoute(id)}
-              onAssignRoute={(tid, rid) => void handleAssignRoute(tid, rid)}
-              onUnassignRoute={(tid) => void handleUnassignRoute(tid)}
-              onOperateSwitch={(id, pos) => void handleOperateSwitch(id, pos)}
-              onSetSignal={(id, asp) => void handleSetSignal(id, asp)}
-              onSetTsr={(s, e, sp, a) => void handleSetTsr(s, e, sp, a)}
-              onCancelTsr={(id) => void handleCancelTsr(id)}
-              onRefresh={() => void refreshAll()}
+              onTrainChanged={() => void refreshSimulation()}
             />
-          </div>
-          <div className="flex min-w-0 min-h-0 flex-1 flex-col gap-2">
-            <div className="min-h-0 flex-1">
-              {activeStationId ? (
-                <RealStationDiagram
-                  lineProfile={lineProfile}
-                  stationId={activeStationId}
-                  trains={trains}
-                  maMap={maMap}
-                  selectedEntity={selected}
-                  onSelect={handleSelect}
-                  builtRouteSignalIds={builtRouteSignalIds}
-                />
-              ) : null}
-            </div>
-            <div className="h-24 shrink-0 overflow-hidden rounded-xl border border-slate-700/50">
-              <EventLog events={events} loading={loading} />
-            </div>
-          </div>
-          <div className="hidden w-56 shrink-0 overflow-y-auto xl:block">
-            <Card size="small" title="MA 授权" className="h-full">
-              {Object.keys(maMap).length === 0 ? (
-                <div className="text-xs text-slate-500">暂无 MA（启动仿真后刷新）</div>
-              ) : (
-                <div className="space-y-2">
-                  {Object.values(maMap).map((ma) => {
-                    const bad =
-                      ma.event === 'DEGRADED' ||
-                      ma.event === 'MA_EXPIRED' ||
-                      ma.event === 'POSITION_LOSS';
-                    return (
-                      <div
-                        key={ma.trainId}
-                        className={`cursor-pointer rounded border px-2 py-1.5 text-xs ${
-                          bad
-                            ? 'border-red-500/50 bg-red-500/10'
-                            : 'border-slate-700 bg-slate-800/40'
-                        }`}
-                        onClick={() => handleSelect({ type: 'train', id: ma.trainId })}
-                      >
-                        <div className="font-medium text-slate-100">{ma.trainId}</div>
-                        <div className="text-slate-400">
-                          EoA{' '}
-                          {Number.isFinite(ma.endOfAuthorityM)
-                            ? ma.endOfAuthorityM.toFixed(0)
-                            : '—'}{' '}
-                          m
-                        </div>
-                        <div className="text-slate-400">
-                          {ma.maxSpeedKmh} km/h · {ma.event}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
-          </div>
+          ) : null}
         </div>
+        <div className="h-12 shrink-0 overflow-hidden rounded-xl border border-slate-700/50">
+          <EventLog events={events} loading={loading} />
+        </div>
+      </div>
 
       <MaPanel
         entity={selected}

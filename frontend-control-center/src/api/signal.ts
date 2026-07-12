@@ -242,14 +242,10 @@ export function patchRouteBuilt(
     route.cancelled = !built;
     if (built) {
       const start = next.signals?.find((s) => s.id === route.startSignalId);
-      const end = next.signals?.find((s) => s.id === route.endSignalId);
       if (start) start.aspect = 'GREEN';
-      if (end) end.aspect = 'GREEN';
     } else {
       const start = next.signals?.find((s) => s.id === route.startSignalId);
-      const end = next.signals?.find((s) => s.id === route.endSignalId);
       if (start) start.aspect = 'RED';
-      if (end) end.aspect = 'RED';
     }
   }
   return next;
@@ -335,9 +331,7 @@ export async function buildRoute(req: RouteBuildRequest, trainId?: string): Prom
         route.built = true;
         route.cancelled = false;
         const start = fallbackLineProfile.signals?.find((s) => s.id === route.startSignalId);
-        const end = fallbackLineProfile.signals?.find((s) => s.id === route.endSignalId);
         if (start) start.aspect = 'GREEN';
-        if (end) end.aspect = 'GREEN';
       }
     }
     const name =
@@ -413,9 +407,7 @@ export async function cancelRoute(routeId: string | number): Promise<ControlResu
         route.built = false;
         route.cancelled = true;
         const start = fallbackLineProfile.signals?.find((s) => s.id === route.startSignalId);
-        const end = fallbackLineProfile.signals?.find((s) => s.id === route.endSignalId);
         if (start) start.aspect = 'RED';
-        if (end) end.aspect = 'RED';
       }
     }
     return { success: true, message: `进路 ${routeId} 已取消` };
@@ -698,9 +690,7 @@ function mockBuildRoute(req: RouteBuildRequest): ControlResult {
   route.built = true;
   route.cancelled = false;
   const startSig = fallbackLineProfile.signals.find((s) => s.id === route.startSignalId);
-  const endSig = fallbackLineProfile.signals.find((s) => s.id === route.endSignalId);
   if (startSig) startSig.aspect = 'GREEN';
-  if (endSig) endSig.aspect = 'GREEN';
   const label = route.name || String(req.routeId);
   addEvent('INFO', 'SIGNAL', `进路 ${label} 办理成功`, String(req.routeId));
   return { success: true, message: `进路 ${label} 已办理` };
@@ -713,9 +703,7 @@ function mockCancelRoute(routeId: string): ControlResult {
   route.built = false;
   route.cancelled = true;
   const startSig = fallbackLineProfile.signals.find((s) => s.id === route.startSignalId);
-  const endSig = fallbackLineProfile.signals.find((s) => s.id === route.endSignalId);
   if (startSig) startSig.aspect = 'RED';
-  if (endSig) endSig.aspect = 'RED';
   const label = route.name || routeId;
   addEvent('INFO', 'SIGNAL', `进路 ${label} 已取消`, routeId);
   return { success: true, message: `进路 ${label} 已取消` };

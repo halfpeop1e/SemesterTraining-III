@@ -67,7 +67,7 @@ public class DispatchController {
 
     @GetMapping("/simulations/snapshot")
     public ApiResponse<SimulationSnapshot> getSnapshot() {
-        if (!simulationService.isRunning()) {
+        if (!simulationService.isRunning() && !simulationService.hasTrains()) {
             return ApiResponse.ok("simulation not running", null);
         }
         SimulationSnapshot snapshot = simulationService.getSnapshot();

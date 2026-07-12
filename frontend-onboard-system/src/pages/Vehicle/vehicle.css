@@ -561,6 +561,17 @@
 .vehicle-704-badge--connecting { background: var(--color-warning); }
 .vehicle-704-badge--disconnected { background: var(--color-text-secondary); }
 
+.vehicle-704-readiness {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+.vehicle-704-readiness--ready { color: var(--color-success); border-color: var(--color-success); }
+.vehicle-704-readiness--pending { color: var(--color-warning); border-color: var(--color-warning); }
+
 .vehicle-704-btn,
 .vehicle-704-test-btn {
   min-height: 28px;
@@ -623,6 +634,16 @@
   color: var(--color-warning);
   font-weight: 500;
 }
+
+.vehicle-704-preflight {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+}
+
+.vehicle-704-preflight strong { color: var(--color-text); }
 
 .vehicle-704-test-buttons,
 .vehicle-704-port-grid {
@@ -720,7 +741,7 @@
    gap: var(--space-sm);
    min-width: 0;
    min-height: 0;
-+  overflow: hidden;
+  overflow: hidden;
  }
 
 .vehicle-right-tabs {

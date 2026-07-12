@@ -18,3 +18,30 @@ vehicle:
     connect-timeout-ms: 3000
     read-timeout-ms: 1000
     auto-start: false
+    # After real PLC control has started, stale input must not leave traction latched.
+    fail-safe-on-stale: true
+    stale-input-ms: 1500
+
+# Hardware-in-the-loop output gateway. Keep disabled outside the laboratory.
+hil:
+  enabled: false
+  train-id: T1
+  connect-timeout-ms: 1000
+  screen-period-ms: 200
+  signal-screen:
+    enabled: false
+    # Laboratory capture: port defines the role; supplied document swaps .121/.122.
+    host: 192.168.100.122
+    port: 9999
+  network-screen:
+    enabled: false
+    host: 192.168.100.121
+    port: 8888
+  plc-output:
+    enabled: false
+    period-ms: 500
+    # Teacher ICD says 26B/dataLen=2. Its field table conflicts by placing a
+    # speed WORD at offset 26, so no PLC-output variant is hardware-accepted.
+    frame-format: documented-26
+    # capture-variant-28 is only for controlled comparison with a third-party
+    # capture. Do not enable it without teacher approval and live confirmation.

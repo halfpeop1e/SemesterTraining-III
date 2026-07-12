@@ -16,8 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.ArrayList;
 
@@ -61,8 +63,21 @@ class Protocol704ServiceBridgeTest {
     @Test
     void noBoundSimulationIsVisibleAsRejectedRatherThanExecuted() {
         Protocol704Status status = service.injectTestFrame("OB1", "traction");
+        assertTrue(!status.isSimulationReady());
+        assertEquals("NO_ACTIVE_SIMULATION", status.getSimulationReadiness());
         assertEquals("REJECTED", status.getLastCommandLifecycle().getStatus());
         assertEquals("NO_ACTIVE_SIMULATION", status.getLastCommandLifecycle().getRejectionReason());
+    }
+
+    @Test
+    void statusShowsWhenTheSameTrainIdHasBeenPreparedForPlcControl() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("READY1", 1, 2, result, DrivingMode.ATO, false);
+
+        Protocol704Status status = service.getStatus("READY1");
+
+        assertTrue(status.isSimulationReady());
+        assertEquals("READY", status.getSimulationReadiness());
     }
 
     @Test
@@ -105,6 +120,61 @@ class Protocol704ServiceBridgeTest {
         } finally {
             wired.shutdown();
         }
+    }
+
+    @Test
+    void outboundFrameUsesTheSamePlcSocketOwnedByTheReader() throws Exception {
+        int port;
+        try (ServerSocket probe = new ServerSocket(0)) { port = probe.getLocalPort(); }
+        Protocol704Service wired = wiredService(port, "OUT1");
+        ByteArrayOutputStream received = new ByteArrayOutputStream();
+        try (ServerSocket server = new ServerSocket(port)) {
+            Thread device = new Thread(() -> {
+                try (Socket socket = server.accept()) {
+                    socket.getOutputStream().write(frame());
+                    socket.getOutputStream().flush();
+                    byte[] buf = new byte[26];
+                    int offset = 0;
+                    while (offset < buf.length) {
+                        int count = socket.getInputStream().read(buf, offset, buf.length - offset);
+                        if (count < 0) break;
+                        offset += count;
+                    }
+                    received.write(buf, 0, offset);
+                } catch (Exception ignored) { }
+            });
+            device.start();
+            wired.start("OUT1");
+            long deadline = System.currentTimeMillis() + 3000;
+            while (!wired.getStatus("OUT1").isConnected() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20);
+            }
+            byte[] outbound = new byte[26];
+            ByteBuffer.wrap(outbound).order(ByteOrder.LITTLE_ENDIAN)
+                    .putInt(0, 0xAA55AA55).putShort(4, (short) 26).putShort(6, (short) 2);
+            assertEquals(1, wired.writeOutbound("OUT1", outbound));
+            device.join(2000);
+            assertEquals(26, received.size());
+            assertEquals(26, wired.getStatus("OUT1").getPortStatuses().get(port).getBytesSent());
+        } finally {
+            wired.shutdown();
+        }
+    }
+
+    private Protocol704Service wiredService(int port, String trainId) {
+        DemoScenarioProvider p = new DemoScenarioProvider();
+        LineProfileJsonLoader l = new LineProfileJsonLoader();
+        VehicleSimulationService vs = new VehicleSimulationService(p, new MultiParticleSimulationService());
+        Protocol704VehicleControlBridge b = new Protocol704VehicleControlBridge(vs, p, l);
+        SimulationResult result = vs.run(p.buildScenario(l.buildLineProfile(1, 2)));
+        b.registerSimulation(trainId, 1, 2, result, DrivingMode.MANUAL);
+        Protocol704Service wired = new Protocol704Service(b);
+        ReflectionTestUtils.setField(wired, "defaultHost", "127.0.0.1");
+        ReflectionTestUtils.setField(wired, "portsConfig", String.valueOf(port));
+        ReflectionTestUtils.setField(wired, "ports", new ArrayList<>());
+        ReflectionTestUtils.setField(wired, "autoStart", false);
+        wired.init();
+        return wired;
     }
 
     private static byte[] frame() {

@@ -221,4 +221,34 @@ public class Protocol704FrameParserTest {
         ByteBuffer.wrap(unknown).order(ByteOrder.LITTLE_ENDIAN).putShort(36, (short) 9);
         assertEquals("UNSUPPORTED", Protocol704FrameParser.parseFrame(unknown).getMappedCommand().getCommand());
     }
+
+    @Test
+    public void parsesRealLaboratoryDriverDeskFrameCapturedByPeerSystem() {
+        // PLC -> upper-computer record from 2026-07-12. This is hardware-originated
+        // input, unlike the peer system's own PLC output records.
+        byte[] frame = hex("55 aa 55 aa 2e 00 16 00 ea 07 07 00 0c 00 10 00 "
+                + "18 00 00 00 01 00 f3 1b 20 01 00 00 00 00 00 00 00 00 "
+                + "80 02 01 00 01 00 14 00 00 00 00 00");
+
+        Parsed704Frame result = Protocol704FrameParser.parseFrame(frame);
+
+        assertEquals(true, result.getFields().get("header_valid"));
+        assertEquals(46, result.getFrameLength());
+        assertEquals(true, result.getFields().get("key_switch_on"));
+        assertEquals(true, result.getFields().get("ato_start_btn"));
+        assertEquals(1, result.getFields().get("direction_handle"));
+        assertEquals(1, result.getFields().get("master_handle"));
+        assertEquals(20, result.getFields().get("traction_level_percent_raw"));
+        // Local policy maps the captured ATO-start bit to an ATO resume request.
+        assertEquals("RESUME_ATO", result.getMappedCommand().getCommand());
+    }
+
+    private static byte[] hex(String value) {
+        String[] parts = value.trim().split("\\s+");
+        byte[] bytes = new byte[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            bytes[i] = (byte) Integer.parseInt(parts[i], 16);
+        }
+        return bytes;
+    }
 }

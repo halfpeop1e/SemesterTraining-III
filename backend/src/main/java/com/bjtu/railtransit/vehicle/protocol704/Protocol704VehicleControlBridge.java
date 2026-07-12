@@ -75,6 +75,45 @@ public class Protocol704VehicleControlBridge {
         return context != null && "PLC_704_LOCAL_V1".equals(context.controlSource);
     }
 
+    /** Thread-safe read model for laboratory output adapters; never exposes mutable context. */
+    public ControlStateSnapshot snapshot(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) return null;
+        synchronized (context) {
+            TrainState state = copy(context.currentState);
+            return new ControlStateSnapshot(context.trainId, context.fromStationId, context.toStationId,
+                    state, context.mode.name(), context.controlSource, context.lastCommand,
+                    Double.isFinite(context.lastLevel) ? context.lastLevel : 0,
+                    context.emergencyLatched, context.departureAuthorized, context.lastUpdatedAt);
+        }
+    }
+
+    public record ControlStateSnapshot(String trainId, int fromStationId, int toStationId,
+                                       TrainState state, String mode, String controlSource,
+                                       String lastCommand, double lastLevelPercent,
+                                       boolean emergencyLatched, boolean departureAuthorized,
+                                       long lastUpdatedAt) {}
+
+    /** Read-only preflight state for binding a physical PLC desk to a simulated train. */
+    public ControlReadiness readiness(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) {
+            return new ControlReadiness(trainId, false, "NO_ACTIVE_SIMULATION", null,
+                    null, null, 0);
+        }
+        synchronized (context) {
+            if (System.currentTimeMillis() - context.lastUpdatedAt > STALE_CONTEXT_MS) {
+                return new ControlReadiness(trainId, false, "STALE_ACTIVE_CONTEXT", context.mode.name(),
+                        context.departureState, context.controlSource, context.lastUpdatedAt);
+            }
+            return new ControlReadiness(trainId, true, "READY", context.mode.name(),
+                    context.departureState, context.controlSource, context.lastUpdatedAt);
+        }
+    }
+
+    public record ControlReadiness(String trainId, boolean ready, String reason, String mode,
+                                   String departureState, String controlSource, long lastUpdatedAt) {}
+
     public Protocol704CommandLifecycle execute(String trainId, MappedControlCommand mapped) {
         Protocol704CommandLifecycle lifecycle = lifecycle(trainId, mapped);
         lifecycle.setStatus("RECEIVED");

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LINE_MAP } from '../data/lineMap';
-import type { StationStop, StopResult, TrainState } from '../../../types/vehicle';
+import type { SidingStatus, StationStop, StopResult, TrainState } from '../../../types/vehicle';
 import './LineRunView.css';
 
 export interface LineRunViewProps {
@@ -13,6 +13,8 @@ export interface LineRunViewProps {
   stopResult: StopResult | null;
   positionOffset?: number;
   stationStops?: StationStop[];
+  /** Shared dispatch-side siding state; reserved for the line diagram overlay. */
+  sidingStatuses?: SidingStatus[];
 }
 
 interface ViewWindow {

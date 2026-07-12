@@ -10,6 +10,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.*;
@@ -36,11 +37,18 @@ public class Protocol704Service {
     @Value("${vehicle.protocol704.auto-start:false}")
     private boolean autoStart;
 
+    @Value("${vehicle.protocol704.fail-safe-on-stale:true}")
+    private boolean failSafeOnStale = true;
+
+    @Value("${vehicle.protocol704.stale-input-ms:1500}")
+    private long staleInputMs = 1500;
+
     private final List<Integer> ports = new ArrayList<>();
     private final Map<String, Map<Integer, PortClient>> portClients = new ConcurrentHashMap<>();
     private final Map<String, AtomicBoolean> runningFlags = new ConcurrentHashMap<>();
     private final Map<String, Protocol704Status> statusMap = new ConcurrentHashMap<>();
     private final Map<String, RealtimeVehicleState> realtimeStates = new ConcurrentHashMap<>();
+    private final Map<String, AtomicBoolean> staleFailSafeFlags = new ConcurrentHashMap<>();
     private final Protocol704VehicleControlBridge vehicleControlBridge;
 
     private ExecutorService executor;
@@ -65,6 +73,12 @@ public class Protocol704Service {
             t.setDaemon(true);
             return t;
         });
+        scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "704-input-watchdog");
+            t.setDaemon(true);
+            return t;
+        });
+        scheduler.scheduleAtFixedRate(this::checkStaleInputs, 250, 250, TimeUnit.MILLISECONDS);
         if (autoStart) {
             start("T1");
         }
@@ -93,6 +107,7 @@ public class Protocol704Service {
             stop(trainId);
         }
         if (executor != null) executor.shutdownNow();
+        if (scheduler != null) scheduler.shutdownNow();
     }
 
     public void start(String trainId) {
@@ -100,6 +115,7 @@ public class Protocol704Service {
             AtomicBoolean running = runningFlags.computeIfAbsent(trainId, k -> new AtomicBoolean(false));
             if (running.get()) return;
             running.set(true);
+            staleFailSafeFlags.computeIfAbsent(trainId, k -> new AtomicBoolean(false)).set(false);
 
             Protocol704Status status = statusMap.computeIfAbsent(trainId, k -> new Protocol704Status());
             status.setTrainId(trainId);
@@ -109,7 +125,7 @@ public class Protocol704Service {
             status.setStartTime(System.currentTimeMillis());
             status.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             status.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
-            status.setActiveBinding("protocol704-local-v1 explicit trainId binding");
+            refreshSimulationReadiness(trainId, status);
 
             Map<Integer, PortConnectionStatus> portStatusMap = new ConcurrentHashMap<>();
             for (int port : ports) {
@@ -152,10 +168,23 @@ public class Protocol704Service {
         stop(trainId);
         statusMap.remove(trainId);
         realtimeStates.remove(trainId);
+        staleFailSafeFlags.remove(trainId);
+    }
+
+    /** Write through the already-owned PLC sockets; never opens a second client per port. */
+    public int writeOutbound(String trainId, byte[] frame) {
+        if (frame == null || frame.length == 0) return 0;
+        Map<Integer, PortClient> clients = portClients.get(trainId);
+        if (clients == null) return 0;
+        int sent = 0;
+        for (PortClient client : clients.values()) {
+            if (client.write(frame)) sent++;
+        }
+        return sent;
     }
 
     public Protocol704Status getStatus(String trainId) {
-        return statusMap.computeIfAbsent(trainId, k -> {
+        Protocol704Status status = statusMap.computeIfAbsent(trainId, k -> {
             Protocol704Status s = new Protocol704Status();
             s.setTrainId(k);
             s.setHost(defaultHost);
@@ -171,9 +200,10 @@ public class Protocol704Service {
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             s.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
-            s.setActiveBinding("protocol704-local-v1 explicit trainId binding");
             return s;
         });
+        refreshSimulationReadiness(trainId, status);
+        return status;
     }
 
     public Protocol704Status injectTestFrame(String trainId, String type) {
@@ -194,9 +224,9 @@ public class Protocol704Service {
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             s.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
-            s.setActiveBinding("protocol704-local-v1 explicit trainId binding");
             return s;
         });
+        refreshSimulationReadiness(trainId, status);
 
         // Local parser/bridge test only: this does not open or write a TCP socket.
         byte[] frame = buildTestFrame(type);
@@ -250,6 +280,27 @@ public class Protocol704Service {
         bb.putShort(36, (short) 1);
 
         switch (type) {
+            case "set_manual":
+                // byte34 bit3 = mode_downgrade_confirm → SET_MANUAL
+                frame[34] = (byte) 0x08;
+                bb.putShort(38, (short) 0x0000);
+                bb.putShort(40, (short) 0);
+                bb.putShort(42, (short) 0);
+                break;
+            case "depart_confirm":
+                // byte34 bit4 = confirm_btn → DEPART_CONFIRM
+                frame[34] = (byte) 0x10;
+                bb.putShort(38, (short) 0x0000);
+                bb.putShort(40, (short) 0);
+                bb.putShort(42, (short) 0);
+                break;
+            case "resume_ato":
+                // byte34 bit2 = mode_upgrade_confirm → RESUME_ATO
+                frame[34] = (byte) 0x04;
+                bb.putShort(38, (short) 0x0000);
+                bb.putShort(40, (short) 0);
+                bb.putShort(42, (short) 0);
+                break;
             case "traction":
                 bb.putShort(38, (short) 0x0001); // masterHandle=1
                 bb.putShort(40, (short) 50);     // tractionLevel=50
@@ -294,6 +345,7 @@ public class Protocol704Service {
         private final Protocol704Status status;
         private Socket socket;
         private InputStream in;
+        private OutputStream out;
         private volatile boolean closed = false;
         private long lastReceiveTime = 0;
         private long lastFrameLen = 0;
@@ -314,6 +366,25 @@ public class Protocol704Service {
             try { if (socket != null) socket.close(); } catch (IOException ignored) {}
         }
 
+        boolean write(byte[] frame) {
+            OutputStream target = out;
+            PortConnectionStatus ps = status.getPortStatuses().get(port);
+            if (target == null || ps == null || !ps.isConnected()) return false;
+            synchronized (this) {
+                try {
+                    target.write(frame);
+                    target.flush();
+                    long now = System.currentTimeMillis();
+                    ps.setBytesSent(ps.getBytesSent() + frame.length);
+                    ps.setLastSendTime(now);
+                    return true;
+                } catch (IOException e) {
+                    ps.setLastError("write: " + e.getMessage());
+                    return false;
+                }
+            }
+        }
+
         @Override
         public void run() {
             PortConnectionStatus ps = status.getPortStatuses().get(port);
@@ -331,6 +402,7 @@ public class Protocol704Service {
                     s.setTcpNoDelay(true);
                     this.socket = s;
                     this.in = s.getInputStream();
+                    this.out = s.getOutputStream();
                     ps.setConnecting(false);
                     ps.setConnected(true);
                     updateOverallConnected();
@@ -372,6 +444,8 @@ public class Protocol704Service {
                 } finally {
                     updateOverallConnected();
                     try { if (in != null) in.close(); } catch (Exception ignored) {}
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
+                    out = null;
                     try { if (socket != null) socket.close(); } catch (Exception ignored) {}
                     accumulator.reset();
                 }
@@ -421,10 +495,13 @@ public class Protocol704Service {
                 entry.setMappedCommand(mapped);
                 status.setReceivedValidFrame(true);
                 status.setLastValidFrameTime(System.currentTimeMillis());
+                status.setStaleInputFailSafeTriggered(false);
+                staleFailSafeFlags.computeIfAbsent(trainId, k -> new AtomicBoolean(false)).set(false);
                 if (vehicleControlBridge != null) {
                     Protocol704CommandLifecycle lifecycle = vehicleControlBridge.execute(trainId, mapped);
                     status.setLastCommandLifecycle(lifecycle);
                     updateRealtimeStateFromLifecycle(trainId, lifecycle);
+                    refreshSimulationReadiness(trainId, status);
                 }
             }
             addLog(status, entry);
@@ -440,6 +517,52 @@ public class Protocol704Service {
         state.setAccelerationMs2(lifecycle.getExecutedState().getAcceleration());
         state.setNote(lifecycle.getStatus());
         state.setLastUpdateTime(System.currentTimeMillis());
+    }
+
+    private void refreshSimulationReadiness(String trainId, Protocol704Status status) {
+        if (vehicleControlBridge == null) {
+            status.setSimulationReady(false);
+            status.setSimulationReadiness("CONTROL_BRIDGE_UNAVAILABLE");
+            status.setSimulationContextUpdatedAt(0);
+            status.setActiveBinding("PLC socket is not bound to a simulation control bridge");
+            return;
+        }
+        Protocol704VehicleControlBridge.ControlReadiness readiness = vehicleControlBridge.readiness(trainId);
+        status.setSimulationReady(readiness.ready());
+        status.setSimulationReadiness(readiness.reason());
+        status.setSimulationContextUpdatedAt(readiness.lastUpdatedAt());
+        status.setActiveBinding(readiness.ready()
+                ? "PLC desk -> simulated train " + trainId + " (ready)"
+                : "PLC desk -> train " + trainId + " not ready: " + readiness.reason());
+    }
+
+    private void checkStaleInputs() {
+        if (!failSafeOnStale || vehicleControlBridge == null || staleInputMs <= 0) return;
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, Protocol704Status> item : statusMap.entrySet()) {
+            String trainId = item.getKey();
+            Protocol704Status status = item.getValue();
+            AtomicBoolean running = runningFlags.get(trainId);
+            if (running == null || !running.get() || !status.isReceivedValidFrame()) continue;
+            if (now - status.getLastValidFrameTime() <= staleInputMs) continue;
+            AtomicBoolean fired = staleFailSafeFlags.computeIfAbsent(trainId, k -> new AtomicBoolean(false));
+            if (!fired.compareAndSet(false, true)) continue;
+
+            MappedControlCommand emergency = new MappedControlCommand();
+            emergency.setCommand("emergency_brake");
+            emergency.setLevelPercent(100);
+            emergency.setTargetDecel(2.5);
+            emergency.setDirection("ZERO");
+            emergency.setNote("FAIL_SAFE: PLC input stale for more than " + staleInputMs + "ms");
+            Protocol704CommandLifecycle lifecycle = vehicleControlBridge.execute(trainId, emergency);
+            status.setLastMappedCommand(emergency);
+            status.setLastCommandLifecycle(lifecycle);
+            status.setStaleInputFailSafeTriggered(true);
+            status.setStaleInputFailSafeTime(now);
+            updateRealtimeStateFromLifecycle(trainId, lifecycle);
+            log.warn("PLC input stale; fail-safe emergency brake train={} ageMs={}",
+                    trainId, now - status.getLastValidFrameTime());
+        }
     }
 
     static String bytesToHex(byte[] bytes) {

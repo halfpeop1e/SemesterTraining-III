@@ -11,7 +11,9 @@ public class PortConnectionStatus {
     private long lastFrameIntervalMs;
     private long lastFrameLength;
     private long bytesReceived;
+    private long bytesSent;
     private long frameCount;
+    private long lastSendTime;
     private String lastError;
 
     public int getPort() { return port; }
@@ -40,6 +42,10 @@ public class PortConnectionStatus {
 
     public long getBytesReceived() { return bytesReceived; }
     public void setBytesReceived(long bytesReceived) { this.bytesReceived = bytesReceived; }
+    public long getBytesSent() { return bytesSent; }
+    public void setBytesSent(long bytesSent) { this.bytesSent = bytesSent; }
+    public long getLastSendTime() { return lastSendTime; }
+    public void setLastSendTime(long lastSendTime) { this.lastSendTime = lastSendTime; }
 
     public long getFrameCount() { return frameCount; }
     public void setFrameCount(long frameCount) { this.frameCount = frameCount; }

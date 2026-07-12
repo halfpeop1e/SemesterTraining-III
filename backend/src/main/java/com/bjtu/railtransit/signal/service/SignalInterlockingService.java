@@ -45,11 +45,8 @@ public class SignalInterlockingService {
 
         checkConflictingRoutes(route);
 
-        // 设置入口和终端信号机为 GREEN
+        // 只有始端信号机开放。终端信号机仍防护下一条进路，不应被本进路置绿。
         setSignalAspect(String.valueOf(route.getStartSignalId()), SignalAspect.GREEN);
-        if (route.getEndSignalId() > 0) {
-            setSignalAspect(String.valueOf(route.getEndSignalId()), SignalAspect.GREEN);
-        }
 
         builtRoutes.put(routeId, route);
         return route;
@@ -65,9 +62,6 @@ public class SignalInterlockingService {
 
         // 恢复信号机为 RED
         setSignalAspect(String.valueOf(route.getStartSignalId()), SignalAspect.RED);
-        if (route.getEndSignalId() > 0) {
-            setSignalAspect(String.valueOf(route.getEndSignalId()), SignalAspect.RED);
-        }
         return route;
     }
 

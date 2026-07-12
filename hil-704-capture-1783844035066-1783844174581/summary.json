@@ -1,0 +1,137 @@
+{
+  "started_at_unix_ms": 1783844035066,
+  "stopped_at_unix_ms": 1783844174581,
+  "record_counts": {
+    "packet": 6255,
+    "event": 46,
+    "control_update": 1383
+  },
+  "started_metadata": {
+    "status": {
+      "enabled": true,
+      "running": true,
+      "fixed_train_id": "TR001",
+      "fixed_train_number": 1,
+      "plc_input": {
+        "direction_handle": 1,
+        "master_handle": 1,
+        "traction_percent": 100,
+        "brake_percent": 0,
+        "key_active": true,
+        "external_lighting_state": 0,
+        "emergency_brake_pressed": false,
+        "open_left_door_pressed": false,
+        "open_right_door_pressed": false,
+        "close_left_door_pressed": false,
+        "close_right_door_pressed": false,
+        "door_mode": 0,
+        "mode_up_pressed": false,
+        "mode_down_pressed": false,
+        "confirm_pressed": false,
+        "automatic_return_pressed": false,
+        "ato_start_pressed": false
+      },
+      "plc": {
+        "connected": true,
+        "sent_frames": 1,
+        "received_frames": 135,
+        "last_success_monotonic_s": 7696.42539367,
+        "last_error": null
+      },
+      "network_hmi": {
+        "connected": false,
+        "sent_frames": 0,
+        "received_frames": 0,
+        "last_success_monotonic_s": null,
+        "last_error": "Hil704TrainUnavailableError: fixed 704 train TR001 is not available in committed frame"
+      },
+      "signal_mmi": {
+        "connected": false,
+        "sent_frames": 0,
+        "received_frames": 0,
+        "last_success_monotonic_s": null,
+        "last_error": "Hil704TrainUnavailableError: fixed 704 train TR001 is not available in committed frame"
+      },
+      "vision": {
+        "connected": true,
+        "sent_frames": 0,
+        "received_frames": 0,
+        "last_success_monotonic_s": null,
+        "last_error": "Hil704TrainUnavailableError: fixed 704 train TR001 is not available in committed frame"
+      },
+      "vision_mapping_loaded": true,
+      "traction_cut_mask": 0,
+      "last_control_result": "fixed train TR001 is not present"
+    },
+    "endpoints": {
+      "plc": "192.168.100.123:8001",
+      "network_hmi": "192.168.100.121:8888",
+      "signal_mmi": "192.168.100.122:9999",
+      "vision": "host.docker.internal:8303"
+    }
+  },
+  "stopped_metadata": {
+    "status": {
+      "enabled": true,
+      "running": true,
+      "fixed_train_id": "TR001",
+      "fixed_train_number": 1,
+      "plc_input": {
+        "direction_handle": 1,
+        "master_handle": 1,
+        "traction_percent": 100,
+        "brake_percent": 0,
+        "key_active": true,
+        "external_lighting_state": 0,
+        "emergency_brake_pressed": false,
+        "open_left_door_pressed": false,
+        "open_right_door_pressed": false,
+        "close_left_door_pressed": false,
+        "close_right_door_pressed": false,
+        "door_mode": 0,
+        "mode_up_pressed": false,
+        "mode_down_pressed": false,
+        "confirm_pressed": false,
+        "automatic_return_pressed": false,
+        "ato_start_pressed": false
+      },
+      "plc": {
+        "connected": true,
+        "sent_frames": 139,
+        "received_frames": 1518,
+        "last_success_monotonic_s": 7835.964699739,
+        "last_error": null
+      },
+      "network_hmi": {
+        "connected": true,
+        "sent_frames": 1183,
+        "received_frames": 1183,
+        "last_success_monotonic_s": 7835.941080968,
+        "last_error": null
+      },
+      "signal_mmi": {
+        "connected": true,
+        "sent_frames": 1183,
+        "received_frames": 0,
+        "last_success_monotonic_s": 7835.913786463,
+        "last_error": null
+      },
+      "vision": {
+        "connected": true,
+        "sent_frames": 1185,
+        "received_frames": 0,
+        "last_success_monotonic_s": 7835.924952474,
+        "last_error": null
+      },
+      "vision_mapping_loaded": true,
+      "traction_cut_mask": 0,
+      "last_control_result": "applied"
+    },
+    "endpoints": {
+      "plc": "192.168.100.123:8001",
+      "network_hmi": "192.168.100.121:8888",
+      "signal_mmi": "192.168.100.122:9999",
+      "vision": "host.docker.internal:8303"
+    }
+  }
+}

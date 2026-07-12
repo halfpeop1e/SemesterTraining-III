@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { StationStop, StopResult, TrainState } from '../../../types/vehicle';
+import type { SidingStatus, StationStop, StopResult, TrainState } from '../../../types/vehicle';
 import { STATIONS } from '../data/lineMap';
 import ThreeRailwayView from './ThreeRailwayView';
 import './DriverCabView.css';
@@ -23,6 +23,8 @@ export interface DriverCabViewProps {
    * 单区间仿真时可不传（fallback 到 targetStopPosition）。
    */
   stationStops?: StationStop[];
+  /** Supplied by the shared dispatch model for downstream 3D/route extensions. */
+  sidingStatuses?: SidingStatus[];
   // ---- 驾驶员控制回调（全部可选，不传时保持纯本地 UI 状态）----
   /** 当前有效驾驶模式（由父组件同步，仅用于显示；不在 render 中调 setState）。 */
   externalDriveMode?: 'ato' | 'manual' | 'emergency' | null;
