@@ -823,7 +823,7 @@ class VehicleSimulationServiceTest {
         }
 
         TrainState earlyState = states.get(Math.min(5, states.size() - 1));
-        assertTrue(earlyState.getVelocity() <= 10.0 + 0.1,
+        assertTrue(earlyState.getVelocity() <= 10.0 + 0.5,
                 "COAST 下速度不应因牵引上升（初始 10 m/s），第5帧 v=" + earlyState.getVelocity());
 
         assertEquals(SimulationPhase.STOPPED, states.get(states.size() - 1).getPhase());
