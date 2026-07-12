@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ackDispatchCommand,
+  applyManualDecision,
   confirmVehicleDeparture,
+  getOnboardCommands,
   getOnboardSnapshot,
   reportOnboardEvent,
   reportOnboardStatus,
@@ -46,6 +48,8 @@ interface IntegrationPanelProps {
   departureState?: string;
   onDispatchHold: () => void;
   onDispatchRecovery: () => void;
+  onManualApproved?: () => void;
+  onManualRejected?: () => void;
 }
 
 export default function IntegrationPanel({
@@ -64,6 +68,8 @@ export default function IntegrationPanel({
   departureState,
   onDispatchHold,
   onDispatchRecovery,
+  onManualApproved,
+  onManualRejected,
 }: IntegrationPanelProps) {
   const [snapshot, setSnapshot] = useState<OnboardSnapshot | null>(null);
   const [message, setMessage] = useState("等待车载启动");
@@ -82,7 +88,15 @@ export default function IntegrationPanel({
 
   const refresh = async () => {
     try {
-      setSnapshot(await getOnboardSnapshot(trainId));
+      // Snapshot already uses CommandBus.forOnboard() (increments deliveryAttempts).
+      // Fall back to dedicated onboard commands API if snapshot fails partially.
+      const snap = await getOnboardSnapshot(trainId);
+      try {
+        const delivered = await getOnboardCommands(trainId);
+        setSnapshot({ ...snap, commands: delivered });
+      } catch {
+        setSnapshot(snap);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     }
@@ -131,17 +145,25 @@ export default function IntegrationPanel({
     if (!localState || !["playing", "finished"].includes(pageStatus)) return;
     const action = snapshot?.commands.find(
       (command) =>
-        ["FORCE_HOLD", "HOLD", "EMERGENCY_RECOVERY"].includes(
+        ["FORCE_HOLD", "HOLD", "EMERGENCY_RECOVERY", "MANUAL_APPROVED", "MANUAL_REJECTED"].includes(
           command.commandType,
         ) && ["PENDING", "CONFIRMED"].includes(command.status),
     );
     if (!action || processedCommandsRef.current.has(action.commandId)) return;
     processedCommandsRef.current.add(action.commandId);
     void ackDispatchCommand(action.commandId, "EXECUTING")
-      .then(() => {
+      .then(async () => {
         if (action.commandType === "EMERGENCY_RECOVERY") {
           setMessage("总控已批准恢复ATO");
           onDispatchRecovery();
+        } else if (action.commandType === "MANUAL_APPROVED") {
+          await applyManualDecision(trainId, "MANUAL_APPROVED");
+          setMessage("总控已批准人工接管");
+          onManualApproved?.();
+        } else if (action.commandType === "MANUAL_REJECTED") {
+          await applyManualDecision(trainId, "MANUAL_REJECTED");
+          setMessage("总控已拒绝人工接管，保持 ATO");
+          onManualRejected?.();
         } else {
           setMessage("总控触发 ATP 制动：降至零速后保持停车");
           onDispatchHold();
@@ -151,7 +173,7 @@ export default function IntegrationPanel({
         processedCommandsRef.current.delete(action.commandId);
         setMessage(error instanceof Error ? error.message : String(error));
       });
-  }, [snapshot, localState, pageStatus, onDispatchHold, onDispatchRecovery]);
+  }, [snapshot, localState, pageStatus, onDispatchHold, onDispatchRecovery, onManualApproved, onManualRejected, trainId]);
 
   const reportCurrent = async () => {
     const state = localStateRef.current;

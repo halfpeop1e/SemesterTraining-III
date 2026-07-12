@@ -10,6 +10,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.*;
@@ -20,6 +21,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class Protocol704Service {
 
     private static final Logger log = LoggerFactory.getLogger(Protocol704Service.class);
+    private static final long INITIAL_RETRY_DELAY_MS = 1_000L;
+    private static final long MAX_RETRY_DELAY_MS = 30_000L;
+    private static final int WARN_AFTER_CONSECUTIVE_FAILURES = 5;
 
     @Value("${vehicle.protocol704.host:192.168.100.123}")
     private String defaultHost;
@@ -36,8 +40,22 @@ public class Protocol704Service {
     @Value("${vehicle.protocol704.auto-start:false}")
     private boolean autoStart;
 
+    @Value("${vehicle.protocol704.hmi-host:192.168.100.121}")
+    private String hmiHost;
+
+    @Value("${vehicle.protocol704.hmi-port:8888}")
+    private int hmiPort;
+
+    @Value("${vehicle.protocol704.mmi-host:192.168.100.122}")
+    private String mmiHost;
+
+    @Value("${vehicle.protocol704.mmi-port:9999}")
+    private int mmiPort;
+
     private final List<Integer> ports = new ArrayList<>();
     private final Map<String, Map<Integer, PortClient>> portClients = new ConcurrentHashMap<>();
+    private final Map<String, HmiMmiClient> hmiClients = new ConcurrentHashMap<>();
+    private final Map<String, HmiMmiClient> mmiClients = new ConcurrentHashMap<>();
     private final Map<String, AtomicBoolean> runningFlags = new ConcurrentHashMap<>();
     private final Map<String, Protocol704Status> statusMap = new ConcurrentHashMap<>();
     private final Map<String, RealtimeVehicleState> realtimeStates = new ConcurrentHashMap<>();
@@ -47,7 +65,6 @@ public class Protocol704Service {
     private ScheduledExecutorService scheduler;
     private final Object initLock = new Object();
 
-    /** Kept for parser-only unit tests; production injection always supplies the bridge. */
     Protocol704Service() {
         this.vehicleControlBridge = null;
     }
@@ -131,7 +148,19 @@ public class Protocol704Service {
                 executor.submit(client);
             }
             portClients.put(trainId, clients);
-            log.info("704 protocol service started for train {}, host={}, ports={}", trainId, defaultHost, ports);
+
+            // HMI client (网络屏:572B output + 26B traction-cut input)
+            HmiMmiClient hmiClient = new HmiMmiClient(trainId, hmiHost, hmiPort, status, "HMI");
+            hmiClients.put(trainId, hmiClient);
+            executor.submit(hmiClient);
+
+            // MMI client (信号屏:66B output)
+            HmiMmiClient mmiClient = new HmiMmiClient(trainId, mmiHost, mmiPort, status, "MMI");
+            mmiClients.put(trainId, mmiClient);
+            executor.submit(mmiClient);
+
+            log.info("704 protocol service started for train {}, host={}, plcPorts={}, hmi={}:{}, mmi={}:{}",
+                    trainId, defaultHost, ports, hmiHost, hmiPort, mmiHost, mmiPort);
         }
     }
 
@@ -143,6 +172,10 @@ public class Protocol704Service {
         if (clients != null) {
             for (PortClient c : clients.values()) c.close();
         }
+        HmiMmiClient hmi = hmiClients.remove(trainId);
+        if (hmi != null) hmi.close();
+        HmiMmiClient mmi = mmiClients.remove(trainId);
+        if (mmi != null) mmi.close();
         Protocol704Status status = statusMap.get(trainId);
         if (status != null) status.setConnected(false);
         log.info("704 protocol service stopped for train {}", trainId);
@@ -177,7 +210,6 @@ public class Protocol704Service {
     }
 
     public Protocol704Status injectTestFrame(String trainId, String type) {
-        // ensure status exists
         Protocol704Status status = statusMap.computeIfAbsent(trainId, k -> {
             Protocol704Status s = new Protocol704Status();
             s.setTrainId(k);
@@ -198,11 +230,10 @@ public class Protocol704Service {
             return s;
         });
 
-        // Local parser/bridge test only: this does not open or write a TCP socket.
         byte[] frame = buildTestFrame(type);
         String hex = bytesToHex(frame);
 
-        processCompleteFrame(trainId, status, 0, frame, "TEST_FRAME", "test frame/local parser test/" + type);
+        processCompleteFrame(trainId, status, 0, frame, "LOCAL_TEST", "TEST_FRAME", "test frame/local parser test/" + type);
 
         return status;
     }
@@ -217,13 +248,10 @@ public class Protocol704Service {
         byte[] frame = new byte[46];
         java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(frame).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 
-        // frame header
         bb.putInt(0, 0xAA55AA55);
-        // totalLen=46, dataLen=22
         bb.putShort(4, (short) 46);
         bb.putShort(6, (short) 22);
 
-        // timestamp (placeholder)
         bb.putShort(8, (short) 2026);
         bb.putShort(10, (short) 7);
         bb.putShort(12, (short) 10);
@@ -231,50 +259,47 @@ public class Protocol704Service {
         bb.putShort(16, (short) 0);
         bb.putShort(18, (short) 0);
 
-        // verify type/code
         bb.putShort(20, (short) 0);
         bb.putShort(22, (short) 0);
 
-        // data area
-        frame[24] = 0x20; // doors_closed_ok
+        frame[24] = 0x20;
         frame[25] = 0x00;
-        bb.putShort(26, (short) 0); // speed
-        frame[28] = 0x00; // byte28
+        bb.putShort(26, (short) 0);
+        frame[28] = 0x00;
         frame[29] = 0x00;
         bb.putShort(30, (short) 0);
         bb.putShort(32, (short) 0);
         frame[34] = 0x00;
-        frame[35] = 0x02; // key_switch_on
+        frame[35] = 0x02;
 
-        // direction handle = forward
         bb.putShort(36, (short) 1);
 
         switch (type) {
             case "traction":
-                bb.putShort(38, (short) 0x0001); // masterHandle=1
-                bb.putShort(40, (short) 50);     // tractionLevel=50
-                bb.putShort(42, (short) 0);      // brakeLevel=0
+                bb.putShort(38, (short) 0x0001);
+                bb.putShort(40, (short) 50);
+                bb.putShort(42, (short) 0);
                 break;
             case "brake":
-                bb.putShort(38, (short) 0x0002); // masterHandle=2
-                bb.putShort(40, (short) 0);      // tractionLevel=0
-                bb.putShort(42, (short) 60);     // brakeLevel=60
+                bb.putShort(38, (short) 0x0002);
+                bb.putShort(40, (short) 0);
+                bb.putShort(42, (short) 60);
                 break;
             case "emergency_brake":
-                frame[28] = 0x01;                // EB button bit0
-                bb.putShort(38, (short) 0x0000); // masterHandle=0
+                frame[28] = 0x01;
+                bb.putShort(38, (short) 0x0000);
                 bb.putShort(40, (short) 0);
                 bb.putShort(42, (short) 0);
                 break;
             case "coast":
             default:
-                bb.putShort(38, (short) 0x0000); // masterHandle=0
+                bb.putShort(38, (short) 0x0000);
                 bb.putShort(40, (short) 0);
                 bb.putShort(42, (short) 0);
                 break;
         }
 
-        bb.putShort(44, (short) 0); // padding
+        bb.putShort(44, (short) 0);
         return frame;
     }
 
@@ -292,9 +317,14 @@ public class Protocol704Service {
         private final String host;
         private final int port;
         private final Protocol704Status status;
+        private final String connectionId;
         private Socket socket;
         private InputStream in;
+        private OutputStream out;
         private volatile boolean closed = false;
+        private volatile Thread workerThread;
+        private int consecutiveFailures;
+        private long retryDelayMs = INITIAL_RETRY_DELAY_MS;
         private long lastReceiveTime = 0;
         private long lastFrameLen = 0;
         private long connectStart = 0;
@@ -307,19 +337,29 @@ public class Protocol704Service {
             this.host = host;
             this.port = port;
             this.status = status;
+            this.connectionId = "plc-" + trainId + "-" + port + "-" + UUID.randomUUID();
         }
 
         void close() {
             closed = true;
+            Thread worker = workerThread;
+            if (worker != null) worker.interrupt();
+            if (vehicleControlBridge != null) {
+                vehicleControlBridge.notifyPlcDisconnected(trainId, port, connectionId);
+            }
+            try { if (out != null) out.close(); } catch (IOException ignored) {}
+            out = null;
             try { if (socket != null) socket.close(); } catch (IOException ignored) {}
         }
 
         @Override
         public void run() {
+            workerThread = Thread.currentThread();
             PortConnectionStatus ps = status.getPortStatuses().get(port);
             while (!closed) {
                 AtomicBoolean running = runningFlags.get(trainId);
                 if (running == null || !running.get()) break;
+                long retryDelayAfterFailure = 0L;
 
                 ps.setConnecting(true);
                 ps.setLastError(null);
@@ -331,11 +371,16 @@ public class Protocol704Service {
                     s.setTcpNoDelay(true);
                     this.socket = s;
                     this.in = s.getInputStream();
+                    this.out = s.getOutputStream();
                     ps.setConnecting(false);
                     ps.setConnected(true);
+                    status.setOutputEnabled(true);
                     updateOverallConnected();
                     ps.setLastConnectSuccessTime(System.currentTimeMillis());
-                    log.info("704 TCP socket opened train={} port={}, waiting for first frame", trainId, port);
+                    consecutiveFailures = 0;
+                    retryDelayMs = INITIAL_RETRY_DELAY_MS;
+                    // local-v1, not validated with real PLC
+                    log.debug("704 TCP socket opened train={} port={} connectionId={}, waiting for first frame (local-v1 output enabled, not validated with real PLC)", trainId, port, connectionId);
 
                     byte[] buf = new byte[4096];
                     while (!closed && running.get()) {
@@ -360,7 +405,8 @@ public class Protocol704Service {
                         for (byte[] frame : accumulator.append(Arrays.copyOf(buf, n))) {
                             frameCount++;
                             ps.setFrameCount(frameCount);
-                            processCompleteFrame(trainId, status, port, frame, "HARDWARE", "inbound local-v1 frame");
+                            processCompleteFrame(trainId, status, port, frame, Protocol704VehicleControlBridge.SOURCE_PLC, Protocol704VehicleControlBridge.SOURCE_PLC, connectionId, "inbound local-v1 frame");
+                            buildAndSendOutput();
                         }
                     }
                 } catch (Exception e) {
@@ -368,17 +414,65 @@ public class Protocol704Service {
                     ps.setConnecting(false);
                     ps.setLastError(e.getClass().getSimpleName() + ": " + e.getMessage());
                     ps.setLastDisconnectTime(System.currentTimeMillis());
-                    log.debug("704 port {} disconnected: {}", port, e.getMessage());
+                    if (vehicleControlBridge != null) {
+                        vehicleControlBridge.notifyPlcDisconnected(trainId, port, connectionId);
+                    }
+                    consecutiveFailures++;
+                    retryDelayAfterFailure = retryDelayMs;
+                    retryDelayMs = Math.min(MAX_RETRY_DELAY_MS, retryDelayMs * 2);
+                    if (consecutiveFailures % WARN_AFTER_CONSECUTIVE_FAILURES == 0) {
+                        log.warn("704 port {} connection failed {} consecutive times; retrying in {}ms: {}",
+                                port, consecutiveFailures, retryDelayAfterFailure, e.getMessage());
+                    } else {
+                        log.debug("704 port {} disconnected; retrying in {}ms: {}",
+                                port, retryDelayAfterFailure, e.getMessage());
+                    }
                 } finally {
-                    updateOverallConnected();
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
+                    out = null;
                     try { if (in != null) in.close(); } catch (Exception ignored) {}
                     try { if (socket != null) socket.close(); } catch (Exception ignored) {}
                     accumulator.reset();
+                    updateOverallConnected();
                 }
 
                 if (!closed) {
-                    try { Thread.sleep(2000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                    sleepBeforeRetry(retryDelayAfterFailure > 0 ? retryDelayAfterFailure : INITIAL_RETRY_DELAY_MS);
                 }
+            }
+        }
+
+        private void sleepBeforeRetry(long delayMs) {
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private void buildAndSendOutput() {
+            PortConnectionStatus ps = status.getPortStatuses().get(port);
+            RealtimeVehicleState state = status.getRealtimeVehicleState();
+            if (out == null || ps == null) return;
+            // local-v1, not validated with real PLC
+            Protocol704OutputService.sendPlcOutput(out, state, ps, status);
+            Protocol704OutputService.updateHmiPreview(state, status);
+            // also send via HMI and MMI connections
+            sendViaHmiMmi(state);
+        }
+
+        private void sendViaHmiMmi(RealtimeVehicleState state) {
+            HmiMmiClient hmi = hmiClients.get(trainId);
+            if (hmi != null && hmi.isConnected()) {
+                PortConnectionStatus hmiPs = status.getPortStatuses().get(hmiPort);
+                Protocol704OutputService.sendHmiOutput(hmi.getOutputStream(), state,
+                        hmiPs != null ? hmiPs : new PortConnectionStatus(), status);
+            }
+            HmiMmiClient mmi = mmiClients.get(trainId);
+            if (mmi != null && mmi.isConnected()) {
+                PortConnectionStatus mmiPs = status.getPortStatuses().get(mmiPort);
+                Protocol704OutputService.sendMmiOutput(mmi.getOutputStream(), state,
+                        mmiPs != null ? mmiPs : new PortConnectionStatus(), status);
             }
         }
 
@@ -388,17 +482,25 @@ public class Protocol704Service {
                 if (p.isConnected()) any = true;
             }
             status.setConnected(any);
+            if (!any) {
+                status.setOutputEnabled(false);
+            }
         }
     }
 
     private void processCompleteFrame(String trainId, Protocol704Status status, int port, byte[] frame,
-                                      String source, String notePrefix) {
+                                      String bridgeSource, String logSource, String notePrefix) {
+        processCompleteFrame(trainId, status, port, frame, bridgeSource, logSource, null, notePrefix);
+    }
+
+    private void processCompleteFrame(String trainId, Protocol704Status status, int port, byte[] frame,
+                                      String bridgeSource, String logSource, String connectionId, String notePrefix) {
             String hex = bytesToHex(frame);
             Protocol704LogEntry entry = new Protocol704LogEntry();
             entry.setTrainId(trainId);
             entry.setPort(port);
-            entry.setDirection("TEST_FRAME".equals(source) ? "test_frame" : "inbound");
-            entry.setSource(source);
+            entry.setDirection("TEST_FRAME".equals(logSource) ? "test_frame" : "inbound");
+            entry.setSource(logSource);
             entry.setTimestamp(System.currentTimeMillis());
             entry.setRawHex(hex);
             entry.setFrameLength(frame.length);
@@ -422,7 +524,13 @@ public class Protocol704Service {
                 status.setReceivedValidFrame(true);
                 status.setLastValidFrameTime(System.currentTimeMillis());
                 if (vehicleControlBridge != null) {
-                    Protocol704CommandLifecycle lifecycle = vehicleControlBridge.execute(trainId, mapped);
+                    Protocol704CommandLifecycle lifecycle;
+                    if (Protocol704VehicleControlBridge.SOURCE_LOCAL_TEST.equals(bridgeSource)) {
+                        lifecycle = vehicleControlBridge.executeFromTestFrame(trainId, mapped);
+                    } else {
+                        String cid = connectionId != null ? connectionId : ("port-" + port + "-" + UUID.randomUUID());
+                        lifecycle = vehicleControlBridge.execute(trainId, mapped, bridgeSource, cid, port);
+                    }
                     status.setLastCommandLifecycle(lifecycle);
                     updateRealtimeStateFromLifecycle(trainId, lifecycle);
                 }
@@ -432,14 +540,38 @@ public class Protocol704Service {
 
     private void updateRealtimeStateFromLifecycle(String trainId, Protocol704CommandLifecycle lifecycle) {
         RealtimeVehicleState state = realtimeStates.get(trainId);
-        if (state == null || lifecycle == null || lifecycle.getExecutedState() == null) return;
-        state.setLastCommand(lifecycle.getParsedCommand());
-        state.setMode(lifecycle.getResultMode());
-        state.setPositionM(lifecycle.getExecutedState().getPosition());
-        state.setVelocityMs(lifecycle.getExecutedState().getVelocity());
-        state.setAccelerationMs2(lifecycle.getExecutedState().getAcceleration());
+        if (state == null || lifecycle == null) return;
+        if (lifecycle.getParsedCommand() != null) {
+            state.setLastCommand(lifecycle.getParsedCommand());
+        }
+        if (lifecycle.getResultMode() != null) {
+            state.setMode(lifecycle.getResultMode());
+        }
+        if (lifecycle.getExecutedState() != null) {
+            state.setPositionM(lifecycle.getExecutedState().getPosition());
+            state.setVelocityMs(lifecycle.getExecutedState().getVelocity());
+            state.setAccelerationMs2(lifecycle.getExecutedState().getAcceleration());
+        }
         state.setNote(lifecycle.getStatus());
+        state.setEmergencyLatched(lifecycle.isEmergencyLatchedAfter()
+                || (vehicleControlBridge != null && vehicleControlBridge.isEmergencyLatched(trainId)));
         state.setLastUpdateTime(System.currentTimeMillis());
+
+        // local-v1 terminal turnaround (not validated with real hardware):
+        // When velocity is ~0 and reversing flag is set, flip direction and clear reversing.
+        if (lifecycle.getExecutedState() != null && state.isReversing()) {
+            double v = lifecycle.getExecutedState().getVelocity();
+            boolean stopped = v <= 0.1;
+            if (stopped) {
+                String newDir = "UP".equals(state.getDirection()) ? "DOWN" : "UP";
+                state.setDirection(newDir);
+                state.setReversing(false);
+                if (vehicleControlBridge != null) {
+                    vehicleControlBridge.completeTurnback(trainId);
+                }
+                log.info("704 local-v1 turnback complete for train={}, new direction={}", trainId, newDir);
+            }
+        }
     }
 
     static String bytesToHex(byte[] bytes) {
@@ -449,5 +581,149 @@ public class Protocol704Service {
             sb.append(String.format("%02X", bytes[i] & 0xFF));
         }
         return sb.toString();
+    }
+
+    /**
+     * Lightweight persistent TCP client for HMI (网络屏) or MMI (信号屏) output.
+     * local-v1, not validated with real hardware.
+     */
+    private class HmiMmiClient implements Runnable {
+        private final String trainId;
+        private final String host;
+        private final int port;
+        private final Protocol704Status status;
+        private final String label;
+        private Socket socket;
+        private OutputStream out;
+        private volatile boolean closed;
+        private volatile Thread workerThread;
+        private int consecutiveFailures;
+        private long retryDelayMs = INITIAL_RETRY_DELAY_MS;
+
+        HmiMmiClient(String trainId, String host, int port, Protocol704Status status, String label) {
+            this.trainId = trainId;
+            this.host = host;
+            this.port = port;
+            this.status = status;
+            this.label = label;
+        }
+
+        boolean isConnected() {
+            return socket != null && socket.isConnected() && !socket.isClosed() && out != null;
+        }
+
+        OutputStream getOutputStream() {
+            return out;
+        }
+
+        void close() {
+            closed = true;
+            Thread worker = workerThread;
+            if (worker != null) worker.interrupt();
+            try { if (out != null) out.close(); } catch (IOException ignored) {}
+            out = null;
+            try { if (socket != null) socket.close(); } catch (IOException ignored) {}
+        }
+
+        @Override
+        public void run() {
+            workerThread = Thread.currentThread();
+            status.getPortStatuses().computeIfAbsent(port, p -> {
+                PortConnectionStatus ps = new PortConnectionStatus();
+                ps.setPort(p);
+                ps.setConnected(false);
+                return ps;
+            });
+
+            while (!closed) {
+                AtomicBoolean running = runningFlags.get(trainId);
+                if (running == null || !running.get()) break;
+                long retryDelayAfterFailure = 0L;
+
+                PortConnectionStatus ps = status.getPortStatuses().get(port);
+                if (ps != null) {
+                    ps.setConnecting(true);
+                    ps.setLastError(null);
+                    ps.setConnected(false);
+                }
+
+                try (Socket s = new Socket()) {
+                    s.connect(new InetSocketAddress(host, port), connectTimeoutMs);
+                    s.setSoTimeout(readTimeoutMs);
+                    s.setTcpNoDelay(true);
+                    this.socket = s;
+                    this.out = s.getOutputStream();
+                    if (ps != null) {
+                        ps.setConnecting(false);
+                        ps.setConnected(true);
+                        ps.setLastConnectSuccessTime(System.currentTimeMillis());
+                    }
+                    consecutiveFailures = 0;
+                    retryDelayMs = INITIAL_RETRY_DELAY_MS;
+                    log.debug("704 {} client connected train={} {}:{}", label, trainId, host, port);
+
+                    if ("HMI".equals(label)) {
+                        InputStream in = s.getInputStream();
+                        byte[] buf = new byte[128];
+                        while (!closed && running.get()) {
+                            int n = in.read(buf);
+                            if (n < 0) throw new IOException(label + " connection closed by remote");
+                            if (n >= 26) {
+                                log.debug("704 {} received {}B, train={}", label, n, trainId);
+                                byte[] frame = Arrays.copyOf(buf, n);
+                                HmiTractionCutRequest cutReq = Protocol704HmiInputParser.parseTractionCut(frame);
+                                if (cutReq != null) {
+                                    RealtimeVehicleState rs = realtimeStates.get(trainId);
+                                    if (rs != null) {
+                                        cutReq.setTrainId(trainId);
+                                        rs.setTractionCutMask(cutReq.getCarCutMask());
+                                        rs.setLastTractionCutTime(System.currentTimeMillis());
+                                        log.info("704 HMI traction cut received for train={}: mask={}", trainId,
+                                                Arrays.toString(cutReq.getCarCutMask()));
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        while (!closed && running.get()) {
+                            try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                        }
+                    }
+                } catch (Exception e) {
+                    if (ps != null) {
+                        ps.setConnected(false);
+                        ps.setConnecting(false);
+                        ps.setLastError(label + " " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                        ps.setLastDisconnectTime(System.currentTimeMillis());
+                    }
+                    consecutiveFailures++;
+                    retryDelayAfterFailure = retryDelayMs;
+                    retryDelayMs = Math.min(MAX_RETRY_DELAY_MS, retryDelayMs * 2);
+                    if (consecutiveFailures % WARN_AFTER_CONSECUTIVE_FAILURES == 0) {
+                        log.warn("704 {} connection failed {} consecutive times; retrying in {}ms train={} {}:{}: {}",
+                                label, consecutiveFailures, retryDelayAfterFailure, trainId, host, port, e.getMessage());
+                    } else {
+                        log.debug("704 {} {}:{} disconnected; retrying in {}ms: {}",
+                                label, host, port, retryDelayAfterFailure, e.getMessage());
+                    }
+                } finally {
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
+                    out = null;
+                    try { if (socket != null) socket.close(); } catch (Exception ignored) {}
+                }
+
+                if (!closed) {
+                    sleepBeforeRetry(retryDelayAfterFailure > 0 ? retryDelayAfterFailure : INITIAL_RETRY_DELAY_MS);
+                }
+            }
+        }
+
+        private void sleepBeforeRetry(long delayMs) {
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 }

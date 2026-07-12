@@ -1,5 +1,6 @@
 package com.bjtu.railtransit.vehicle.protocol704;
 
+// local-v1, not validated with real hardware
 public class RealtimeVehicleState {
     private String trainId;
     private long lastUpdateTime;
@@ -9,6 +10,16 @@ public class RealtimeVehicleState {
     private String mode;
     private String lastCommand;
     private String note;
+    private boolean doorsClosed;
+    private boolean networkFault;
+    private boolean emergencyLatched;
+
+    private boolean[] tractionCutMask = new boolean[6];
+    private long lastTractionCutTime;
+
+    private double[] perCarLoadKg = new double[6];
+    private boolean isReversing;
+    private String direction = "UP";
 
     public RealtimeVehicleState() {
         this.trainId = "T1";
@@ -19,6 +30,13 @@ public class RealtimeVehicleState {
         this.mode = "MANUAL";
         this.lastCommand = "none";
         this.note = "initialized";
+        this.doorsClosed = true;
+        this.networkFault = false;
+        this.emergencyLatched = false;
+        this.tractionCutMask = new boolean[6];
+        this.perCarLoadKg = new double[6];
+        this.isReversing = false;
+        this.direction = "UP";
     }
 
     public String getTrainId() { return trainId; }
@@ -37,4 +55,26 @@ public class RealtimeVehicleState {
     public void setLastCommand(String lastCommand) { this.lastCommand = lastCommand; }
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note; }
+    public boolean isDoorsClosed() { return doorsClosed; }
+    public void setDoorsClosed(boolean doorsClosed) { this.doorsClosed = doorsClosed; }
+    public boolean isNetworkFault() { return networkFault; }
+    public void setNetworkFault(boolean networkFault) { this.networkFault = networkFault; }
+    public boolean isEmergencyLatched() { return emergencyLatched; }
+    public void setEmergencyLatched(boolean emergencyLatched) { this.emergencyLatched = emergencyLatched; }
+
+    public boolean[] getTractionCutMask() { return tractionCutMask; }
+    public void setTractionCutMask(boolean[] tractionCutMask) {
+        this.tractionCutMask = tractionCutMask != null ? tractionCutMask.clone() : new boolean[6];
+    }
+    public long getLastTractionCutTime() { return lastTractionCutTime; }
+    public void setLastTractionCutTime(long lastTractionCutTime) { this.lastTractionCutTime = lastTractionCutTime; }
+
+    public double[] getPerCarLoadKg() { return perCarLoadKg; }
+    public void setPerCarLoadKg(double[] perCarLoadKg) {
+        this.perCarLoadKg = perCarLoadKg != null ? perCarLoadKg.clone() : new double[6];
+    }
+    public boolean isReversing() { return isReversing; }
+    public void setReversing(boolean reversing) { isReversing = reversing; }
+    public String getDirection() { return direction; }
+    public void setDirection(String direction) { this.direction = direction; }
 }

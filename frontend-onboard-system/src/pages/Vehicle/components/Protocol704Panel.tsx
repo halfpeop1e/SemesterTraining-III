@@ -1,18 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   connectProtocol704,
   disconnectProtocol704,
   getProtocol704Status,
   resetProtocol704,
   sendTestFrame,
+  syncProtocol704State,
 } from '../../../api/protocol704';
 import type { Protocol704Status } from '../../../types/protocol704';
-import type { TrainState } from '../../../types/vehicle';
+import type { SimulationControlRequest, SimulationResult, TrainState } from '../../../types/vehicle';
 
 interface Protocol704PanelProps {
   trainId: string;
   onError: (message: string) => void;
-  onExecutedState?: (state: TrainState, mode?: string) => void;
+  /** 命令执行回调（commandId 去重后只触发一次）。
+   *  result 非空时包含完整 EB 制动轨迹，前端拼接到主 result.states 后播放。 */
+  onExecutedState?: (state: TrainState, mode: string, latched: boolean, result?: SimulationResult) => void;
+  /** 获取当前 ATO 播放状态，测试帧发送前同步到 Bridge，使 EB 从真实当前位置开始。 */
+  getCurrentState?: () => SimulationControlRequest | null;
 }
 
 function formatTime(timestamp?: number) {
@@ -24,26 +29,65 @@ export default function Protocol704Panel({
   trainId,
   onError,
   onExecutedState,
+  getCurrentState,
 }: Protocol704PanelProps) {
   const [status, setStatus] = useState<Protocol704Status | null>(null);
   const [polling, setPolling] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [testFrameLoading, setTestFrameLoading] = useState<string | null>(null);
 
+  // commandId 去重：同一个 lastCommandLifecycle.commandId 只允许触发一次 onExecutedState。
+  // 防止 500ms 轮询反复用历史 executedState 覆盖主页面 displayState。
+  const lastProcessedCommandIdRef = useRef<string | null>(null);
+  // 首次 refresh 标志：mount/trainId 切换后的第一次 refresh 只建立 baseline，不触发回调。
+  const firstRefreshRef = useRef(true);
+
+  const processLifecycle = (next: Protocol704Status, fromTestFrame: boolean) => {
+    const lifecycle = next.lastCommandLifecycle;
+    if (!lifecycle) return;
+    const latched = next.realtimeVehicleState?.emergencyLatched === true
+      || lifecycle.resultMode === 'EMERGENCY'
+      || lifecycle.emergencyLatchedAfter === true;
+
+    if (lifecycle.status === 'EXECUTED' && lifecycle.executedState) {
+      const cmdId = lifecycle.commandId;
+      if (firstRefreshRef.current && !fromTestFrame) {
+        // 首次 refresh：只建立 baseline，不重放历史命令
+        lastProcessedCommandIdRef.current = cmdId ?? null;
+      } else if (cmdId && cmdId !== lastProcessedCommandIdRef.current) {
+        // 新 commandId：触发一次回调
+        lastProcessedCommandIdRef.current = cmdId;
+        onExecutedState?.(
+          lifecycle.executedState as TrainState,
+          lifecycle.resultMode ?? next.realtimeVehicleState?.mode ?? 'UNKNOWN',
+          latched,
+          lifecycle.executedResult as SimulationResult | undefined,
+        );
+      }
+      // 同 commandId 重复轮询：不触发（去重核心）
+    }
+    // REJECTED/FAILED：不调用 onExecutedState，拒绝原因由面板自身的 rejectionReason 字段展示。
+    // 不再合成 BRAKING 状态覆盖 displayState（旧逻辑的 else if (latched) 分支已移除）。
+  };
+
   const refresh = async () => {
     try {
       const next = await getProtocol704Status(trainId);
       setStatus(next);
-      if (next.lastCommandLifecycle?.status === 'EXECUTED' && next.lastCommandLifecycle.executedState) {
-        onExecutedState?.(next.lastCommandLifecycle.executedState as TrainState, next.lastCommandLifecycle.resultMode);
-      }
+      processLifecycle(next, false);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      firstRefreshRef.current = false;
     }
   };
 
   useEffect(() => {
+    // trainId 切换时重置去重状态
+    firstRefreshRef.current = true;
+    lastProcessedCommandIdRef.current = null;
     void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trainId]);
 
   useEffect(() => {
@@ -52,6 +96,7 @@ export default function Protocol704Panel({
       void refresh();
     }, 500);
     return () => window.clearInterval(timerId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polling, trainId]);
 
   const portStatuses = useMemo(
@@ -96,11 +141,22 @@ export default function Protocol704Panel({
   const handleTestFrame = async (type: string) => {
     setTestFrameLoading(type);
     try {
+      // 测试帧发送前，把当前 ATO 播放状态同步到 Bridge，使 EB 从真实当前位置开始制动。
+      // 同步是 best-effort：失败不阻塞测试帧发送。
+      if (getCurrentState) {
+        const syncPayload = getCurrentState();
+        if (syncPayload) {
+          try {
+            await syncProtocol704State(syncPayload);
+          } catch {
+            // best-effort: 继续
+          }
+        }
+      }
+
       const next = await sendTestFrame(trainId, type);
       setStatus(next);
-      if (next.lastCommandLifecycle?.status === 'EXECUTED' && next.lastCommandLifecycle.executedState) {
-        onExecutedState?.(next.lastCommandLifecycle.executedState as TrainState, next.lastCommandLifecycle.resultMode);
-      }
+      processLifecycle(next, true);
       setExpanded(true);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));

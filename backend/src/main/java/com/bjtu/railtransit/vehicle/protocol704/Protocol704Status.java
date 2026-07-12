@@ -24,6 +24,9 @@ public class Protocol704Status {
     private long lastValidFrameTime;
     private Protocol704CommandLifecycle lastCommandLifecycle;
     private String activeBinding;
+    private String lastOutputFrame;
+    private String lastOutputHmi;
+    private boolean outputEnabled;
 
     public String getTrainId() { return trainId; }
     public void setTrainId(String trainId) { this.trainId = trainId; }
@@ -71,4 +74,10 @@ public class Protocol704Status {
     public void setLastCommandLifecycle(Protocol704CommandLifecycle lastCommandLifecycle) { this.lastCommandLifecycle = lastCommandLifecycle; }
     public String getActiveBinding() { return activeBinding; }
     public void setActiveBinding(String activeBinding) { this.activeBinding = activeBinding; }
+    public String getLastOutputFrame() { return lastOutputFrame; }
+    public void setLastOutputFrame(String lastOutputFrame) { this.lastOutputFrame = lastOutputFrame; }
+    public String getLastOutputHmi() { return lastOutputHmi; }
+    public void setLastOutputHmi(String lastOutputHmi) { this.lastOutputHmi = lastOutputHmi; }
+    public boolean isOutputEnabled() { return outputEnabled; }
+    public void setOutputEnabled(boolean outputEnabled) { this.outputEnabled = outputEnabled; }
 }

@@ -69,24 +69,66 @@ export async function runVehicleSimulation(
   return body.data;
 }
 
+export interface ManualRequestPending {
+  status: 'PENDING_APPROVAL';
+  message: string;
+  commandId?: string;
+  trainId?: string;
+}
+
 /**
  * 驾驶员控制续算。
  * request.currentState.position 必须是全程累积里程。
  * request.totalTargetPosition 是本次续算目标站累计里程（通常是下一未到达站）。
+ * set_manual 在 ATO 会话中可能返回 PENDING_APPROVAL（中控审批中）。
  */
 export async function callVehicleControl(
   request: SimulationControlRequest,
-): Promise<SimulationResult> {
+): Promise<SimulationResult | ManualRequestPending> {
   const res = await fetch(`${API_BASE}/vehicle/simulation/control`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   });
   if (!res.ok) throw new Error(`控制接口调用失败: ${res.status}`);
-  const body: SimulationRunResponse = await res.json();
+  const body = await res.json();
   if (!body.success) throw new Error(body.message || '控制接口返回失败');
+  if (body.data && body.data.status === 'PENDING_APPROVAL') {
+    return body.data as ManualRequestPending;
+  }
+  return body.data as SimulationResult;
+}
+
+export async function applyManualDecision(
+  trainId: string,
+  decision: 'MANUAL_APPROVED' | 'MANUAL_REJECTED' | 'APPROVED' | 'REJECTED',
+): Promise<{ status: string; mode?: string }> {
+  const res = await fetch(`${API_BASE}/vehicle/simulation/manual-decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trainId, decision }),
+  });
+  const body = await res.json();
+  if (!res.ok || !body.success) throw new Error(body.message || '人工接管审批应用失败');
   return body.data;
 }
+
+export async function resetVehicleSimulation(
+  trainId: string,
+  positionMeters = 0,
+): Promise<{ status: string; eventType?: string; positionMeters?: number }> {
+  const res = await fetch(`${API_BASE}/vehicle/simulation/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trainId, positionMeters }),
+  });
+  const body = await res.json();
+  if (!res.ok || !body.success) throw new Error(body.message || '车载复位失败');
+  return body.data;
+}
+
+export const getOnboardCommands = (trainId: string) =>
+  integrationRequest<DispatchCommand[]>(`/onboard/${trainId}/commands`);
 
 export async function confirmVehicleDeparture(trainId: string): Promise<{ status: string; departureState?: string }> {
   const res = await fetch(`${API_BASE}/vehicle/simulation/depart-confirm`, {
