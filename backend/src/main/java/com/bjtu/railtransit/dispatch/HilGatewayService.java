@@ -1,5 +1,6 @@
 package com.bjtu.railtransit.dispatch;
 
+import com.bjtu.railtransit.domain.model.TrainState;
 import com.bjtu.railtransit.signal.domain.SignalAspect;
 import com.bjtu.railtransit.vehicle.enums.DrivingMode;
 import com.bjtu.railtransit.vehicle.protocol704.MappedControlCommand;
@@ -71,6 +72,7 @@ public class HilGatewayService {
     private final Protocol704Service protocol704Service;
     private final Protocol704VehicleControlBridge bridge;
     private final LineProfileJsonLoader lineProfileJsonLoader;
+    private final RedisDataBus redisDataBus;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private Socket signalScreenSocket;
@@ -83,10 +85,12 @@ public class HilGatewayService {
 
     public HilGatewayService(Protocol704Service protocol704Service,
             Protocol704VehicleControlBridge bridge,
-            LineProfileJsonLoader lineProfileJsonLoader) {
+            LineProfileJsonLoader lineProfileJsonLoader,
+            RedisDataBus redisDataBus) {
         this.protocol704Service = protocol704Service;
         this.bridge = bridge;
         this.lineProfileJsonLoader = lineProfileJsonLoader;
+        this.redisDataBus = redisDataBus;
     }
 
     @PostConstruct
@@ -116,6 +120,19 @@ public class HilGatewayService {
 
         Protocol704Status status = protocol704Service.getStatus(trainId);
         RealtimeVehicleState state = status.getRealtimeVehicleState();
+
+        // Redis 降级: PLC 未连接时从 Redis 数据总线读取列车状态
+        if (state == null && redisDataBus.isConnected()) {
+            TrainState ts = redisDataBus.getTrainState(trainId);
+            if (ts != null) {
+                // 从 TrainState 构造 RealtimeVehicleState
+                state = new RealtimeVehicleState();
+                state.setTrainId(ts.getTrainId());
+                state.setVelocityMs(ts.getSpeed() / 3.6);
+                state.setAccelerationMs2(ts.getAcceleration() / 3.6);
+                state.setMode("SIM");
+            }
+        }
         if (state == null)
             return;
 
@@ -170,6 +187,18 @@ public class HilGatewayService {
 
         Protocol704Status status = protocol704Service.getStatus(trainId);
         RealtimeVehicleState state = status.getRealtimeVehicleState();
+
+        // Redis 降级: PLC 未连接时从 Redis 数据总线读取列车状态
+        if (state == null && redisDataBus.isConnected()) {
+            TrainState ts = redisDataBus.getTrainState(trainId);
+            if (ts != null) {
+                state = new RealtimeVehicleState();
+                state.setTrainId(ts.getTrainId());
+                state.setVelocityMs(ts.getSpeed() / 3.6);
+                state.setAccelerationMs2(ts.getAcceleration() / 3.6);
+                state.setMode("SIM");
+            }
+        }
         if (state == null)
             return;
 

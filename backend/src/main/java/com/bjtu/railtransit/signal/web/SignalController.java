@@ -82,7 +82,7 @@ public class SignalController {
 
     /** Backward-compatible constructor for the existing standalone verification harnesses. */
     public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader) {
-        this(maService, lineProfileLoader, new MovementAuthorityRegistry(), null, null, null, null, null, null, null);
+        this(maService, lineProfileLoader, new MovementAuthorityRegistry(null), null, null, null, null, null, null, null);
     }
 
     @GetMapping("/events")

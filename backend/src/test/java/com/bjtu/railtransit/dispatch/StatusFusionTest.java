@@ -10,7 +10,7 @@ class StatusFusionTest {
 
     @Test
     void keepsSeparateOnboardDevicesThatClaimTheSameTrainId() {
-        StatusFusion fusion = new StatusFusion();
+        StatusFusion fusion = new StatusFusion(null);
         fusion.accept(report("T1", "HMI-T1-A", 10));
         fusion.accept(report("T1", "HMI-T1-B", 11));
 
@@ -22,7 +22,7 @@ class StatusFusionTest {
 
     @Test
     void serverRevisionAdvancesEvenWhenVehicleTimestampResets() {
-        StatusFusion fusion = new StatusFusion();
+        StatusFusion fusion = new StatusFusion(null);
         fusion.accept(report("T1", "HMI-T1-A", 800));
         long first = fusion.revision("T1");
 
@@ -36,7 +36,7 @@ class StatusFusionTest {
 
     @Test
     void departureCommandIsNotDuplicatedUntilExecutionCompletes() {
-        CommandBus bus = new CommandBus();
+        CommandBus bus = new CommandBus(null);
         bus.issue("OB1", "DEPART", 0, "ATS authorization", 100, "ATS", 30);
         assertTrue(bus.hasOpenCommand("OB1", "DEPART"));
 

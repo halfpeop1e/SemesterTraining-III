@@ -20,6 +20,12 @@ public class StatusFusion {
     private final Map<String, Long> trainRevisions = new LinkedHashMap<>();
     private long nextRevision = 0;
 
+    private final RedisDataBus redisDataBus;
+
+    public StatusFusion(RedisDataBus redisDataBus) {
+        this.redisDataBus = redisDataBus;
+    }
+
     public synchronized void accept(StatusReport report) {
         if (report == null || report.getTrainId() == null || report.getTrainId().isBlank()) {
             throw new IllegalArgumentException("trainId is required");
@@ -33,6 +39,10 @@ public class StatusFusion {
             : report.getDeviceId();
         deviceReports.put(deviceKey, report);
         deviceReceivedAtMillis.put(deviceKey, now);
+        // 同步到 Redis 数据总线
+        if (redisDataBus != null) {
+            redisDataBus.putStatusReport(report.getTrainId(), report);
+        }
     }
     public synchronized List<StatusReport> reports() { return new ArrayList<>(reports.values()); }
     public synchronized StatusReport latest(String trainId) { return reports.get(trainId); }

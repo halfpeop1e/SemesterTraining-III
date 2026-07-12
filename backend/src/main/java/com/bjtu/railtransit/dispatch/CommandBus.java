@@ -13,6 +13,11 @@ public class CommandBus {
     private static final Set<String> TERMINAL = Set.of("COMPLETED", "REJECTED", "SUPERSEDED");
     private final Map<String, TrainCommand> commands = new LinkedHashMap<>();
     private final AtomicLong sequence = new AtomicLong();
+    private final RedisDataBus redisDataBus;
+
+    public CommandBus(RedisDataBus redisDataBus) {
+        this.redisDataBus = redisDataBus;
+    }
 
     public synchronized TrainCommand issue(String trainId, String type, double target, String reason,
                                            int priority, String source, double now) {
@@ -32,6 +37,9 @@ public class CommandBus {
         c.setIssuedTimeSeconds(now);
         c.setStatus(HIGH_RISK.contains(type) ? "CONFIRM_REQUIRED" : "PENDING");
         commands.put(c.getCommandId(), c);
+        if (redisDataBus != null) {
+            redisDataBus.putCommand(c.getCommandId(), c);
+        }
         return c;
     }
 
@@ -40,6 +48,7 @@ public class CommandBus {
         if (!"CONFIRM_REQUIRED".equals(c.getStatus())) return c;
         c.setStatus(approved ? "CONFIRMED" : "REJECTED");
         c.setConfirmedTimeSeconds(now);
+        syncCommandState(c);
         return c;
     }
 
@@ -50,6 +59,7 @@ public class CommandBus {
         }
         c.setStatus(accepted ? "ACKNOWLEDGED" : "REJECTED");
         c.setAcknowledgedTimeSeconds(now);
+        syncCommandState(c);
         return c;
     }
 
@@ -59,6 +69,7 @@ public class CommandBus {
         TrainCommand c = require(id);
         c.setStatus(status);
         if ("COMPLETED".equals(status)) c.setCompletedTimeSeconds(now);
+        syncCommandState(c);
         return c;
     }
 
@@ -91,5 +102,15 @@ public class CommandBus {
         TrainCommand c = commands.get(id);
         if (c == null) throw new NoSuchElementException("Unknown command: " + id);
         return c;
+    }
+
+    /** 同步指令状态到 Redis 数据总线: 终态移除, 否则更新 */
+    private void syncCommandState(TrainCommand c) {
+        if (redisDataBus == null) return;
+        if (TERMINAL.contains(c.getStatus())) {
+            redisDataBus.removeCommand(c.getCommandId());
+        } else {
+            redisDataBus.putCommand(c.getCommandId(), c);
+        }
     }
 }

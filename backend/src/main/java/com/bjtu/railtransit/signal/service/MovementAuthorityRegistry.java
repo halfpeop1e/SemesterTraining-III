@@ -1,5 +1,6 @@
 package com.bjtu.railtransit.signal.service;
 
+import com.bjtu.railtransit.dispatch.RedisDataBus;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
 import org.springframework.stereotype.Service;
 
@@ -8,8 +9,7 @@ import java.util.Map;
 
 /**
  * Authoritative in-memory MA registry shared by dispatch, onboard and protocol adapters.
- * A production deployment should persist its audit stream, but the latest value must stay
- * in memory so the 100 ms signal cycle does not depend on a database round trip.
+ * Synchronizes to Redis data bus on each replace() for external system access.
  */
 @Service
 public class MovementAuthorityRegistry {
@@ -17,6 +17,11 @@ public class MovementAuthorityRegistry {
     private double lastCycleTimeSeconds = -1;
     private long generation;
     private String source = "UNINITIALIZED";
+    private final RedisDataBus redisDataBus;
+
+    public MovementAuthorityRegistry(RedisDataBus redisDataBus) {
+        this.redisDataBus = redisDataBus;
+    }
 
     public synchronized void replace(Map<String, MovingAuthority> values,
                                      double cycleTimeSeconds,
@@ -26,6 +31,9 @@ public class MovementAuthorityRegistry {
         lastCycleTimeSeconds = cycleTimeSeconds;
         source = cycleSource;
         generation++;
+        if (redisDataBus != null) {
+            redisDataBus.replaceMA(new LinkedHashMap<>(latest));
+        }
     }
 
     public synchronized MovingAuthority get(String trainId) {

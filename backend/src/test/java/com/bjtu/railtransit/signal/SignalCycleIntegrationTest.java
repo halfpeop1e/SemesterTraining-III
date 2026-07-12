@@ -15,7 +15,7 @@ class SignalCycleIntegrationTest {
     @Test
     void fullTeacherLineMaIsAppliedBackToRuntimeTrain() throws Exception {
         MaConfig config = MaConfig.exampleConfig();
-        MovementAuthorityRegistry registry = new MovementAuthorityRegistry();
+        MovementAuthorityRegistry registry = new MovementAuthorityRegistry(null);
         LineProfileLoader loader = new LineProfileLoader();
         SignalInterlockingService interlocking = new SignalInterlockingService(loader);
         SignalCycleService cycle = new SignalCycleService(
@@ -40,7 +40,7 @@ class SignalCycleIntegrationTest {
     @Test
     void laboratoryModeDoesNotAssumeUnknownSignalsAreClear() throws Exception {
         MaConfig config = MaConfig.exampleConfig();
-        MovementAuthorityRegistry registry = new MovementAuthorityRegistry();
+        MovementAuthorityRegistry registry = new MovementAuthorityRegistry(null);
         LineProfileLoader loader = new LineProfileLoader();
         SignalInterlockingService interlocking = new SignalInterlockingService(loader);
         SignalCycleService cycle = new SignalCycleService(

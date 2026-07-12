@@ -53,7 +53,7 @@ public class G3TsrVerification {
         // 3. compute 消费 TSR：在 TSR 范围内的车应限速 40
         MaConfig config = MaConfig.exampleConfig();
         MovingAuthorityService maService = new MovingAuthorityService(config);
-        MovementAuthorityRegistry registry = new MovementAuthorityRegistry();
+        MovementAuthorityRegistry registry = new MovementAuthorityRegistry(null);
         SignalInterlockingService interlocking = new SignalInterlockingService(loader);
         SignalCycleService cycle = new SignalCycleService(maService, registry, loader, interlocking, new com.bjtu.railtransit.signal.service.SignalEventLog(), true);
 

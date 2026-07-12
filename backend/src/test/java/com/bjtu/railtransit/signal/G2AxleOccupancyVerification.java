@@ -37,7 +37,7 @@ public class G2AxleOccupancyVerification {
 
         MaConfig config = MaConfig.exampleConfig();
         MovingAuthorityService maService = new MovingAuthorityService(config);
-        MovementAuthorityRegistry registry = new MovementAuthorityRegistry();
+        MovementAuthorityRegistry registry = new MovementAuthorityRegistry(null);
         SignalInterlockingService interlocking = new SignalInterlockingService(loader);
         SignalCycleService cycle = new SignalCycleService(maService, registry, loader, interlocking, new SignalEventLog(), true);
 
