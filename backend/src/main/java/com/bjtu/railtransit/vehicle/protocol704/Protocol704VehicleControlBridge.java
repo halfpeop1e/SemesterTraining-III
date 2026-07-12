@@ -75,6 +75,33 @@ public class Protocol704VehicleControlBridge {
         return context != null && "PLC_704_LOCAL_V1".equals(context.controlSource);
     }
 
+    /**
+     * 暴露仿真上下文信息供 HIL 网关输出编码使用。
+     * 返回 null 表示该列车无活跃仿真上下文。
+     */
+    public java.util.Map<String, Object> getContextInfo(String trainId) {
+        ActiveSimulationContext ctx = contexts.get(trainId);
+        if (ctx == null) return null;
+        java.util.Map<String, Object> info = new java.util.LinkedHashMap<>();
+        info.put("fromStationId", ctx.fromStationId);
+        info.put("toStationId", ctx.toStationId);
+        info.put("position", ctx.currentState.getPosition());
+        Double absPos = ctx.currentState.getAbsolutePosition();
+        info.put("absolutePosition", absPos != null ? absPos : 0.0);
+        info.put("mode", ctx.mode);
+        return info;
+    }
+
+    /**
+     * 返回当前站的下一站 ID。
+     * 从 fromStationId→toStationId 区间中取 fromStationId+1（单区间）或下一站。
+     */
+    public int resolveNextStationId(String trainId) {
+        ActiveSimulationContext ctx = contexts.get(trainId);
+        if (ctx == null) return 0;
+        return ctx.toStationId;
+    }
+
     public Protocol704CommandLifecycle execute(String trainId, MappedControlCommand mapped) {
         Protocol704CommandLifecycle lifecycle = lifecycle(trainId, mapped);
         lifecycle.setStatus("RECEIVED");

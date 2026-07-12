@@ -41,7 +41,7 @@ public class LineProfileJsonLoader {
      * 当前 configs/line-profile.json 中没有 speed_limit_mps 字段，
      * 复用 DemoScenarioProvider 的默认限速，明确标注为假设值。
      */
-    static final double ASSUMED_SPEED_LIMIT_MPS = 20.0;
+    public static final double ASSUMED_SPEED_LIMIT_MPS = 20.0;
 
     /** line-profile.json 在 classpath 中的路径（相对于 resources/）。 */
     private static final String JSON_PATH = "/configs/line-profile.json";
