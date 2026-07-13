@@ -507,6 +507,8 @@ function Vehicle() {
 
         updateInstance(trainId, (cur) => {
           if (!cur.result) return cur;
+          const emergencyCommand =
+            command === "emergency_brake" || command === "atp_emergency_brake";
           const before = cur.result.states.slice(0, fi + 1);
           const prevStops = Array.isArray(cur.result.stationStops)
             ? cur.result.stationStops
@@ -552,13 +554,18 @@ function Vehicle() {
             ],
             trajectoryVersion: cur.trajectoryVersion + 1,
             drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
+            // EB must play the backend-returned braking trajectory before the
+            // train is held.  Pausing here leaves the gauge at the trigger
+            // speed and makes a successful backend stop look ineffective.
+            holdAfterBraking: emergencyCommand ? true : cur.holdAfterBraking,
             handleResetToken:
               command === "resume_ato" || command === "reset_emergency"
                 ? cur.handleResetToken + 1
                 : cur.handleResetToken,
             status: "playing",
-            isPaused:
-              controlResult.summary.currentMode === "emergency"
+            isPaused: emergencyCommand
+              ? false
+              : controlResult.summary.currentMode === "emergency"
                 ? true
                 : cur.isPaused,
             errorMessage: null,
