@@ -2,6 +2,7 @@ package com.bjtu.railtransit.dispatch;
 
 import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.domain.model.*;
+import com.bjtu.railtransit.signal.service.SignalPlcDepartureService;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
@@ -16,16 +17,19 @@ public class OnboardIntegrationController {
     private final SimulationService simulation;
     private final MovementAuthorityRegistry movementAuthorities;
     private final DispatchEngine dispatchEngine;
+    private final SignalPlcDepartureService signalPlcDepartureService;
 
     public OnboardIntegrationController(CommandBus commands, StatusFusion fusion,
             OnboardEventHandler events, SimulationService simulation,
-            MovementAuthorityRegistry movementAuthorities, DispatchEngine dispatchEngine) {
+            MovementAuthorityRegistry movementAuthorities, DispatchEngine dispatchEngine,
+            SignalPlcDepartureService signalPlcDepartureService) {
         this.commands = commands;
         this.fusion = fusion;
         this.events = events;
         this.simulation = simulation;
         this.movementAuthorities = movementAuthorities;
         this.dispatchEngine = dispatchEngine;
+        this.signalPlcDepartureService = signalPlcDepartureService;
     }
 
     @GetMapping("/dispatch/commands/{trainId}")
@@ -35,11 +39,15 @@ public class OnboardIntegrationController {
 
     @PostMapping("/dispatch/commands")
     public ApiResponse<TrainCommand> issue(@RequestBody Map<String, Object> body) {
-        return ApiResponse.ok("command issued", commands.issue(
+        TrainCommand issued = commands.issue(
                 String.valueOf(body.get("trainId")), String.valueOf(body.get("commandType")),
                 number(body.get("targetValue")), String.valueOf(body.getOrDefault("reason", "Dispatcher request")),
                 (int) number(body.getOrDefault("priority", 50)), String.valueOf(body.getOrDefault("source", "MANUAL")),
-                simulation.getSimulationTimeSeconds()));
+                simulation.getSimulationTimeSeconds());
+        if ("DEPART".equalsIgnoreCase(issued.getCommandType())) {
+            signalPlcDepartureService.onDepartureAuthorized(issued.getTrainId());
+        }
+        return ApiResponse.ok("command issued", issued);
     }
 
     @PostMapping("/dispatch/commands/confirm")
@@ -61,7 +69,7 @@ public class OnboardIntegrationController {
 
     @PostMapping("/dispatch/report/status")
     public ApiResponse<String> status(@RequestBody StatusReport report) {
-        fusion.accept(report);
+        simulation.acceptOnboardReport(report);
         return ApiResponse.ok("status fused", "ONBOARD_REPORTED");
     }
 

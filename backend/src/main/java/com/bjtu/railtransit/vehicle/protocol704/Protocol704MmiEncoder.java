@@ -17,10 +17,12 @@ import java.time.ZoneId;
  */
 public final class Protocol704MmiEncoder {
 
-    /** Total frame length per protocol doc Table 25. */
-    public static final int FRAME_LENGTH = 66;
-    /** Data area length = FRAME_LENGTH - header (36). */
-    public static final int DATA_LENGTH = 30;
+    /** Actual TCP payload length confirmed by the laboratory packet. */
+    public static final int FRAME_LENGTH = 68;
+    /** Historical value retained inside the MMI header. */
+    public static final int HEADER_TOTAL_LENGTH = 62;
+    /** Historical value retained inside the MMI header. */
+    public static final int HEADER_DATA_LENGTH = 42;
 
     private Protocol704MmiEncoder() {
     }
@@ -42,10 +44,9 @@ public final class Protocol704MmiEncoder {
         // ── frame header (bytes 0-35, 36 bytes) per Table 25 ──
         // 0-3: _uIdentify = 55 AA 55 AA (wire); putInt LE of 0xAA55AA55
         bb.putInt(0, 0xAA55AA55);
-        // 4-5: _uTotalLen
-        bb.putShort(4, (short) FRAME_LENGTH);
-        // 6-7: _uDataLen
-        bb.putShort(6, (short) DATA_LENGTH);
+        // These values are historical header values, not TCP frame boundaries.
+        bb.putShort(4, (short) HEADER_TOTAL_LENGTH);
+        bb.putShort(6, (short) HEADER_DATA_LENGTH);
         // 8-15: _timestamp (ms epoch, DDWORD/8 bytes)
         long epochMs = ts.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
         bb.putLong(8, epochMs);
@@ -85,9 +86,11 @@ public final class Protocol704MmiEncoder {
         frame[41] = (byte) 1;
         // 42: _nRunDir (-1=非法,0=上行,1=下行; local-v1: from state.direction)
         frame[42] = (byte) resolveMmiRunDir(s);
-        // 43: _nReserve (not in final 66B layout — omitted to fit 66 bytes)
+        // 43: _nReserve
+        frame[43] = 0;
         // 44-47: _nSpeed FLOAT LE (corrected from doc offset 42 to 44)
-        bb.putFloat(44, (float) s.getVelocityMs());
+        // MMI expects km/h on the wire.
+        bb.putFloat(44, (float) (s.getVelocityMs() * 3.6));
         // 48-51: _fAcceleration FLOAT LE
         bb.putFloat(48, (float) s.getAccelerationMs2());
         // 52-53: _nPullSwitch WORD (traction cutoff bitmask, local-v1: 0)
@@ -102,11 +105,14 @@ public final class Protocol704MmiEncoder {
         frame[58] = (byte) resolveBrakeState(s);
         // 59: _nUrgencyStopState (0=无,1=紧急制动)
         frame[59] = (byte) resolveEmergencyStop(s);
-        // 60-61: skipped _nEventID + _nSigState to fit 66B (2 bytes saved)
+        // 60: _nEventID
+        frame[60] = 0;
+        // 61: _nSigState
+        frame[61] = 0;
         // 62-63: _nTrainNo WORD (local-v1: 1)
         bb.putShort(62, (short) 1);
-        // 64-65: _fNextStationDist — truncated to WORD to fit 66B
-        bb.putShort(64, (short) 0);
+        // 64-67: _fNextStationDist FLOAT (metres; unavailable in this state)
+        bb.putFloat(64, 0.0f);
 
         return frame;
     }

@@ -121,6 +121,10 @@ public class VehicleSimulationController {
             if (sessionId != null && sessionId.trim().isEmpty()) {
                 throw new IllegalArgumentException("SESSION_ID_MISSING");
             }
+            if (simulationService != null && request != null && request.getTrainId() != null
+                    && !request.getTrainId().isBlank()) {
+                simulationService.restoreTrain(request.getTrainId());
+            }
             // 先验证站点存在
             lineProfileJsonLoader.findStationPair(fromId, toId);
 
@@ -226,8 +230,13 @@ public class VehicleSimulationController {
         if (protocol704VehicleControlBridge != null && request != null
                 && request.getTrainId() != null && !request.getTrainId().isBlank()) {
             if (request.isHardwareControlEnabled()) {
+                // Laboratory desk: only the physical ATO-start bit starts motion.
+                // No dispatch departure command or cab interlock gate is required.
+                result.getSummary().setCurrentMode(DrivingMode.ATO);
+                result.getSummary().setDepartureState("READY_TO_DEPART");
                 protocol704VehicleControlBridge.registerSimulation(
-                        request.getTrainId(), fromId, toId, result, mode, false);
+                        request.getTrainId(), fromId, toId, result, DrivingMode.ATO,
+                        true, false, true);
             } else {
                 protocol704VehicleControlBridge.unregisterSimulation(request.getTrainId());
             }

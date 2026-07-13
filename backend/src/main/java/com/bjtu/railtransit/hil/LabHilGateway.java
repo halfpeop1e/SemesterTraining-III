@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.LinkedHashMap;
@@ -29,14 +31,23 @@ public class LabHilGateway {
     @Value("${hil.network-screen.port:8888}") private int networkPort;
     @Value("${hil.plc-output.enabled:false}") private boolean plcOutputEnabled;
     @Value("${hil.plc-output.frame-format:documented-26}") private String plcOutputFrameFormat;
+    @Value("${hil.vision.enabled:false}") private boolean visionEnabled;
+    @Value("${hil.vision.host:192.168.100.124}") private String visionHost;
+    @Value("${hil.vision.port:8303}") private int visionPort;
 
     private final TcpWriter signalWriter = new TcpWriter("signal-screen");
     private final TcpWriter networkWriter = new TcpWriter("network-screen");
     private final HilChannelStatus plcStatus = new HilChannelStatus("plc-output", "existing 704 sockets");
+    private final HilChannelStatus visionStatus = new HilChannelStatus("vision", "UDP");
+    private final VisionStateProvider visionStateProvider;
+    private DatagramSocket visionSocket;
+    private int visionCounter;
 
-    public LabHilGateway(HilSnapshotProvider snapshots, Protocol704Service plcService) {
+    public LabHilGateway(HilSnapshotProvider snapshots, Protocol704Service plcService,
+                         VisionStateProvider visionStateProvider) {
         this.snapshots = snapshots;
         this.plcService = plcService;
+        this.visionStateProvider = visionStateProvider;
     }
 
     /** Teacher screens are display channels; 200 ms is adequate and matches the verified demo. */
@@ -50,6 +61,13 @@ public class LabHilGateway {
         if (networkEnabled) networkWriter.send(networkHost, networkPort,
                 TeacherDeviceFrameCodec.networkScreen(snapshot), connectTimeoutMs);
         else networkWriter.disable();
+    }
+
+    /** Vision 1.3 requires a 100 ms UDP exchange, independent from screen refresh. */
+    @Scheduled(fixedRateString = "${hil.vision.period-ms:100}")
+    public void publishVision() {
+        if (!enabled) return;
+        publishVisionFrame(snapshots.snapshot(trainId));
     }
 
     /** PLC output is an on-change/on-demand contract. Send at 500 ms only when explicitly enabled. */
@@ -88,9 +106,8 @@ public class LabHilGateway {
         result.put("signalScreen", signalWriter.status(signalHost, signalPort, enabled && signalEnabled));
         result.put("networkScreen", networkWriter.status(networkHost, networkPort, enabled && networkEnabled));
         result.put("plcOutput", plcStatus);
-        result.put("vision", Map.of(
-                "enabled", false,
-                "reason", "UDP port and edge/signal ordering must be confirmed on the .124 laboratory host"));
+        visionStatus.setEnabled(enabled && visionEnabled);
+        result.put("vision", visionStatus);
         return result;
     }
 
@@ -98,6 +115,38 @@ public class LabHilGateway {
     public void shutdown() {
         signalWriter.close();
         networkWriter.close();
+        closeVision();
+    }
+
+    private synchronized void publishVisionFrame(HilVehicleSnapshot snapshot) {
+        visionStatus.setEnabled(enabled && visionEnabled);
+        if (!enabled || !visionEnabled) {
+            visionStatus.setConnected(false);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        try {
+            byte[] frame = TeacherDeviceFrameCodec.vision(snapshot, ++visionCounter,
+                    visionStateProvider.signalStates(), visionStateProvider.switchStates(),
+                    snapshots.otherTrains(trainId));
+            if (visionSocket == null || visionSocket.isClosed()) visionSocket = new DatagramSocket();
+            visionSocket.send(new DatagramPacket(frame, frame.length,
+                    new InetSocketAddress(visionHost, visionPort)));
+            visionStatus.setConnected(true);
+            visionStatus.incrementFramesSent();
+            visionStatus.addBytesSent(frame.length);
+            visionStatus.setLastSendTime(now);
+            visionStatus.setLastError(null);
+        } catch (Exception e) {
+            visionStatus.setConnected(false);
+            visionStatus.setLastError(e.getClass().getSimpleName() + ": " + e.getMessage());
+            closeVision();
+        }
+    }
+
+    private synchronized void closeVision() {
+        if (visionSocket != null) visionSocket.close();
+        visionSocket = null;
     }
 
     private static final class TcpWriter {

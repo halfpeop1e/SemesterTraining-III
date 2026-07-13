@@ -69,7 +69,7 @@ public final class Protocol704OutputService {
     }
 
     /**
-     * Send HMI 572B frame via TCP OutputStream. Caller manages the socket lifecycle.
+     * Send the laboratory-corrected HMI 570B frame via TCP OutputStream.
      *
      * @return the encoded HMI frame bytes (even if send fails)
      */
@@ -80,7 +80,7 @@ public final class Protocol704OutputService {
     }
 
     /**
-     * Send MMI 66B frame via TCP OutputStream. Caller manages the socket lifecycle.
+     * Send the laboratory-corrected MMI 68B frame via TCP OutputStream.
      *
      * @return the encoded MMI frame bytes (even if send fails)
      */

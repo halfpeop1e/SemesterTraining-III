@@ -125,6 +125,18 @@ public class Protocol704FrameParserTest {
     }
 
     @Test
+    public void normalizesObservedLaboratoryBrakeWord() {
+        // 0x9D07 was captured from the physical desk while service braking.
+        // The low byte follows the brake handle rather than being a literal
+        // unsigned 0-100 WORD as the document implies.
+        byte[] frame = buildValidPlcFrame(0x0002, 0, 0x9D07, false);
+        MappedControlCommand cmd = Protocol704FrameParser.parseFrame(frame).getMappedCommand();
+        assertEquals("brake", cmd.getCommand());
+        assertEquals(7, cmd.getLevelPercent());
+        assertEquals(0x9D07, cmd.getBrakeLevelRaw());
+    }
+
+    @Test
     public void testEmergencyBrakeFromButton() {
         byte[] frame = buildValidPlcFrame(0x0000, 0, 0, true);
         Parsed704Frame result = Protocol704FrameParser.parseFrame(frame);
@@ -207,7 +219,7 @@ public class Protocol704FrameParserTest {
 
         byte[] ato = buildValidPlcFrame(0, 0, 0, false);
         ato[34] = (byte) 0x80;
-        assertEquals("RESUME_ATO", Protocol704FrameParser.parseFrame(ato).getMappedCommand().getCommand());
+        assertEquals("ATO_START", Protocol704FrameParser.parseFrame(ato).getMappedCommand().getCommand());
 
         byte[] depart = buildValidPlcFrame(0, 0, 0, false);
         depart[34] = 0x10;
@@ -239,8 +251,9 @@ public class Protocol704FrameParserTest {
         assertEquals(1, result.getFields().get("direction_handle"));
         assertEquals(1, result.getFields().get("master_handle"));
         assertEquals(20, result.getFields().get("traction_level_percent_raw"));
-        // Local policy maps the captured ATO-start bit to an ATO resume request.
-        assertEquals("RESUME_ATO", result.getMappedCommand().getCommand());
+        // The desk hardware interlocks the two green buttons before emitting
+        // this documented single PLC ATO-start bit.
+        assertEquals("ATO_START", result.getMappedCommand().getCommand());
     }
 
     private static byte[] hex(String value) {

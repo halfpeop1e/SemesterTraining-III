@@ -24,12 +24,21 @@ vehicle:
   protocol704:
     host: 192.168.100.123
     ports: 8001,8002,8003
+    # The teacher PLC mirrors the same 46B desk frame on all three sockets.
+    # Read every port for diagnosis, but only this socket is allowed to drive
+    # the simulated train so mirrored frames cannot overwrite one lifecycle.
+    control-port: 8001
     connect-timeout-ms: 3000
     read-timeout-ms: 1000
     auto-start: false
     # After real PLC control has started, stale input must not leave traction latched.
     fail-safe-on-stale: true
     stale-input-ms: 1500
+    # Input-only is the default for a real driver desk. Enable plc-output when
+    # the signal system should drive ATO button lamps on the physical desk.
+    plc-output-enabled: true
+    hmi-output-enabled: false
+    mmi-output-enabled: false
 
 # Hardware-in-the-loop output gateway. Keep disabled outside the laboratory.
 hil:
@@ -54,3 +63,10 @@ hil:
     frame-format: documented-26
     # capture-variant-28 is only for controlled comparison with a third-party
     # capture. Do not enable it without teacher approval and live confirmation.
+  vision:
+    # Vision 1.3 TCMS2VIEW, documented 128-byte main-line base packet.
+    # The captured 154-byte packet is a separate 92-signal/40-switch variant.
+    enabled: false
+    host: 192.168.100.124
+    port: 8303
+    period-ms: 100

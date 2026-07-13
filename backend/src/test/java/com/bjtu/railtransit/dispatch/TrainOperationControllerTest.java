@@ -3,6 +3,7 @@ package com.bjtu.railtransit.dispatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.bjtu.railtransit.domain.model.StatusReport;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -76,5 +77,29 @@ class TrainOperationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.removed").value(1));
+    }
+
+    @Test
+    void deletedTrainDoesNotReappearFromStaleOnboardStatus() throws Exception {
+        mockMvc.perform(post("/api/dispatch/trains")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"trainId\":\"T99\",\"headLinkId\":17,\"direction\":\"UP\",\"stationId\":1}"))
+                .andExpect(jsonPath("$.success").value(true));
+
+        mockMvc.perform(delete("/api/dispatch/trains/T99"))
+                .andExpect(jsonPath("$.success").value(true));
+
+        StatusReport staleReport = new StatusReport();
+        staleReport.setTrainId("T99");
+        staleReport.setDirection("UP");
+        staleReport.setPositionMeters(500.0);
+        staleReport.setSpeedKmh(30.0);
+        simulationService.acceptOnboardReport(staleReport);
+
+        org.junit.jupiter.api.Assertions.assertNull(simulationService.findTrain("T99"));
+
+        simulationService.restoreTrain("T99");
+        simulationService.acceptOnboardReport(staleReport);
+        org.junit.jupiter.api.Assertions.assertNotNull(simulationService.findTrain("T99"));
     }
 }

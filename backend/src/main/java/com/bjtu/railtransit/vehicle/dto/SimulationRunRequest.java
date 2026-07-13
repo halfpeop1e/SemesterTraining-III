@@ -34,6 +34,13 @@ public class SimulationRunRequest {
      * simulations must remain independent of the 704 PLC lifecycle.
      */
     private boolean hardwareControlEnabled;
+    /**
+     * Laboratory demonstration convenience only. When enabled, the driver-desk
+     * ATO button is the departure action after the required door cycle, without
+     * an additional dispatch-page confirmation. This never sends a wayside
+     * authority command to physical equipment.
+     */
+    private boolean labAutoDepartureEnabled;
 
     public SimulationRunRequest() {
     }
@@ -63,6 +70,10 @@ public class SimulationRunRequest {
     public boolean isHardwareControlEnabled() { return hardwareControlEnabled; }
     public void setHardwareControlEnabled(boolean hardwareControlEnabled) {
         this.hardwareControlEnabled = hardwareControlEnabled;
+    }
+    public boolean isLabAutoDepartureEnabled() { return labAutoDepartureEnabled; }
+    public void setLabAutoDepartureEnabled(boolean labAutoDepartureEnabled) {
+        this.labAutoDepartureEnabled = labAutoDepartureEnabled;
     }
 
     /** 取出有效的起始站 id，null 时返回默认值 1。 */

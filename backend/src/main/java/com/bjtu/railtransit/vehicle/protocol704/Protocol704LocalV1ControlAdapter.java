@@ -25,7 +25,7 @@ final class Protocol704LocalV1ControlAdapter {
             case "emergency_brake" -> withDirection(new ControlCommand(
                     "emergency_brake", mapped.getTargetDecel(), mapped.getLevelPercent()), mapped.getDirection());
             case "coast" -> withDirection(new ControlCommand("coast", 0.0, 0.0), mapped.getDirection());
-            case "SET_MANUAL", "RESUME_ATO", "DEPART_CONFIRM" ->
+            case "SET_MANUAL", "RESUME_ATO", "ATO_START", "DEPART_CONFIRM" ->
                     Optional.of(new ControlCommand(mapped.getCommand(), 0.0, 0.0));
             default -> Optional.empty();
         };

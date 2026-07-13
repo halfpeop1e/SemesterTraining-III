@@ -340,7 +340,9 @@ public class SignalController {
      */
     @PostMapping("/report/status")
     public ApiResponse<String> reportStatus(@RequestBody StatusReport report) {
-        if (statusFusion != null) {
+        if (simulationService != null) {
+            simulationService.acceptOnboardReport(report);
+        } else if (statusFusion != null) {
             statusFusion.accept(report);
         }
         return ApiResponse.ok("signal system received status", report.getTrainId());

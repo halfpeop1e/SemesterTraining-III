@@ -7,6 +7,7 @@ import com.bjtu.railtransit.energy.TractionPowerSupplyService;
 import com.bjtu.railtransit.energy.TrainNetworkService;
 import com.bjtu.railtransit.signal.service.MovementAuthorityRegistry;
 import com.bjtu.railtransit.signal.service.SignalCycleService;
+import com.bjtu.railtransit.signal.service.SignalPlcDepartureService;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -51,10 +52,17 @@ public class SimulationService {
     private final SimulationWebSocketHandler webSocketHandler;
     private final TractionPowerSupplyService powerSupply;
     private final TrainNetworkService networkService;
+    private final SignalPlcDepartureService signalPlcDepartureService;
 
     private boolean simulationRunning = false;
     private double simulationTimeSeconds = 0;
     private final Map<String, TrainState> trains = new LinkedHashMap<>();
+    /**
+     * Train IDs deliberately taken offline from the signal page.  Without this
+     * guard a still-open onboard browser could recreate a deleted train through
+     * its next status report.
+     */
+    private final Set<String> offlinedTrainIds = new LinkedHashSet<>();
     /** Last StatusFusion revision consumed for each onboard-driven train. */
     private final Map<String, Long> fusedOnboardReportRevisions = new LinkedHashMap<>();
     /**
@@ -122,7 +130,8 @@ public class SimulationService {
             BlendingBrakeService blendingBrakeService,
             SimulationWebSocketHandler webSocketHandler,
             TractionPowerSupplyService powerSupply,
-            TrainNetworkService networkService) {
+            TrainNetworkService networkService,
+            SignalPlcDepartureService signalPlcDepartureService) {
         this.lineDataService = lineDataService;
         this.dispatchEngine = dispatchEngine;
         this.energyOptimizer = energyOptimizer;
@@ -138,6 +147,7 @@ public class SimulationService {
         this.webSocketHandler = webSocketHandler;
         this.powerSupply = powerSupply;
         this.networkService = networkService;
+        this.signalPlcDepartureService = signalPlcDepartureService;
     }
 
     // ================================================================
@@ -154,6 +164,7 @@ public class SimulationService {
         simulationTimeSeconds = 0;
         simulationRunning = true;
         trains.clear();
+        offlinedTrainIds.clear();
         activeCommands.clear();
         commandLog.clear();
         delayEventLog.clear();
@@ -272,10 +283,23 @@ public class SimulationService {
         return trains.get(trainId);
     }
 
+    /** Snapshot of active train IDs for coordinated operational offlining. */
+    public synchronized List<String> getTrainIds() {
+        return new ArrayList<>(trains.keySet());
+    }
+
+    /** Explicit user action starts a new lifecycle for a previously offlined train ID. */
+    public synchronized void restoreTrain(String trainId) {
+        if (trainId != null && !trainId.isBlank()) {
+            offlinedTrainIds.remove(trainId);
+        }
+    }
+
     public synchronized TrainState addTrain(String trainId, int headLinkId, String direction,
                                             int stationId, String routePattern) {
         if (trainId == null || trainId.isBlank()) throw new IllegalArgumentException("trainId 不能为空");
         if (trains.containsKey(trainId)) throw new IllegalStateException("列车已存在: " + trainId);
+        offlinedTrainIds.remove(trainId);
         if (lineProfile == null) lineProfile = lineDataService.getLineProfile();
         List<LineProfile.Station> stations = lineProfile.getStations();
         int stationIndex = Math.max(0, Math.min(stations.size() - 1, stationId - 1));
@@ -325,6 +349,7 @@ public class SimulationService {
     public synchronized TrainState removeTrain(String trainId) {
         TrainState removed = trains.remove(trainId);
         if (removed == null) throw new NoSuchElementException("列车不存在: " + trainId);
+        offlinedTrainIds.add(trainId);
         consistMap.remove(trainId);
         tractionStates.remove(trainId);
         brakeStates.remove(trainId);
@@ -332,6 +357,9 @@ public class SimulationService {
         fusedOnboardReportRevisions.remove(trainId);
         movementAuthorityRegistry.remove(trainId);
         statusFusion.remove(trainId);
+        if (dispatchEngine.getTimetable() != null) {
+            dispatchEngine.getTimetable().remove(trainId);
+        }
         broadcastCurrentSnapshot();
         return removed;
     }
@@ -358,6 +386,12 @@ public class SimulationService {
      * so the signal topology and onboard page display the same train state.
      */
     public synchronized void acceptOnboardReport(StatusReport report) {
+        if (report == null || report.getTrainId() == null || report.getTrainId().isBlank()) {
+            throw new IllegalArgumentException("trainId is required");
+        }
+        if (offlinedTrainIds.contains(report.getTrainId())) {
+            return;
+        }
         statusFusion.accept(report);
         if (lineProfile == null) {
             lineProfile = lineDataService.getLineProfile();
@@ -387,6 +421,9 @@ public class SimulationService {
         // ── 先处理 statusFusion 中的新上报，动态创建未注册的列车 ──
         for (StatusReport report : statusFusion.reports()) {
             String tid = report.getTrainId();
+            if (offlinedTrainIds.contains(tid)) {
+                continue;
+            }
             if (trains.containsKey(tid))
                 continue; // 已有列车，走下方更新逻辑
 
@@ -608,6 +645,7 @@ public class SimulationService {
                     // 通过CommandBus下发DEPART指令，HMI通过 /api/onboard/{trainId}/snapshot 获取
                     integrationCommandBus.issue(tid, "DEPART", 0, "调度授权发车",
                             100, "ATS", simulationTimeSeconds);
+                    signalPlcDepartureService.onDepartureAuthorized(tid);
                     train.setDelaySeconds(Math.max(0, simulationTimeSeconds - train.getPlannedDepartureFromDepot()));
                 }
                 continue;
@@ -708,6 +746,7 @@ public class SimulationService {
             integrationCommandBus.issue(trainId, "DEPART", 0, reason,
                     100, "ATS", simulationTimeSeconds);
         }
+        signalPlcDepartureService.onDepartureAuthorized(trainId);
     }
 
     private void removeDepartCommand(String trainId) {
@@ -2649,6 +2688,7 @@ public class SimulationService {
         simulationRunning = false;
         simulationTimeSeconds = 0;
         trains.clear();
+        offlinedTrainIds.clear();
         fusedOnboardReportRevisions.clear();
         lastDepartureAuthorizationByDirection.clear();
         activeCommands.clear();

@@ -16,7 +16,8 @@ import java.time.ZoneId;
  */
 public final class Protocol704HmiEncoder {
 
-    public static final int FRAME_LENGTH = 572;
+    /** Real 8888 TCP payload confirmed by the laboratory discrepancy note. */
+    public static final int FRAME_LENGTH = 570;
     /** Header size: identify(4)+totalLen(2)+dataLen(2)+timestamp(8)+verify(2)+verifyCode(2)+protocolID(2)+msgID(2) = 24 */
     public static final int HEADER_LENGTH = 24;
 
@@ -33,9 +34,9 @@ public final class Protocol704HmiEncoder {
         // ── frame header (bytes 0-23) per Table 22 ──
         // 0-3: _uIdentify wire 55 AA 55 AA
         bb.putInt(0, 0xAA55AA55);
-        // 4-5: _uTotalLen = 572
+        // 4-5: _uTotalLen = 570
         bb.putShort(4, (short) FRAME_LENGTH);
-        // 6-7: _uDataLen = 572 - 24 = 548
+        // 6-7: _uDataLen = 570 - 24 = 546
         bb.putShort(6, (short) (FRAME_LENGTH - HEADER_LENGTH));
         // 8-15: _timestamp DDWORD (ms epoch)
         long epochMs = ts.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
@@ -106,7 +107,7 @@ public final class Protocol704HmiEncoder {
         }
         // … remaining fields (90-571) zero-filled
         // 570-571: _nTrainNo WORD (local-v1: 1)
-        bb.putShort(570, (short) 1);
+        bb.putShort(568, (short) 1);
 
         return frame;
     }
