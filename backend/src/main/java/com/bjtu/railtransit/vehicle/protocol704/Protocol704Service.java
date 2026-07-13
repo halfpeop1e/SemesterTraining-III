@@ -122,6 +122,8 @@ public class Protocol704Service {
             status.setHost(defaultHost);
             status.setPorts(new ArrayList<>(ports));
             status.setConnected(false);
+            status.setReceivedValidFrame(false);
+            status.setLastValidFrameTime(0);
             status.setStartTime(System.currentTimeMillis());
             status.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             status.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
@@ -160,7 +162,10 @@ public class Protocol704Service {
             for (PortClient c : clients.values()) c.close();
         }
         Protocol704Status status = statusMap.get(trainId);
-        if (status != null) status.setConnected(false);
+        if (status != null) {
+            status.setConnected(false);
+            status.setReceivedValidFrame(false);
+        }
         log.info("704 protocol service stopped for train {}", trainId);
     }
 
@@ -421,11 +426,13 @@ public class Protocol704Service {
         }
 
         private void updateOverallConnected() {
-            boolean any = false;
+            boolean anyConnected = false;
             for (PortConnectionStatus p : status.getPortStatuses().values()) {
-                if (p.isConnected()) any = true;
+                if (p.isConnected()) anyConnected = true;
             }
-            status.setConnected(any);
+            // 仅有 TCP 连接不够，必须收到至少一帧有效 PLC 数据才算连通
+            boolean dataVerified = status.isReceivedValidFrame();
+            status.setConnected(anyConnected && dataVerified);
         }
     }
 
