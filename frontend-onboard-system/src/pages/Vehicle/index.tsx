@@ -12,7 +12,7 @@ import {
   resetVehicleSimulation,
   runVehicleSimulation,
 } from "../../api/vehicle";
-import { disconnectProtocol704, resetProtocol704 } from "../../api/protocol704";
+import { disconnectProtocol704, getHilGatewayStatus, resetProtocol704 } from "../../api/protocol704";
 import type {
   DrivingMode,
   SafetyEvent,
@@ -178,6 +178,57 @@ function Vehicle() {
   // 用 ref 跟踪最新 instances，供 unmount cleanup 使用
   const instancesRef = useRef(instances);
   instancesRef.current = instances;
+  const adoptedLaboratoryTrainRef = useRef<string | null>(null);
+
+  // A laboratory train may be created from the signal page first. Adopt the
+  // same backend-bound ID here instead of making the user create a second OB
+  // instance that is unrelated to the physical driver desk.
+  useEffect(() => {
+    let cancelled = false;
+    const adoptLaboratoryTrain = async () => {
+      try {
+        const hil = await getHilGatewayStatus();
+        const trainId = hil.enabled ? hil.trainId?.trim() : '';
+        if (!trainId || cancelled) return;
+        setInstances((previous) => {
+          const next = new Map(previous);
+          const existing = next.get(trainId);
+          if (existing) {
+            next.set(trainId, {
+              ...existing,
+              controlSourceMode: "LAB_DRIVER_DESK",
+              status: existing.status === "idle" ? "playing" : existing.status,
+              isPaused: true,
+            });
+          } else {
+            next.set(trainId, {
+              ...createInstance(trainId),
+              status: "playing",
+              isPaused: true,
+              controlSourceMode: "LAB_DRIVER_DESK",
+              fromStationId: 1,
+              toStationId: 13,
+              fromStationIdRef: 1,
+              toStationIdRef: 13,
+            });
+          }
+          return next;
+        });
+        if (adoptedLaboratoryTrainRef.current !== trainId) {
+          adoptedLaboratoryTrainRef.current = trainId;
+          setActiveTrainId(trainId);
+        }
+      } catch {
+        // The standard software-simulation page remains usable without HIL.
+      }
+    };
+    void adoptLaboratoryTrain();
+    const timer = window.setInterval(() => void adoptLaboratoryTrain(), 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // ── 每实例可变引用（render 时同步，handler 中通过此 ref 获取最新值）──
   const instanceRefs = useRef<
@@ -312,10 +363,10 @@ function Vehicle() {
     });
   }, []);
 
-  // ── 删除实例（至少保留一个） ──
+  // ── 删除实例。总控下线可删除最后一个实例，保留空页面供重新加车。 ──
   const removeInstance = useCallback(
-    (trainId: string) => {
-      if (instances.size <= 1) return;
+    (trainId: string, allowEmpty = false) => {
+      if (instances.size <= 1 && !allowEmpty) return;
       const inst = instances.get(trainId);
       if (inst) stopTimer(inst);
       void disconnectProtocol704(trainId).catch(() => undefined);
@@ -324,6 +375,7 @@ function Vehicle() {
         next.delete(trainId);
         return next;
       });
+      setDisplayState((state) => (state?.trainId === trainId ? null : state));
       if (activeTrainId === trainId) {
         const remaining = Array.from(instances.keys()).filter(
           (id) => id !== trainId,
@@ -332,6 +384,13 @@ function Vehicle() {
       }
     },
     [instances, activeTrainId, stopTimer],
+  );
+
+  const handleTrainOfflined = useCallback(
+    (trainId: string) => {
+      removeInstance(trainId, true);
+    },
+    [removeInstance],
   );
 
   // ── 组件卸载清理所有定时器 ──
@@ -410,6 +469,7 @@ function Vehicle() {
           fromStationId: inst.fromStationId,
           toStationId: inst.toStationId,
           hardwareControlEnabled: inst.controlSourceMode === "LAB_DRIVER_DESK",
+          labAutoDepartureEnabled: inst.controlSourceMode === "LAB_DRIVER_DESK",
         });
         if (!simulationResult.states || simulationResult.states.length === 0) {
           throw new Error("后端返回的仿真结果不包含任何 states 数据");
@@ -429,6 +489,10 @@ function Vehicle() {
           status: "playing",
           frameIndex: 0,
           isPaused: cur.controlSourceMode === "LAB_DRIVER_DESK",
+          // Desk mode: physical ATO-start bit is the only departure action.
+          drivingMode:
+            "ato",
+          departureAuthorized: cur.controlSourceMode === "LAB_DRIVER_DESK",
         }));
       } catch (err) {
         updateInstance(trainId, (cur) => ({
@@ -896,7 +960,17 @@ function Vehicle() {
   if (!activeInstance) {
     return (
       <div className="vehicle-page">
-        <div className="vehicle-empty">暂无车载实例，请点击"＋"添加</div>
+        <div className="vehicle-empty flex flex-col items-center gap-3">
+          <span>暂无车载实例</span>
+          <button
+            type="button"
+            className="vehicle-tab-add"
+            onClick={addInstance}
+            title="添加新车载实例"
+          >
+            ＋ 添加车辆
+          </button>
+        </div>
       </div>
     );
   }
@@ -1057,7 +1131,9 @@ function Vehicle() {
               ? "准备中..."
               : ai.status === "finished" || ai.status === "error"
                 ? "重新上线"
-                : "上线并等待发车"}
+                : labDriverDeskMode
+                  ? "上线并启用手柄"
+                  : "上线并等待发车"}
           </button>
           <button
             className="vehicle-secondary-btn"
@@ -1065,8 +1141,10 @@ function Vehicle() {
             disabled={labDriverDeskMode || !isPlaying || !ai.departureAuthorized}
             type="button"
           >
-            {!ai.departureAuthorized && isPlaying
-              ? "等待调度发车"
+            {labDriverDeskMode
+              ? "由实体手柄控制"
+              : !ai.departureAuthorized && isPlaying
+                ? "等待调度发车"
               : ai.isPaused
                 ? "继续"
                 : "暂停"}
@@ -1194,6 +1272,7 @@ function Vehicle() {
               onManualRejected={() => {
                 console.log("人工接管被中控拒绝");
               }}
+              onTrainOfflined={handleTrainOfflined}
             />
           </div>
         );
@@ -1209,6 +1288,14 @@ function Vehicle() {
             enabled={instances.get(tid)?.controlSourceMode === "LAB_DRIVER_DESK"}
             onError={(message) => {
               updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
+            }}
+            onRealtimeState={(state, mode, departureState) => {
+              setDisplayState({ ...state, trainId: tid });
+              updateInstance(tid, (cur) => ({
+                ...cur,
+                drivingMode: mode.toLowerCase() as DrivingMode,
+                departureAuthorized: departureState === 'RUNNING',
+              }));
             }}
             getCurrentState={() => {
               const refs = instanceRefs.current.get(tid);

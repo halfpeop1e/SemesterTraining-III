@@ -23,6 +23,8 @@ interface Protocol704PanelProps {
     latched: boolean,
     result?: SimulationResult,
   ) => void;
+  /** Continuous backend state used by the physical-desk ATO timeline. */
+  onRealtimeState?: (state: TrainState, mode: string, departureState?: string) => void;
   /** 获取当前 ATO 播放状态，测试帧发送前同步到 Bridge，使 EB 从真实当前位置开始。 */
   getCurrentState?: () => SimulationControlRequest | null;
 }
@@ -37,6 +39,7 @@ export default function Protocol704Panel({
   enabled,
   onError,
   onExecutedState,
+  onRealtimeState,
   getCurrentState,
 }: Protocol704PanelProps) {
   const [status, setStatus] = useState<Protocol704Status | null>(null);
@@ -84,6 +87,17 @@ export default function Protocol704Panel({
     try {
       const next = await getProtocol704Status(trainId);
       setStatus(next);
+      const realtime = next.realtimeVehicleState;
+      if (realtime) {
+        onRealtimeState?.({
+          trainId,
+          time: realtime.lastUpdateTime / 1000,
+          position: realtime.positionM,
+          velocity: realtime.velocityMs,
+          acceleration: realtime.accelerationMs2,
+          phase: realtime.phase ?? (realtime.velocityMs > 0.05 ? 'TRACTION' : 'STOPPED'),
+        }, realtime.mode, realtime.departureState ?? next.lastCommandLifecycle?.departureState);
+      }
       processLifecycle(next, false);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
@@ -103,6 +117,9 @@ export default function Protocol704Panel({
     }
     firstRefreshRef.current = true;
     lastProcessedCommandIdRef.current = null;
+    // The signal-page quick start has already opened the PLC socket. Poll it
+    // immediately so the onboard HMI can display that same physical train.
+    setPolling(true);
     void refresh();
   }, [trainId, enabled]);
 
@@ -122,6 +139,11 @@ export default function Protocol704Panel({
   const simulationReady = status?.simulationReady ?? false;
   const lastMappedCommand = status?.lastMappedCommand;
   const realtimeState = status?.realtimeVehicleState;
+  const plcInputs = status?.lastParsedFrame?.fields ?? {};
+  const inputText = (field: string, active: string, inactive: string) =>
+    plcInputs[field] === true ? active : inactive;
+  const directionText = String(plcInputs.direction_desc ?? plcInputs.direction_semantic ?? '-');
+  const masterHandle = plcInputs.master_handle ?? '-';
 
   const handleConnect = async () => {
     if (!enabled) return;
@@ -362,6 +384,13 @@ export default function Protocol704Panel({
                 <div className="vehicle-704-parse-item"><span>最近合法帧</span><strong>{formatTime(status?.lastValidFrameTime)}</strong></div>
                 <div className="vehicle-704-parse-item"><span>命令生命周期</span><strong>{status?.lastCommandLifecycle?.status ?? '-'}</strong></div>
                 <div className="vehicle-704-parse-item"><span>拒绝/失败原因</span><strong>{status?.lastCommandLifecycle?.rejectionReason ?? status?.lastCommandLifecycle?.executionError ?? '-'}</strong></div>
+              </div>
+              <div className="vehicle-704-section__title">实体司机台输入（按下时应立即变化）</div>
+              <div className="vehicle-704-parse-grid">
+                <div className="vehicle-704-parse-item"><span>钥匙</span><strong>{inputText('key_switch_on', '已开', '未开')}</strong></div>
+                <div className="vehicle-704-parse-item"><span>方向手柄</span><strong>{directionText}</strong></div>
+                <div className="vehicle-704-parse-item"><span>主手柄</span><strong>{String(masterHandle)}</strong></div>
+                <div className="vehicle-704-parse-item"><span>ATO 启动位</span><strong>{inputText('ato_start_btn', '已触发', '未触发')}</strong></div>
               </div>
               {status?.activeBinding && <div className="vehicle-704-test-warning">绑定：{status.activeBinding}</div>}
             </div>

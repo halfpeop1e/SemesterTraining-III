@@ -139,6 +139,8 @@ export interface SimulationRunRequest {
   dwellTimeSeconds?: number;
   /** Enable only when this instance is deliberately bound to the laboratory PLC desk. */
   hardwareControlEnabled?: boolean;
+  /** Lab auto-departure: ATO button triggers departure after door cycle, no dispatch confirmation needed. */
+  labAutoDepartureEnabled?: boolean;
 }
 
 /** 驾驶模式（本轮新增）。 */

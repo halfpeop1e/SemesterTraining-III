@@ -9,6 +9,7 @@ import type {
 } from '../types/vehicle';
 
 const API_BASE = '/api';
+const VEHICLE_RUN_TIMEOUT_MS = 15_000;
 
 export interface DispatchCommand {
   commandId: string; trainId: string; commandType: string; targetValue: number;
@@ -58,15 +59,27 @@ export const reportOnboardEvent = (payload: object) =>
 export async function runVehicleSimulation(
   request?: SimulationRunRequest,
 ): Promise<SimulationResult> {
-  const res = await fetch(`${API_BASE}/vehicle/simulation/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: request ? JSON.stringify(request) : undefined,
-  });
-  if (!res.ok) throw new Error(`车辆仿真接口调用失败: ${res.status}`);
-  const body: SimulationRunResponse = await res.json();
-  if (!body.success) throw new Error(body.message || '车辆仿真接口返回失败');
-  return body.data;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), VEHICLE_RUN_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}/vehicle/simulation/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: request ? JSON.stringify(request) : undefined,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`车辆仿真接口调用失败: ${res.status}`);
+    const body: SimulationRunResponse = await res.json();
+    if (!body.success) throw new Error(body.message || '车辆仿真接口返回失败');
+    return body.data;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('车辆上线等待后端响应超过 15 秒。请确认后端已启动，再重新上线。');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 export interface ManualRequestPending {
