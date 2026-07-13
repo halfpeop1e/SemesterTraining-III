@@ -9,7 +9,7 @@
   gap: var(--space-sm);
   height: 100%;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* ── 多实例标签栏 ── */
@@ -715,13 +715,13 @@
    右侧面板 Tab 切换
    ═══════════════════════════════════════════════ */
 .vehicle-right-panel {
-   display: flex;
-   flex-direction: column;
-   gap: var(--space-sm);
-   min-width: 0;
-   min-height: 0;
-+  overflow: hidden;
- }
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 
 .vehicle-right-tabs {
   display: flex;
