@@ -1711,10 +1711,57 @@ class VehicleSimulationServiceTest {
     }
 
     @Test
+    void realStationRunForceAndVelocityProfilesAreOperationallyPlausible() {
+        LineProfile line = loader.buildLineProfile(1, 2);
+        ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
+        SimulationResult result = service.run(scenario);
+        List<TrainState> states = result.getStates();
+
+        TrainState previous = null;
+        for (TrainState state : states) {
+            assertTrue(state.getBrakeForce() >= 0.0,
+                    "brakeForce must not be negative at time=" + state.getTime()
+                            + ", actual=" + state.getBrakeForce());
+            assertTrue(state.getTractionForce() >= 0.0,
+                    "tractionForce must not be negative at time=" + state.getTime()
+                            + ", actual=" + state.getTractionForce());
+
+            if (previous != null) {
+                double dt = state.getTime() - previous.getTime();
+                double brakeRate = Math.abs(state.getBrakeForce() - previous.getBrakeForce()) / dt;
+                assertTrue(brakeRate <= 80_000.0 + 1.0e-6,
+                        "brakeForce changes too abruptly between time=" + previous.getTime()
+                                + " and " + state.getTime()
+                                + ", rate=" + brakeRate + " N/s");
+
+                double tractionRate = Math.abs(state.getTractionForce() - previous.getTractionForce()) / dt;
+                assertTrue(tractionRate <= 120_000.0 + 1.0e-6,
+                        "tractionForce changes too abruptly between time=" + previous.getTime()
+                                + " and " + state.getTime()
+                                + ", rate=" + tractionRate + " N/s");
+
+                double accelFromVelocity = Math.abs(state.getVelocity() - previous.getVelocity()) / dt;
+                assertTrue(accelFromVelocity <= 1.5 + 1.0e-9,
+                        "velocity changes imply unrealistic acceleration between time=" + previous.getTime()
+                                + " and " + state.getTime()
+                                + ", acceleration=" + accelFromVelocity + " m/s^2");
+            }
+            previous = state;
+        }
+    }
+
+    @Test
     void coastPhase_forcesAreZero() {
         SimulationResult result = service.run(new DemoScenarioProvider().getDemoScenarioWithoutGrade());
+        Double firstCoastTime = null;
         for (TrainState s : result.getStates()) {
             if (s.getPhase() == SimulationPhase.COAST) {
+                if (firstCoastTime == null) {
+                    firstCoastTime = s.getTime();
+                }
+                if (s.getTime() - firstCoastTime < 3.0) {
+                    continue;
+                }
                 assertEquals(0.0, s.getTractionForce(), 1e-9,
                         "惰行阶段牵引力应为 0");
                 assertEquals(0.0, s.getBrakeForce(), 1e-9,
@@ -1722,6 +1769,7 @@ class VehicleSimulationServiceTest {
                 break;
             }
         }
+        assertNotNull(firstCoastTime);
     }
 
     @Test

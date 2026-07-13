@@ -101,6 +101,49 @@ function describeStopWindowState(stopWindowState: string | undefined) {
   return STOP_WINDOW_STATE_LABELS[normalized] ?? stopWindowState ?? '未停准 / 故障';
 }
 
+function stationStopToStopResult(stop: StationStop): StopResult {
+  return {
+    targetStopPosition: stop.targetPosition,
+    actualStopPosition: stop.actualPosition,
+    stopError: stop.stopError,
+    success: stop.inWindow,
+    reason: stop.inWindow ? null : 'station stop outside accuracy window',
+    stopWindowState: stop.inWindow
+      ? 'in_window'
+      : (stop.stopError > 0 ? 'overshoot' : 'undershoot'),
+  };
+}
+
+function getLatestPassedStationStop(
+  currentPosition: number,
+  stationStops: StationStop[] | undefined,
+): StationStop | null {
+  if (!stationStops || stationStops.length === 0) {
+    return null;
+  }
+
+  let latest: StationStop | null = null;
+  for (const stop of stationStops) {
+    if (stop.actualPosition > 0 && stop.actualPosition <= currentPosition + 1) {
+      latest = stop;
+    }
+  }
+  return latest;
+}
+
+function getDisplayedStopResult(
+  currentPosition: number,
+  status: DriverCabViewProps['status'],
+  stopResult: StopResult | null,
+  stationStops: StationStop[] | undefined,
+): StopResult | null {
+  const latestStop = getLatestPassedStationStop(currentPosition, stationStops);
+  if (latestStop) {
+    return stationStopToStopResult(latestStop);
+  }
+  return status === 'finished' ? stopResult : null;
+}
+
 function formatDistance(value: number) {
   if (Math.abs(value) < 0.05) {
     return '0.0';
@@ -643,11 +686,14 @@ function drawCabViewCanvas(
   const { distance: distanceToTarget, nextStopName } = computeDistanceToNextStop(
     currentPosition, props.targetStopPosition, props.stationStops,
   );
+  const displayedStopResult = getDisplayedStopResult(
+    currentPosition, props.status, props.stopResult, props.stationStops,
+  );
   const isStopped = phase === 'stopped' || phase === 'dwell';
   const isNearStop = Math.abs(distanceToTarget) <= 3;
   if (isStopped || isNearStop) {
     drawStationAndStopTarget(
-      ctx, width, height, distanceToTarget, props.status, props.stopResult,
+      ctx, width, height, distanceToTarget, props.status, displayedStopResult,
       props.currentState?.phase, nextStopName,
     );
   }
@@ -815,8 +861,11 @@ function DriverCabView({
       : speedLimit > 0 && currentVelocity >= speedLimit * 0.9
         ? 'is-near-limit'
         : 'is-normal';
-  const stopWindowState = normalizeStopWindowState(stopResult?.stopWindowState);
-  const stopPanelState = status === 'finished' && stopResult ? stopWindowState : 'pending';
+  const displayedStopResult = getDisplayedStopResult(
+    currentPosition, status, stopResult, stationStops,
+  );
+  const stopWindowState = normalizeStopWindowState(displayedStopResult?.stopWindowState);
+  const stopPanelState = displayedStopResult ? stopWindowState : 'pending';
   const leverMode = currentAcceleration > 0.05 ? 'traction' : currentAcceleration < -0.05 ? 'brake' : 'neutral';
   const tractionLevel = clamp(currentAcceleration / 1.1, 0, 1);
   const brakeLevel = clamp(Math.abs(currentAcceleration) / 1.3, 0, 1);
@@ -1023,13 +1072,13 @@ function DriverCabView({
               <div className="cab-stop-row">
                 <span className="cab-panel-label">停站精度</span>
                 <strong className="cab-stop-value">
-                  {status === 'finished' && stopResult
-                    ? describeStopWindowState(stopResult.stopWindowState)
+                  {displayedStopResult
+                    ? describeStopWindowState(displayedStopResult.stopWindowState)
                     : '待结果'}
                 </strong>
               </div>
-              {status === 'finished' && stopResult && (
-                <small className="cab-stop-error">误差 {stopResult.stopError.toFixed(2)} m</small>
+              {displayedStopResult && (
+                <small className="cab-stop-error">误差 {displayedStopResult.stopError.toFixed(2)} m</small>
               )}
             </div>
 
@@ -1261,3 +1310,4 @@ function DriverCabView({
 }
 
 export default DriverCabView;
+

@@ -48,6 +48,8 @@ public class VehicleSimulationService {
     private static final double KMH_PER_MS = 3.6;
     private static final int SUB_STEPS_PER_SAMPLE = 20;
     private static final int MAX_PREDICTION_STEPS = 20_000;
+    private static final double BRAKE_FORCE_RATE_LIMIT_N_PER_S = 80_000.0;
+    private static final double TRACTION_FORCE_RATE_LIMIT_N_PER_S = 120_000.0;
 
     /**
      * ATO 进站预减速启动阈值：距目标停车点小于此距离时进入预减速阶段。
@@ -426,7 +428,7 @@ public class VehicleSimulationService {
             if (samplePhase == SimulationPhase.TRACTION) {
                 tractionForceN = trainMassKg * (sampleAcceleration + sampleDragDecel);
             } else if (samplePhase == SimulationPhase.BRAKING) {
-                brakeForceN = trainMassKg * (-sampleAcceleration - sampleDragDecel);
+                brakeForceN = Math.max(0.0, trainMassKg * (-sampleAcceleration - sampleDragDecel));
             }
             com.bjtu.railtransit.vehicle.dto.TrainState sampleSt =
                     new com.bjtu.railtransit.vehicle.dto.TrainState(
@@ -439,6 +441,8 @@ public class VehicleSimulationService {
         if (states.isEmpty() || states.get(states.size() - 1).getPhase() != SimulationPhase.STOPPED) {
             throw new IllegalStateException("车辆仿真未在最大步数内收敛到停车状态，请检查演示配置参数");
         }
+
+        smoothForceProfiles(states, dt, totalMotors);
 
         SimulationResult result = buildResult(states, targetStopPosition, speedLimit, dt,
                 brakeTriggerPosition, predictedStopPositionAtTrigger);
@@ -1106,7 +1110,7 @@ public class VehicleSimulationService {
             double tracFN = samplePhase == SimulationPhase.TRACTION
                     ? trainMassKg * (sampleAccel + sampleDrag) : 0.0;
             double brkFN = samplePhase == SimulationPhase.BRAKING
-                    ? trainMassKg * (-sampleAccel - sampleDrag) : 0.0;
+                    ? Math.max(0.0, trainMassKg * (-sampleAccel - sampleDrag)) : 0.0;
             states.add(makeGlobal(sampleT, sampleLocalPos, sampleV, sampleAccel,
                     samplePhase, currentCumulativePos,
                     request.getCurrentState().getAbsolutePosition(),
@@ -1116,6 +1120,8 @@ public class VehicleSimulationService {
         if (states.isEmpty() || states.get(states.size() - 1).getPhase() != SimulationPhase.STOPPED) {
             throw new IllegalStateException("控制续算未在最大步数内收敛到停车状态");
         }
+
+        smoothForceProfiles(states, dt, totalMotors);
 
         com.bjtu.railtransit.vehicle.dto.TrainState lastState = states.get(states.size() - 1);
         double actualCumPos = lastState.getPosition();
@@ -1195,6 +1201,101 @@ public class VehicleSimulationService {
     /**
      * 把多质点编组映射为 TrainState.CarSnapshot 列表（车厢级展示用）。
      */
+    private void smoothForceProfiles(List<com.bjtu.railtransit.vehicle.dto.TrainState> states,
+                                     double sampleDt,
+                                     int totalMotors) {
+        if (states.isEmpty()) {
+            return;
+        }
+
+        com.bjtu.railtransit.vehicle.dto.TrainState previous = states.get(0);
+        previous.setTractionForce(Math.max(0.0, previous.getTractionForce()));
+        previous.setBrakeForce(Math.max(0.0, previous.getBrakeForce()));
+        for (int i = 1; i < states.size(); i++) {
+            com.bjtu.railtransit.vehicle.dto.TrainState current = states.get(i);
+            double dt = Math.max(sampleDt, current.getTime() - previous.getTime());
+
+            double tractionTarget = Math.max(0.0, current.getTractionForce());
+            double brakeTarget = Math.max(0.0, current.getBrakeForce());
+            if (current.getPhase() == SimulationPhase.TRACTION) {
+                brakeTarget = 0.0;
+            } else if (current.getPhase() == SimulationPhase.BRAKING) {
+                tractionTarget = 0.0;
+            } else {
+                tractionTarget = 0.0;
+                brakeTarget = 0.0;
+            }
+
+            current.setTractionForce(stepToward(
+                    previous.getTractionForce(),
+                    tractionTarget,
+                    TRACTION_FORCE_RATE_LIMIT_N_PER_S * dt));
+            current.setBrakeForce(stepToward(
+                    previous.getBrakeForce(),
+                    brakeTarget,
+                    BRAKE_FORCE_RATE_LIMIT_N_PER_S * dt));
+            previous = current;
+        }
+
+        com.bjtu.railtransit.vehicle.dto.TrainState last = states.get(states.size() - 1);
+        while (last.getPhase() == SimulationPhase.STOPPED
+                && (last.getTractionForce() > 0.0 || last.getBrakeForce() > 0.0)) {
+            double nextTraction = stepToward(
+                    last.getTractionForce(),
+                    0.0,
+                    TRACTION_FORCE_RATE_LIMIT_N_PER_S * sampleDt);
+            double nextBrake = Math.max(0.0,
+                    last.getBrakeForce() - BRAKE_FORCE_RATE_LIMIT_N_PER_S * sampleDt);
+            if (nextTraction == last.getTractionForce() && nextBrake == last.getBrakeForce()) {
+                break;
+            }
+            com.bjtu.railtransit.vehicle.dto.TrainState release =
+                    new com.bjtu.railtransit.vehicle.dto.TrainState(
+                            last.getTime() + sampleDt,
+                            last.getPosition(),
+                            0.0,
+                            0.0,
+                            SimulationPhase.STOPPED,
+                            last.getTrainId(),
+                            nextTraction,
+                            nextBrake,
+                            totalMotors);
+            release.setAbsolutePosition(last.getAbsolutePosition());
+            release.setCars(copyTrainStateCarSnapshots(last.getCars()));
+            states.add(release);
+            last = release;
+        }
+    }
+
+    private double stepToward(double current, double target, double maxDelta) {
+        if (target > current) {
+            return Math.min(target, current + maxDelta);
+        }
+        if (target < current) {
+            return Math.max(target, current - maxDelta);
+        }
+        return current;
+    }
+
+    private List<CarSnapshot> copyTrainStateCarSnapshots(List<CarSnapshot> cars) {
+        if (cars == null) {
+            return null;
+        }
+        List<CarSnapshot> copied = new ArrayList<>(cars.size());
+        for (CarSnapshot car : cars) {
+            copied.add(new CarSnapshot(
+                    car.getCarIndex(),
+                    car.getCarType(),
+                    car.isMotored(),
+                    car.getOccupiedMass(),
+                    car.getPassengerLoadRatio(),
+                    car.getPositionMeters(),
+                    car.getSpeedKmh(),
+                    car.getCouplerForceKN()));
+        }
+        return copied;
+    }
+
     private List<CarSnapshot> mapCarSnapshots(List<TrainCar> cars) {
         List<CarSnapshot> snaps = new ArrayList<>(cars.size());
         for (TrainCar c : cars) {

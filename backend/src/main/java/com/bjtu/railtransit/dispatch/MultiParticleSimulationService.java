@@ -236,12 +236,16 @@ public class MultiParticleSimulationService {
      * @param speedKmh    初始速度
      */
     public void initCarPositions(List<TrainCar> cars, double headPosM, double speedKmh) {
-        double cumulativeOffset = 0;
         for (int i = 0; i < cars.size(); i++) {
             TrainCar c = cars.get(i);
-            c.setPositionMeters(headPosM - cumulativeOffset);
+            double tailPosition = headPosM;
+            if (i > 0) {
+                tailPosition = cars.get(i - 1).getPositionMeters()
+                        - c.getLengthMeters()
+                        - COUPLER_FREE_LENGTH;
+            }
+            c.setPositionMeters(tailPosition);
             c.setSpeedKmh(speedKmh);
-            cumulativeOffset += c.getLengthMeters() + COUPLER_FREE_LENGTH;
         }
     }
 
