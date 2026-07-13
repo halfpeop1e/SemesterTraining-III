@@ -873,3 +873,289 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+   Natural document flow / readable Vehicle layout
+   Keep the existing components and data flow, but let the page grow.
+   ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T */
+.vehicle-page {
+  height: auto;
+  min-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  gap: var(--space-lg);
+  padding-bottom: var(--space-xl);
+  font-size: 16px;
+}
+
+.vehicle-page__header {
+  align-items: flex-start;
+  padding: var(--space-md) var(--space-lg);
+}
+
+.vehicle-page__header h2 {
+  font-size: clamp(24px, 2vw, 28px);
+  line-height: 1.25;
+}
+
+.vehicle-page__eyebrow {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.vehicle-page__actions {
+  gap: var(--space-md);
+}
+
+.vehicle-main-area {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: var(--space-lg);
+  min-height: auto;
+  overflow: visible;
+}
+
+.vehicle-main-area > * {
+  min-height: auto;
+  overflow: visible;
+}
+
+.vehicle-right-panel {
+  min-height: auto;
+  overflow: visible;
+}
+
+.vehicle-right-panel > .line-run-view,
+.vehicle-right-panel > .traction-curve-view {
+  flex: none;
+  overflow: visible;
+}
+
+.vehicle-page button,
+.vehicle-page select {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.vehicle-page button {
+  min-height: 40px;
+}
+
+.vehicle-page select {
+  min-height: 40px;
+}
+
+.vehicle-empty {
+  min-height: 200px;
+  height: auto;
+}
+
+@media (max-width: 1024px) {
+  .vehicle-page {
+    gap: var(--space-md);
+  }
+
+  .vehicle-page__header {
+    padding: var(--space-md);
+  }
+
+  .vehicle-page__actions {
+    width: 100%;
+  }
+}
+
+/* ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T
+   Protocol704 detail panel ¡ª readable long-form flow
+   ¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T¨T */
+.vehicle-704-panel {
+  overflow: visible;
+  border-radius: var(--radius-lg);
+}
+
+.vehicle-704-panel__header {
+  align-items: flex-start;
+  padding: var(--space-md) var(--space-lg);
+}
+
+.vehicle-704-panel__summary,
+.vehicle-704-panel__actions {
+  gap: var(--space-sm);
+}
+
+.vehicle-704-panel__summary strong {
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.vehicle-704-badge,
+.vehicle-704-readiness,
+.vehicle-704-mode-note,
+.vehicle-704-target,
+.vehicle-704-last-command {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.vehicle-704-panel__body {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-md);
+  max-height: none;
+  padding: 0 var(--space-lg) var(--space-lg);
+  overflow: visible;
+}
+
+.vehicle-704-section {
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+}
+
+.vehicle-704-section__title {
+  margin-bottom: var(--space-sm);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.vehicle-704-test-warning {
+  display: block;
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.vehicle-704-preflight {
+  gap: 8px;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.vehicle-704-preflight strong {
+  font-size: 18px;
+}
+
+.vehicle-704-device-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-sm);
+}
+
+.vehicle-704-device-card,
+.vehicle-704-port-card {
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+}
+
+.vehicle-704-device-card__header h3,
+.vehicle-704-port-card__header strong {
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.vehicle-704-device-card__raw,
+.vehicle-704-port-card__header,
+.vehicle-704-port-card__details,
+.vehicle-704-port-card__error {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.vehicle-704-device-state {
+  font-size: 14px;
+}
+
+.vehicle-704-port-grid,
+.vehicle-704-test-buttons {
+  gap: var(--space-sm);
+}
+
+.vehicle-704-port-card {
+  flex: 1 1 260px;
+}
+
+.vehicle-704-parse-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-sm);
+}
+
+.vehicle-704-parse-item {
+  gap: 4px;
+  padding: var(--space-sm);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.vehicle-704-data-caption,
+.vehicle-704-empty-state {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.vehicle-704-field-table {
+  min-width: 680px;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+}
+
+.vehicle-704-field-header,
+.vehicle-704-field-row {
+  min-height: 48px;
+  padding: 9px 12px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.vehicle-704-field-name code {
+  font-size: 13px;
+}
+
+.vehicle-704-status-chip {
+  padding: 3px 7px;
+  font-size: 12px;
+}
+
+.vehicle-704-raw-hex {
+  max-height: 140px;
+  padding: var(--space-sm);
+  font-size: 13px;
+  line-height: 1.65;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+.vehicle-704-log-item {
+  padding: 9px 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.vehicle-704-expand-btn {
+  min-height: 36px;
+  width: 36px;
+  font-size: 14px;
+}
+
+@media (max-width: 700px) {
+  .vehicle-704-panel__header,
+  .vehicle-704-panel__body {
+    padding-left: var(--space-md);
+    padding-right: var(--space-md);
+  }
+
+  .vehicle-704-panel__header {
+    flex-direction: column;
+  }
+
+  .vehicle-704-panel__actions {
+    width: 100%;
+  }
+
+  .vehicle-704-panel__actions > * {
+    flex: 1 1 auto;
+  }
+
+  .vehicle-704-field-table {
+    min-width: 620px;
+  }
+}

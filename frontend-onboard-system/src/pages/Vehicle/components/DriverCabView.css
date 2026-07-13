@@ -57,6 +57,63 @@
   scrollbar-width: thin;
 }
 
+/* The driver controls and status come before the visual simulation.
+   The Three.js viewport remains available, but it is a later, non-blocking
+   status section in the page flow instead of a full-height primary pane. */
+.driver-cab-view {
+  flex: none;
+  min-height: auto;
+  height: auto;
+  padding: var(--space-lg);
+}
+
+.driver-cab-view__layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  flex: none;
+  min-height: auto;
+}
+
+.driver-cab-view__right-col {
+  order: 1;
+  min-height: auto;
+  overflow: visible;
+}
+
+.driver-cab-view__left-col {
+  order: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  min-height: auto;
+}
+
+.driver-cab-view__console {
+  order: 1;
+}
+
+.driver-cab-view__viewport {
+  order: 2;
+  flex: none;
+  width: 100%;
+  height: auto;
+  min-height: clamp(240px, 24vw, 380px);
+  aspect-ratio: 16 / 7;
+  overflow: hidden;
+}
+
+@media (max-width: 1024px) {
+  .driver-cab-view {
+    padding: var(--space-md);
+  }
+
+  .driver-cab-view__viewport {
+    min-height: clamp(220px, 42vw, 320px);
+    aspect-ratio: 16 / 8;
+  }
+}
+
 /* ── Viewport (3D + Canvas HUD) ── */
 .driver-cab-view__viewport {
   position: relative;
@@ -1125,4 +1182,21 @@
   color: #fff7e8;
   background: #2a1a08;
   border: 1px solid rgba(251, 191, 36, 0.48);
+}
+
+/* Final flow overrides: keep the viewport sized by its aspect ratio rather
+   than by the old full-height flex pane. */
+.driver-cab-view__viewport {
+  order: 2;
+  flex: none;
+  height: auto;
+  min-height: clamp(240px, 24vw, 380px);
+  aspect-ratio: 16 / 7;
+}
+
+@media (max-width: 1024px) {
+  .driver-cab-view__viewport {
+    min-height: clamp(220px, 42vw, 320px);
+    aspect-ratio: 16 / 8;
+  }
 }
