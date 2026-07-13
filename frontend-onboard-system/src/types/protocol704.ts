@@ -2,8 +2,11 @@
 
 export interface Protocol704PortStatus {
   port: number;
+  host?: string;
+  channel?: string;
   connected: boolean;
   connecting: boolean;
+  reconnecting?: boolean;
   lastConnectSuccessTime?: number;
   lastDisconnectTime?: number;
   lastReceiveTime?: number;
@@ -12,7 +15,33 @@ export interface Protocol704PortStatus {
   bytesReceived?: number;
   frameCount?: number;
   lastError?: string;
+  inputState?: Protocol704InputState;
+  inputDiagnostic?: string;
+  lastInputHeader?: string;
+  lastInputTotalLength?: number;
+  lastInputDataLength?: number;
+  pendingInputBytes?: number;
+  bytesSent?: number;
+  lastSendTime?: number;
+  lastOutputHex?: string;
+  lastOutputTime?: number;
+  outputFrameCount?: number;
+  outputErrorCount?: number;
+  lastOutputError?: string;
 }
+
+export type Protocol704InputState =
+  | 'TCP_NOT_CONNECTED'
+  | 'TCP_CONNECTING'
+  | 'CHANNEL_DISABLED'
+  | 'CONNECTED_NO_BYTES'
+  | 'PARTIAL_FRAME'
+  | 'HEADER_MISMATCH'
+  | 'TOTAL_LENGTH_MISMATCH'
+  | 'DATA_LENGTH_MISMATCH'
+  | 'STRUCTURE_INVALID'
+  | 'FIRST_FRAME_RECEIVED'
+  | 'FRAME_RECEIVED';
 
 export interface MappedControlCommand704 {
   command: string;
@@ -119,6 +148,8 @@ export interface Protocol704Status {
   receivedValidFrame?: boolean;
   lastValidFrameTime?: number;
   lastCommandLifecycle?: Protocol704CommandLifecycle;
+  lastOutputFrame?: string;
+  lastOutputHmi?: string;
   activeBinding?: string;
   simulationReady?: boolean;
   simulationReadiness?: string;

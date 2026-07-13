@@ -99,7 +99,7 @@ function createInstance(trainId: string): InstanceState {
     speedMultiplier: 1,
     fromStationId: 1,
     toStationId: 2,
-    drivingMode: "ato",
+    drivingMode: "manual",
     controlSourceMode: "SIMULATION",
     allSafetyEvents: [],
     handleResetToken: 0,
@@ -108,7 +108,7 @@ function createInstance(trainId: string): InstanceState {
     fromStationIdRef: 1,
     toStationIdRef: 2,
     resultRef: null,
-    drivingModeRef: "ato",
+    drivingModeRef: "manual",
   };
 }
 
@@ -400,7 +400,7 @@ function Vehicle() {
         holdAfterBraking: false,
         departureAuthorized: false,
         speedMultiplier: 1,
-        drivingMode: "ato",
+        drivingMode: "manual",
         allSafetyEvents: [],
         handleResetToken: cur.handleResetToken + 1,
       }));
@@ -596,7 +596,7 @@ function Vehicle() {
           holdAfterBraking: false,
           departureAuthorized: false,
           speedMultiplier: 1,
-          drivingMode: "ato",
+          drivingMode: "manual",
           controlSourceMode: "SIMULATION",
           allSafetyEvents: [],
           handleResetToken: cur.handleResetToken + 1,

@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -51,6 +52,10 @@ public class Protocol704Service {
 
     @Value("${vehicle.protocol704.hmi-port:8888}")
     private int hmiPort;
+
+    /** HMI input remains disabled unless explicitly enabled by configuration. */
+    @Value("${vehicle.protocol704.hmi-input:false}")
+    private boolean hmiInputEnabled = false;
 
     @Value("${vehicle.protocol704.mmi-host:192.168.100.122}")
     private String mmiHost;
@@ -145,12 +150,10 @@ public class Protocol704Service {
 
             Map<Integer, PortConnectionStatus> portStatusMap = new ConcurrentHashMap<>();
             for (int port : ports) {
-                PortConnectionStatus ps = new PortConnectionStatus();
-                ps.setPort(port);
-                ps.setConnected(false);
-                portStatusMap.put(port, ps);
+                portStatusMap.put(port, createPortStatus(port, defaultHost, "plc-input / plc-output"));
             }
             status.setPortStatuses(portStatusMap);
+            ensureDevicePortStatuses(status);
 
             RealtimeVehicleState realtimeState = createRealtimeState(trainId);
             realtimeStates.put(trainId, realtimeState);
@@ -224,12 +227,10 @@ public class Protocol704Service {
             s.setPorts(new ArrayList<>(ports));
             Map<Integer, PortConnectionStatus> pss = new ConcurrentHashMap<>();
             for (int p : ports) {
-                PortConnectionStatus ps = new PortConnectionStatus();
-                ps.setPort(p);
-                ps.setConnected(false);
-                pss.put(p, ps);
+                pss.put(p, createPortStatus(p, defaultHost, "plc-input / plc-output"));
             }
             s.setPortStatuses(pss);
+            ensureDevicePortStatuses(s);
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             s.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
@@ -247,12 +248,10 @@ public class Protocol704Service {
             s.setPorts(new ArrayList<>(ports));
             Map<Integer, PortConnectionStatus> pss = new ConcurrentHashMap<>();
             for (int p : ports) {
-                PortConnectionStatus ps = new PortConnectionStatus();
-                ps.setPort(p);
-                ps.setConnected(false);
-                pss.put(p, ps);
+                pss.put(p, createPortStatus(p, defaultHost, "plc-input / plc-output"));
             }
             s.setPortStatuses(pss);
+            ensureDevicePortStatuses(s);
             s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             s.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
@@ -363,6 +362,49 @@ public class Protocol704Service {
         }
     }
 
+    private PortConnectionStatus createPortStatus(int port, String host, String channel) {
+        PortConnectionStatus value = new PortConnectionStatus();
+        value.setPort(port);
+        value.setHost(host);
+        value.setChannel(channel);
+        value.setConnected(false);
+        return value;
+    }
+
+    private void ensureDevicePortStatuses(Protocol704Status status) {
+        if (status == null) return;
+        status.getPortStatuses().computeIfAbsent(hmiPort, p -> {
+            PortConnectionStatus value = createPortStatus(p, hmiHost, "hmi-input / hmi-output");
+            value.setInputState(hmiInputEnabled
+                    ? Protocol704InputState.TCP_NOT_CONNECTED
+                    : Protocol704InputState.CHANNEL_DISABLED);
+            value.setInputDiagnostic(hmiInputEnabled
+                    ? "TCP is not connected"
+                    : "HMI input channel disabled; socket read loop is not active");
+            return value;
+        });
+        status.getPortStatuses().computeIfAbsent(mmiPort,
+                p -> createPortStatus(p, mmiHost, "mmi-output"));
+    }
+
+    private void copyInputDiagnostics(PortConnectionStatus target, Protocol704FrameAccumulator accumulator) {
+        target.setInputState(accumulator.getLastInputState());
+        target.setInputDiagnostic(accumulator.getInputDiagnostic());
+        target.setLastInputHeader(accumulator.getLastInputHeader());
+        target.setLastInputTotalLength(accumulator.getLastInputTotalLength());
+        target.setLastInputDataLength(accumulator.getLastInputDataLength());
+        target.setPendingInputBytes(accumulator.pendingBytes());
+    }
+
+    private void copyInputDiagnostics(PortConnectionStatus target, Protocol704HmiFrameAccumulator accumulator) {
+        target.setInputState(accumulator.getLastInputState());
+        target.setInputDiagnostic(accumulator.getInputDiagnostic());
+        target.setLastInputHeader(accumulator.getLastInputHeader());
+        target.setLastInputTotalLength(accumulator.getLastInputTotalLength());
+        target.setLastInputDataLength(accumulator.getLastInputDataLength());
+        target.setPendingInputBytes(accumulator.pendingBytes());
+    }
+
     private class PortClient implements Runnable {
         private final String trainId;
         private final String host;
@@ -432,8 +474,11 @@ public class Protocol704Service {
                 long retryDelayAfterFailure = 0L;
 
                 ps.setConnecting(true);
+                ps.setReconnecting(consecutiveFailures > 0);
                 ps.setLastError(null);
                 ps.setConnected(false);
+                ps.setInputState(Protocol704InputState.TCP_CONNECTING);
+                ps.setInputDiagnostic("TCP connection is being established");
                 connectStart = System.currentTimeMillis();
                 try (Socket s = new Socket()) {
                     s.connect(new InetSocketAddress(host, port), connectTimeoutMs);
@@ -443,8 +488,10 @@ public class Protocol704Service {
                     this.in = s.getInputStream();
                     this.out = s.getOutputStream();
                     ps.setConnecting(false);
+                    ps.setReconnecting(false);
                     ps.setConnected(true);
-                    status.setOutputEnabled(true);
+                    ps.setInputState(Protocol704InputState.CONNECTED_NO_BYTES);
+                    ps.setInputDiagnostic("TCP connected; no PLC input bytes received");
                     updateOverallConnected();
                     ps.setLastConnectSuccessTime(System.currentTimeMillis());
                     consecutiveFailures = 0;
@@ -454,7 +501,12 @@ public class Protocol704Service {
 
                     byte[] buf = new byte[4096];
                     while (!closed && running.get()) {
-                        int n = in.read(buf);
+                        int n;
+                        try {
+                            n = in.read(buf);
+                        } catch (SocketTimeoutException timeout) {
+                            continue;
+                        }
                         if (n < 0) {
                             throw new IOException("connection closed by remote");
                         }
@@ -472,7 +524,9 @@ public class Protocol704Service {
                         }
                         lastFrameTimestamp = now;
 
-                        for (byte[] frame : accumulator.append(Arrays.copyOf(buf, n))) {
+                        List<byte[]> completeFrames = accumulator.append(Arrays.copyOf(buf, n));
+                        copyInputDiagnostics(ps, accumulator);
+                        for (byte[] frame : completeFrames) {
                             frameCount++;
                             ps.setFrameCount(frameCount);
                             processCompleteFrame(trainId, status, port, frame, Protocol704VehicleControlBridge.SOURCE_PLC, Protocol704VehicleControlBridge.SOURCE_PLC, connectionId, "inbound local-v1 frame");
@@ -482,6 +536,10 @@ public class Protocol704Service {
                 } catch (Exception e) {
                     ps.setConnected(false);
                     ps.setConnecting(false);
+                    ps.setReconnecting(true);
+                    ps.setInputState(Protocol704InputState.TCP_NOT_CONNECTED);
+                    ps.setInputDiagnostic("TCP disconnected before a complete PLC frame: "
+                            + e.getClass().getSimpleName());
                     ps.setLastError(e.getClass().getSimpleName() + ": " + e.getMessage());
                     ps.setLastDisconnectTime(System.currentTimeMillis());
                     if (vehicleControlBridge != null) {
@@ -719,6 +777,8 @@ public class Protocol704Service {
         private volatile boolean closed;
         private volatile Thread workerThread;
         private int consecutiveFailures;
+        private final Protocol704HmiFrameAccumulator hmiInputAccumulator =
+                new Protocol704HmiFrameAccumulator();
         private long retryDelayMs = INITIAL_RETRY_DELAY_MS;
 
         HmiMmiClient(String trainId, String host, int port, Protocol704Status status, String label) {
@@ -750,10 +810,8 @@ public class Protocol704Service {
         public void run() {
             workerThread = Thread.currentThread();
             status.getPortStatuses().computeIfAbsent(port, p -> {
-                PortConnectionStatus ps = new PortConnectionStatus();
-                ps.setPort(p);
-                ps.setConnected(false);
-                return ps;
+                return createPortStatus(p, host,
+                        "HMI".equals(label) ? "hmi-input / hmi-output" : "mmi-output");
             });
 
             while (!closed) {
@@ -764,8 +822,15 @@ public class Protocol704Service {
                 PortConnectionStatus ps = status.getPortStatuses().get(port);
                 if (ps != null) {
                     ps.setConnecting(true);
+                    ps.setReconnecting(consecutiveFailures > 0);
                     ps.setLastError(null);
                     ps.setConnected(false);
+                    ps.setInputState(hmiInputEnabled
+                            ? Protocol704InputState.TCP_CONNECTING
+                            : Protocol704InputState.CHANNEL_DISABLED);
+                    ps.setInputDiagnostic(hmiInputEnabled
+                            ? "TCP connection is being established"
+                            : "HMI input channel disabled; socket read loop is not active");
                 }
 
                 try (Socket s = new Socket()) {
@@ -776,7 +841,14 @@ public class Protocol704Service {
                     this.out = s.getOutputStream();
                     if (ps != null) {
                         ps.setConnecting(false);
+                        ps.setReconnecting(false);
                         ps.setConnected(true);
+                        ps.setInputState(hmiInputEnabled
+                                ? Protocol704InputState.CONNECTED_NO_BYTES
+                                : Protocol704InputState.CHANNEL_DISABLED);
+                        ps.setInputDiagnostic(hmiInputEnabled
+                                ? "TCP connected; no HMI input bytes received"
+                                : "HMI input channel disabled; socket read loop is not active");
                         ps.setLastConnectSuccessTime(System.currentTimeMillis());
                     }
                     consecutiveFailures = 0;
@@ -787,13 +859,43 @@ public class Protocol704Service {
                         InputStream in = s.getInputStream();
                         byte[] buf = new byte[128];
                         while (!closed && running.get()) {
-                            int n = in.read(buf);
+                            if (!hmiInputEnabled) {
+                                if (ps != null) {
+                                    ps.setInputState(Protocol704InputState.CHANNEL_DISABLED);
+                                    ps.setInputDiagnostic("HMI input channel disabled; socket read loop is not active");
+                                }
+                                try {
+                                    Thread.sleep(100);
+                                } catch (InterruptedException interrupted) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                                continue;
+                            }
+                            int n;
+                            try {
+                                n = in.read(buf);
+                            } catch (SocketTimeoutException timeout) {
+                                continue;
+                            }
                             if (n < 0) throw new IOException(label + " connection closed by remote");
-                            if (n >= 26) {
-                                log.debug("704 {} received {}B, train={}", label, n, trainId);
-                                byte[] frame = Arrays.copyOf(buf, n);
-                                HmiTractionCutRequest cutReq = Protocol704HmiInputParser.parseTractionCut(frame);
-                                if (cutReq != null) {
+                            if (n > 0) {
+                                long now = System.currentTimeMillis();
+                                if (ps != null) {
+                                    ps.setBytesReceived(ps.getBytesReceived() + n);
+                                    ps.setLastReceiveTime(now);
+                                    ps.setLastFrameLength(n);
+                                }
+                                List<byte[]> completeFrames = hmiInputAccumulator.append(Arrays.copyOf(buf, n));
+                                if (ps != null) copyInputDiagnostics(ps, hmiInputAccumulator);
+                                for (byte[] frame : completeFrames) {
+                                    log.debug("704 {} received complete 26B frame, train={}", label, trainId);
+                                    HmiTractionCutRequest cutReq = Protocol704HmiInputParser.parseTractionCut(frame);
+                                    if (ps != null) {
+                                        ps.setFrameCount(ps.getFrameCount() + 1);
+                                        ps.setLastFrameLength(frame.length);
+                                    }
+                                    if (cutReq != null) {
                                     RealtimeVehicleState rs = realtimeStates.get(trainId);
                                     if (rs != null) {
                                         cutReq.setTrainId(trainId);
@@ -801,6 +903,7 @@ public class Protocol704Service {
                                         rs.setLastTractionCutTime(System.currentTimeMillis());
                                         log.info("704 HMI traction cut received for train={}: mask={}", trainId,
                                                 Arrays.toString(cutReq.getCarCutMask()));
+                                    }
                                     }
                                 }
                             }
@@ -814,6 +917,13 @@ public class Protocol704Service {
                     if (ps != null) {
                         ps.setConnected(false);
                         ps.setConnecting(false);
+                        ps.setReconnecting(true);
+                        ps.setInputState(hmiInputEnabled
+                                ? Protocol704InputState.TCP_NOT_CONNECTED
+                                : Protocol704InputState.CHANNEL_DISABLED);
+                        ps.setInputDiagnostic(hmiInputEnabled
+                                ? "TCP disconnected before a complete HMI frame: " + e.getClass().getSimpleName()
+                                : "HMI input channel disabled; socket read loop is not active");
                         ps.setLastError(label + " " + e.getClass().getSimpleName() + ": " + e.getMessage());
                         ps.setLastDisconnectTime(System.currentTimeMillis());
                     }
@@ -828,6 +938,7 @@ public class Protocol704Service {
                                 label, host, port, retryDelayAfterFailure, e.getMessage());
                     }
                 } finally {
+                    hmiInputAccumulator.reset();
                     try { if (out != null) out.close(); } catch (Exception ignored) {}
                     out = null;
                     try { if (socket != null) socket.close(); } catch (Exception ignored) {}

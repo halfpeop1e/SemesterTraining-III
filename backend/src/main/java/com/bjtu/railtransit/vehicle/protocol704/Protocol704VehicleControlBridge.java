@@ -72,7 +72,7 @@ public class Protocol704VehicleControlBridge {
         if (trainId == null || trainId.isBlank() || result == null || result.getStates() == null
                 || result.getStates().isEmpty()) return;
         ActiveSimulationContext context = new ActiveSimulationContext(trainId, fromStationId, toStationId,
-                copy(result.getStates().get(0)), mode == null ? DrivingMode.ATO : mode);
+                copy(result.getStates().get(0)), mode == null ? DrivingMode.MANUAL : mode);
         context.departureAuthorized = departureAuthorized;
         context.departureState = departureAuthorized ? "RUNNING" : "READY_TO_DEPART";
         contexts.put(trainId, context);
@@ -193,7 +193,7 @@ public class Protocol704VehicleControlBridge {
             int fromId = fromStationId != null ? fromStationId : 1;
             int toId = toStationId != null ? toStationId : 2;
             context = new ActiveSimulationContext(trainId, fromId, toId,
-                    copy(currentState), mode == null ? DrivingMode.ATO : mode);
+                    copy(currentState), mode == null ? DrivingMode.MANUAL : mode);
             if (departureAuthorized != null) {
                 context.departureAuthorized = departureAuthorized;
                 context.departureState = departureAuthorized ? "RUNNING" : "READY_TO_DEPART";
@@ -680,7 +680,7 @@ public class Protocol704VehicleControlBridge {
             this.fromStationId = fromStationId;
             this.toStationId = toStationId;
             this.currentState = currentState;
-            this.mode = mode == null ? DrivingMode.ATO : mode;
+            this.mode = mode == null ? DrivingMode.MANUAL : mode;
             this.currentStationId = fromStationId;
             this.currentTargetStationId = Math.min(toStationId, fromStationId + 1);
         }

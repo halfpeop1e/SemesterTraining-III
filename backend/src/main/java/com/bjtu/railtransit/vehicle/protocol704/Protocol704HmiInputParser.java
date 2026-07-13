@@ -11,12 +11,13 @@ public final class Protocol704HmiInputParser {
 
     public static final int FRAME_LENGTH = 26;
     public static final int HEADER_LENGTH = 24;
+    public static final int DATA_LENGTH = FRAME_LENGTH - HEADER_LENGTH;
     public static final int IDENTIFY = 0xAA55AA55;
 
     private Protocol704HmiInputParser() {}
 
     public static HmiTractionCutRequest parseTractionCut(byte[] frame) {
-        if (frame == null || frame.length < FRAME_LENGTH) {
+        if (!isStructurallyValid(frame)) {
             return null;
         }
 
@@ -46,5 +47,14 @@ public final class Protocol704HmiInputParser {
         req.setCarCutMask(carCutMask);
         req.setTimestamp(timestamp);
         return req;
+    }
+
+    /** Strict validation for the documented fixed 26B local-v1 frame. */
+    public static boolean isStructurallyValid(byte[] frame) {
+        if (frame == null || frame.length != FRAME_LENGTH) return false;
+        ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
+        return bb.getInt(0) == IDENTIFY
+                && (bb.getShort(4) & 0xFFFF) == FRAME_LENGTH
+                && (bb.getShort(6) & 0xFFFF) == DATA_LENGTH;
     }
 }

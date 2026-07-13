@@ -81,15 +81,17 @@ public class Protocol704Controller {
             err.put("message", "currentState 不能为空");
             return ResponseEntity.badRequest().body(err);
         }
-        DrivingMode mode = request.getCurrentMode() != null ? request.getCurrentMode() : DrivingMode.ATO;
+        DrivingMode requestedMode = request.getCurrentMode();
         protocol704VehicleControlBridge.syncCurrentState(
                 request.getTrainId(),
                 request.getCurrentState(),
-                mode,
+                requestedMode,
                 request.getFromStationId() > 0 ? request.getFromStationId() : null,
                 request.getToStationId() > 0 ? request.getToStationId() : null,
                 request.isDepartureConfirmed() ? true : null
         );
+        DrivingMode mode = protocol704VehicleControlBridge.getMode(request.getTrainId());
+        if (mode == null) mode = DrivingMode.MANUAL;
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("ok", true);
         resp.put("trainId", request.getTrainId());
