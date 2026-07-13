@@ -117,18 +117,31 @@ function mpsToKmh(value: number) {
   return value * 3.6;
 }
 
-function getOperatingMode(status: DriverCabViewProps['status'], isPaused: boolean): OperatingMode {
+function getOperatingMode(
+  status: DriverCabViewProps['status'],
+  isPaused: boolean,
+  externalDriveMode?: DriverCabViewProps['externalDriveMode'],
+): OperatingMode {
   if (status === 'idle') {
     return { label: '待机', note: '等待仿真任务', tone: 'idle' };
   }
   if (status === 'loading') {
     return { label: '系统准备', note: '后端正在计算仿真结果', tone: 'ready' };
   }
+  if (status === 'playing' && externalDriveMode === 'emergency') {
+    return { label: '紧急模式', note: '紧急制动状态', tone: 'fault' };
+  }
   if (status === 'playing' && isPaused) {
-    return { label: 'ATO 暂停', note: '播放暂停，当前帧保持', tone: 'paused' };
+    return {
+      label: externalDriveMode === 'ato' ? 'ATO 暂停' : '人工暂停',
+      note: '播放暂停，当前帧保持',
+      tone: 'paused',
+    };
   }
   if (status === 'playing') {
-    return { label: 'ATO 自动驾驶', note: '按后端 SIM 状态播放', tone: 'active' };
+    return externalDriveMode === 'ato'
+      ? { label: 'ATO 自动驾驶', note: '按后端 ATO 状态显示', tone: 'active' }
+      : { label: '人工驾驶', note: '按后端 MANUAL 状态显示', tone: 'active' };
   }
   if (status === 'finished') {
     return { label: '运行完成', note: '仿真结果已到末帧', tone: 'done' };
@@ -501,7 +514,7 @@ function drawCanvasHud(
     currentPosition, props.targetStopPosition, props.stationStops,
   );
   const phase = normalizePhase(props.currentState?.phase);
-  const mode = getOperatingMode(props.status, Boolean(props.isPaused));
+  const mode = getOperatingMode(props.status, Boolean(props.isPaused), props.externalDriveMode);
   const inbound = distanceToTarget >= 0 && distanceToTarget < 200;
   const braking = phase === 'braking';
 
@@ -692,7 +705,7 @@ function DriverCabView({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // 驾驶员控制面板 UI 状态
-  const [driveMode, setDriveMode] = useState<DriveMode>('ato');
+  const [driveMode, setDriveMode] = useState<DriveMode>('manual');
   const [tractionLevelUI, setTractionLevelUI] = useState(0);
   const [brakeLevelUI, setBrakeLevelUI] = useState(0);
   const [emergencyActive, setEmergencyActive] = useState(false);
@@ -829,7 +842,7 @@ function DriverCabView({
   // 全程总目标距离（用于 summary 信息展示）
   const totalDistanceToTarget = targetStopPosition - currentPosition;
   const normalizedPhase = normalizePhase(currentState?.phase);
-  const operatingMode = getOperatingMode(status, isPaused);
+  const operatingMode = getOperatingMode(status, isPaused, externalDriveMode);
   const speedRatio = speedLimit > 0 ? currentVelocity / speedLimit : 0;
   const speedGaugeDeg = clamp(speedRatio, 0, 1.18) * 270;
   const speedMarkerLeft = clamp(speedRatio / 1.2, 0, 1) * 100;

@@ -46,6 +46,11 @@ class VehicleSimulationServiceTest {
     private final LineProfileJsonLoader loader = new LineProfileJsonLoader();
 
     @Test
+    void newSimulationDefaultsToManualDriving() {
+        assertEquals(DrivingMode.MANUAL, service.runDemoSimulation().getSummary().getCurrentMode());
+    }
+
+    @Test
     void statesAreNonEmptyAndGeneratedByLoop() {
         SimulationResult result = service.runDemoSimulation();
 
@@ -434,6 +439,7 @@ class VehicleSimulationServiceTest {
 
         SimulationResult result = service.runMultiStation(seg, 30.0, demoScenarioProvider);
 
+        assertEquals(DrivingMode.MANUAL, result.getSummary().getCurrentMode());
         List<TrainState> states = result.getStates();
         assertFalse(states.isEmpty());
 

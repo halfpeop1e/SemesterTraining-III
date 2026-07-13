@@ -786,6 +786,34 @@
 
 .vehicle-704-log-item--test { border-left-color: var(--color-accent); }
 
+.vehicle-704-live-data-section { grid-column: 1 / -1; }
+.vehicle-704-input-diagnostic-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.vehicle-704-input-diagnostic { padding: 8px; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.vehicle-704-input-diagnostic__header { display: flex; justify-content: space-between; gap: 8px; color: var(--color-text-heading); font-size: var(--text-xs); }
+.vehicle-704-input-diagnostic__header span { color: var(--color-warning); }
+.vehicle-704-input-diagnostic__endpoint,
+.vehicle-704-input-diagnostic__message,
+.vehicle-704-input-diagnostic__stats,
+.vehicle-704-live-data-caption,
+.vehicle-704-live-data-empty,
+.vehicle-704-live-data-raw { color: var(--color-text-secondary); font-size: 10px; line-height: 1.5; }
+.vehicle-704-input-diagnostic__endpoint { margin-top: 3px; font-family: var(--font-mono); }
+.vehicle-704-input-diagnostic__message { margin: 6px 0; color: var(--color-text); }
+.vehicle-704-input-diagnostic__stats { display: flex; flex-wrap: wrap; gap: 6px 12px; font-family: var(--font-mono); }
+.vehicle-704-live-data-block { margin-top: 10px; }
+.vehicle-704-live-data-caption { margin: 4px 0; }
+.vehicle-704-live-data-table { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.vehicle-704-live-data-row { display: grid; grid-template-columns: minmax(170px, 1.4fr) minmax(100px, 1fr) 70px minmax(120px, 1fr) 90px 42px; gap: 6px; min-width: 680px; padding: 5px 6px; color: var(--color-text); font-size: 10px; border-top: 1px solid rgba(148,163,184,0.1); }
+.vehicle-704-live-data-row:first-child { border-top: 0; }
+.vehicle-704-live-data-row > span { min-width: 0; overflow-wrap: anywhere; }
+.vehicle-704-live-data-row > span:first-child { display: flex; flex-direction: column; gap: 2px; }
+.vehicle-704-live-data-row code { color: var(--color-accent); font-family: var(--font-mono); }
+.vehicle-704-live-data-row small { color: var(--color-text-secondary); }
+.vehicle-704-live-data-table--compact .vehicle-704-live-data-row { min-width: 0; }
+.vehicle-704-live-data-empty { padding: 10px; text-align: center; }
+.vehicle-704-live-data-raw { display: flex; gap: 8px; margin-top: 5px; }
+.vehicle-704-live-data-raw code { min-width: 0; color: var(--color-text); font-family: var(--font-mono); overflow-wrap: anywhere; }
+
 /* ═══════════════════════════════════════════════
    右侧面板 Tab 切换
    ═══════════════════════════════════════════════ */
@@ -839,6 +867,8 @@
 }
 
 @media (max-width: 1000px) {
+  .vehicle-704-input-diagnostic-grid { grid-template-columns: 1fr; }
+
   .vehicle-704-panel__body {
     grid-template-columns: 1fr;
   }

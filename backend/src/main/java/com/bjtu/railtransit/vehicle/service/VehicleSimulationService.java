@@ -558,6 +558,7 @@ public class VehicleSimulationService {
 
         TrainState last = states.get(states.size() - 1);
         SimulationSummary summary = new SimulationSummary(maxVelocity, last.getTime(), last.getPosition(), speedLimit, dtPerFrame);
+        summary.setCurrentMode(DrivingMode.MANUAL);
 
         double actualStopPosition = last.getPosition();
         double stopError = actualStopPosition - targetStopPosition;
@@ -754,6 +755,7 @@ public class VehicleSimulationService {
         summary.setToStationName(stationEntries.get(stationEntries.size() - 1).name);
         summary.setTotalStations(stationEntries.size());
         summary.setCompletedStops(stationStops.size());
+        summary.setCurrentMode(DrivingMode.MANUAL);
 
         SimulationResult result = new SimulationResult(allStates, summary, finalStopResult, allSafetyEvents);
         result.setStationStops(stationStops);

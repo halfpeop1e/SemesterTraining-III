@@ -3,8 +3,11 @@ package com.bjtu.railtransit.vehicle.protocol704;
 public class PortConnectionStatus {
 
     private int port;
+    private String host;
+    private String channel;
     private boolean connected;
     private boolean connecting;
+    private boolean reconnecting;
     private long lastConnectSuccessTime;
     private long lastDisconnectTime;
     private long lastReceiveTime;
@@ -20,15 +23,28 @@ public class PortConnectionStatus {
     private long outputFrameCount;
     private long outputErrorCount;
     private String lastOutputError;
+    private Protocol704InputState inputState = Protocol704InputState.TCP_NOT_CONNECTED;
+    private String inputDiagnostic;
+    private String lastInputHeader;
+    private Integer lastInputTotalLength;
+    private Integer lastInputDataLength;
+    private int pendingInputBytes;
 
     public int getPort() { return port; }
     public void setPort(int port) { this.port = port; }
+
+    public String getHost() { return host; }
+    public void setHost(String host) { this.host = host; }
+    public String getChannel() { return channel; }
+    public void setChannel(String channel) { this.channel = channel; }
 
     public boolean isConnected() { return connected; }
     public void setConnected(boolean connected) { this.connected = connected; }
 
     public boolean isConnecting() { return connecting; }
     public void setConnecting(boolean connecting) { this.connecting = connecting; }
+    public boolean isReconnecting() { return reconnecting; }
+    public void setReconnecting(boolean reconnecting) { this.reconnecting = reconnecting; }
 
     public long getLastConnectSuccessTime() { return lastConnectSuccessTime; }
     public void setLastConnectSuccessTime(long lastConnectSuccessTime) { this.lastConnectSuccessTime = lastConnectSuccessTime; }
@@ -71,4 +87,17 @@ public class PortConnectionStatus {
 
     public String getLastOutputError() { return lastOutputError; }
     public void setLastOutputError(String lastOutputError) { this.lastOutputError = lastOutputError; }
+
+    public Protocol704InputState getInputState() { return inputState; }
+    public void setInputState(Protocol704InputState inputState) { this.inputState = inputState; }
+    public String getInputDiagnostic() { return inputDiagnostic; }
+    public void setInputDiagnostic(String inputDiagnostic) { this.inputDiagnostic = inputDiagnostic; }
+    public String getLastInputHeader() { return lastInputHeader; }
+    public void setLastInputHeader(String lastInputHeader) { this.lastInputHeader = lastInputHeader; }
+    public Integer getLastInputTotalLength() { return lastInputTotalLength; }
+    public void setLastInputTotalLength(Integer lastInputTotalLength) { this.lastInputTotalLength = lastInputTotalLength; }
+    public Integer getLastInputDataLength() { return lastInputDataLength; }
+    public void setLastInputDataLength(Integer lastInputDataLength) { this.lastInputDataLength = lastInputDataLength; }
+    public int getPendingInputBytes() { return pendingInputBytes; }
+    public void setPendingInputBytes(int pendingInputBytes) { this.pendingInputBytes = pendingInputBytes; }
 }

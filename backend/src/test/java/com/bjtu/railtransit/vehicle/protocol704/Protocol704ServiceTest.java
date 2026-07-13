@@ -4,6 +4,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 public class Protocol704ServiceTest {
@@ -113,5 +116,71 @@ public class Protocol704ServiceTest {
         assertEquals("OB1", first.getRealtimeVehicleState().getTrainId());
         assertEquals("OB2", second.getRealtimeVehicleState().getTrainId());
         assertNotSame(first.getRealtimeVehicleState(), second.getRealtimeVehicleState());
+    }
+
+    @Test
+    public void plcAccumulatorDistinguishesTransportAndValidationStates() {
+        Protocol704FrameAccumulator accumulator = new Protocol704FrameAccumulator();
+
+        assertTrue(accumulator.append(new byte[46]).isEmpty());
+        assertEquals(Protocol704InputState.HEADER_MISMATCH, accumulator.getLastInputState());
+        assertEquals(0, accumulator.pendingBytes());
+
+        byte[] valid = validPlcFrame();
+        assertTrue(accumulator.append(java.util.Arrays.copyOf(valid, 23)).isEmpty());
+        assertEquals(Protocol704InputState.PARTIAL_FRAME, accumulator.getLastInputState());
+        assertEquals(23, accumulator.pendingBytes());
+
+        assertEquals(1, accumulator.append(java.util.Arrays.copyOfRange(valid, 23, valid.length)).size());
+        assertEquals(Protocol704InputState.FIRST_FRAME_RECEIVED, accumulator.getLastInputState());
+
+        assertEquals(1, accumulator.append(valid).size());
+        assertEquals(Protocol704InputState.FRAME_RECEIVED, accumulator.getLastInputState());
+    }
+
+    @Test
+    public void plcAccumulatorRejectsLengthErrorsWithoutEmittingFrames() {
+        Protocol704FrameAccumulator totalLengthError = new Protocol704FrameAccumulator();
+        byte[] wrongTotal = validPlcFrame();
+        ByteBuffer.wrap(wrongTotal).order(ByteOrder.LITTLE_ENDIAN).putShort(4, (short) 45);
+        assertTrue(totalLengthError.append(wrongTotal).isEmpty());
+        assertEquals(Protocol704InputState.TOTAL_LENGTH_MISMATCH, totalLengthError.getLastInputState());
+
+        Protocol704FrameAccumulator dataLengthError = new Protocol704FrameAccumulator();
+        byte[] wrongData = validPlcFrame();
+        ByteBuffer.wrap(wrongData).order(ByteOrder.LITTLE_ENDIAN).putShort(6, (short) 21);
+        assertTrue(dataLengthError.append(wrongData).isEmpty());
+        assertEquals(Protocol704InputState.DATA_LENGTH_MISMATCH, dataLengthError.getLastInputState());
+    }
+
+    @Test
+    public void hmiAccumulatorReportsTrailingPartialFrameAfterValidFrame() {
+        Protocol704HmiFrameAccumulator accumulator = new Protocol704HmiFrameAccumulator();
+        byte[] valid = validHmiFrame();
+        byte[] input = new byte[valid.length + 13];
+        System.arraycopy(valid, 0, input, 0, valid.length);
+        System.arraycopy(valid, 0, input, valid.length, 13);
+
+        assertEquals(1, accumulator.append(input).size());
+        assertEquals(Protocol704InputState.PARTIAL_FRAME, accumulator.getLastInputState());
+        assertEquals(13, accumulator.pendingBytes());
+    }
+
+    private static byte[] validPlcFrame() {
+        byte[] frame = new byte[Protocol704FrameAccumulator.FRAME_LENGTH];
+        ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
+        bb.putInt(0, 0xAA55AA55);
+        bb.putShort(4, (short) Protocol704FrameAccumulator.FRAME_LENGTH);
+        bb.putShort(6, (short) 22);
+        return frame;
+    }
+
+    private static byte[] validHmiFrame() {
+        byte[] frame = new byte[Protocol704HmiInputParser.FRAME_LENGTH];
+        ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
+        bb.putInt(0, Protocol704HmiInputParser.IDENTIFY);
+        bb.putShort(4, (short) Protocol704HmiInputParser.FRAME_LENGTH);
+        bb.putShort(6, (short) Protocol704HmiInputParser.DATA_LENGTH);
+        return frame;
     }
 }

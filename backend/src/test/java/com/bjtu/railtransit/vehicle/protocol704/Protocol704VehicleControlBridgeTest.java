@@ -453,6 +453,43 @@ class Protocol704VehicleControlBridgeTest {
                 "每次 execute 必须生成唯一 commandId，前端据此去重");
     }
 
+    @Test
+    void newContextsDefaultToManualWithoutProtocolModeInput() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("DEFAULT_MODE", 1, 2, result, null);
+
+        assertEquals(DrivingMode.MANUAL, bridge.getMode("DEFAULT_MODE"));
+
+        bridge.registerSimulation("SYNC_DEFAULT_MODE", 1, 2, result, DrivingMode.ATO);
+        bridge.unregisterSimulation("SYNC_DEFAULT_MODE");
+        bridge.syncCurrentState("SYNC_DEFAULT_MODE", result.getStates().get(0), null, 1, 2, false);
+        assertEquals(DrivingMode.MANUAL, bridge.getMode("SYNC_DEFAULT_MODE"));
+    }
+
+    @Test
+    void missingSyncModeDoesNotOverwriteExplicitAtoMode() {
+        register("EXPLICIT_ATO", DrivingMode.ATO);
+        TrainState synced = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)))
+                .getStates().get(0);
+
+        bridge.syncCurrentState("EXPLICIT_ATO", synced, null, 1, 2, false);
+
+        assertEquals(DrivingMode.ATO, bridge.getMode("EXPLICIT_ATO"));
+    }
+
+    @Test
+    void protocolResetThenLazyRecreationDefaultsToManual() {
+        register("RESET_DEFAULT", DrivingMode.ATO);
+        TrainState synced = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)))
+                .getStates().get(0);
+
+        new Protocol704Service(bridge).reset("RESET_DEFAULT");
+        assertNull(bridge.getMode("RESET_DEFAULT"));
+
+        bridge.syncCurrentState("RESET_DEFAULT", synced, null, 1, 2, false);
+        assertEquals(DrivingMode.MANUAL, bridge.getMode("RESET_DEFAULT"));
+    }
+
     private void register(String trainId, DrivingMode mode) {
         SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
         bridge.registerSimulation(trainId, 1, 2, result, mode);

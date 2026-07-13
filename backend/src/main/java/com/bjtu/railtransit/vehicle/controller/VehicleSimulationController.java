@@ -138,7 +138,7 @@ public class VehicleSimulationController {
                         segment, dwellTime, demoScenarioProvider);
                 result.getSummary().setDepartureState("READY_TO_DEPART");
                 registerSessionIfPresent(sessionId, fromId, toId);
-                registerProtocol704Context(request, fromId, toId, result, DrivingMode.ATO);
+                registerProtocol704Context(request, fromId, toId, result, DrivingMode.MANUAL);
                 return ApiResponse.ok("ok", result);
             } else {
                 // 单区间仿真（原有路径）
@@ -166,7 +166,7 @@ public class VehicleSimulationController {
                 }
 
                 registerSessionIfPresent(sessionId, fromId, toId);
-                registerProtocol704Context(request, fromId, toId, result, DrivingMode.ATO);
+                registerProtocol704Context(request, fromId, toId, result, DrivingMode.MANUAL);
                 return ApiResponse.ok("ok", result);
             }
 
