@@ -28,6 +28,7 @@ import {
   patchSwitchState,
   patchRouteBuilt,
 } from '../../api/signal';
+import { removeDispatchTrain } from '../../api/dispatch';
 import { useSimulation } from '../../context/SimulationContext';
 import type {
   LineProfile,
@@ -47,6 +48,7 @@ import StationTopologyDetail from './components/StationTopologyDetail';
 import OperationsDock from './components/OperationsDock';
 import MaPanel from './components/MaPanel';
 import EventLog from './components/EventLog';
+import LabTrainQuickStart from './components/LabTrainQuickStart';
 import { pickDefaultStationId, sortedStations, nearestStationId } from './data/mileage';
 import { topologyStationIdForRoute, topologyStationIdForSignal } from './data/realTopology';
 import { STATION_NAMES } from './data/teacherDiagramLayout';
@@ -73,6 +75,7 @@ function LineSignal() {
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [deletingTrainId, setDeletingTrainId] = useState<string | null>(null);
   const [stationId, setStationId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'overview' | 'station'>('overview');
   const [leftMenu, setLeftMenu] = useState<'route' | 'switch' | 'signal' | 'tsr' | 'status'>('route');
@@ -474,6 +477,35 @@ function LineSignal() {
     else if (entity.type === 'train') setLeftMenu('status');
   }, []);
 
+  const handleDeleteTrain = useCallback(async (trainId: string) => {
+    setDeletingTrainId(trainId);
+    try {
+      await removeDispatchTrain(trainId);
+      setTrains((previous) => previous.filter((train) => train.trainId !== trainId));
+      setMaMap((previous) => {
+        const next = { ...previous };
+        delete next[trainId];
+        return next;
+      });
+      setRouteBindings((previous) => {
+        const next = { ...previous };
+        delete next[trainId];
+        return next;
+      });
+      setSelected(null);
+      message.success(`${trainId} 已下线，线路占用和司机台绑定已清除`);
+      pushLocalEvent(`列车 ${trainId} 已下线并清除线路占用`, 'INFO');
+      await refreshSimulation();
+      await loadBindings();
+      await loadEvents();
+    } catch (error: any) {
+      message.error(error?.message || `删除 ${trainId} 失败`);
+      pushLocalEvent(error?.message || `删除列车 ${trainId} 失败`, 'ERROR');
+    } finally {
+      setDeletingTrainId(null);
+    }
+  }, [loadBindings, loadEvents, pushLocalEvent, refreshSimulation]);
+
   const stationOptions = useMemo(() => {
     if (!lineProfile) return [];
     return sortedStations(lineProfile).map((s) => ({
@@ -584,6 +616,16 @@ function LineSignal() {
       </div>
 
       {/* 顶部 Tab 控制台（可折叠，不占左侧） */}
+      <LabTrainQuickStart
+        lineProfile={lineProfile}
+        trains={trains}
+        initialStationId={activeStationId || String(lineProfile.stations[0]?.id || '1')}
+        onCreated={() => {
+          void refreshSimulation();
+          void refreshAll();
+        }}
+      />
+
       {opsOpen && (
         <div className="signal-ops-top shrink-0 border-b border-amber-500/20 px-3 py-2">
           <OperationsDock
@@ -681,6 +723,8 @@ function LineSignal() {
         lineProfile={lineProfile}
         maMap={maMap}
         trains={trains}
+        deletingTrainId={deletingTrainId}
+        onDeleteTrain={(trainId) => void handleDeleteTrain(trainId)}
         onClose={() => setSelected(null)}
       />
     </div>
