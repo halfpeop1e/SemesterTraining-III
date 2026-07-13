@@ -82,6 +82,17 @@ function presentValue(value: unknown) {
   return String(value);
 }
 
+function directionDisplay(key: string, value: unknown) {
+  if (value === undefined || value === null || value === '') return '暂无方向数据';
+  if (key === 'driverCabDirection' || key === 'direction_semantic') {
+    return ({ FORWARD: '前进', REVERSE: '后退', ZERO: '零位' } as Record<string, string>)[String(value)] ?? String(value);
+  }
+  if (key === 'direction') {
+    return ({ UP: '上行', DOWN: '下行' } as Record<string, string>)[String(value)] ?? String(value);
+  }
+  return presentValue(value);
+}
+
 function inputStateLabel(state?: string) {
   return state ? (inputStateLabels[state] ?? state) : '未接收';
 }
@@ -617,10 +628,12 @@ export default function Protocol704Panel({
                   ['accelerationMs2', '加速度', realtimeState?.accelerationMs2],
                   ['mode', '模式', realtimeState?.mode],
                   ['lastCommand', '最近命令', realtimeState?.lastCommand],
+                  ['driverCabDirection', '司机台方向', realtimeState?.driverCabDirection],
+                  ['direction', '折返方向', realtimeState?.direction],
                 ].map(([key, label, value]) => (
                   <div className="vehicle-704-live-data-row" key={String(key)}>
                     <span><code>{String(key)}</code><small>{String(label)}</small></span>
-                    <span>{presentValue(value)}</span>
+                    <span>{directionDisplay(String(key), value)}</span>
                     <span>{plcInputReceived ? '已接收' : '未接收'}</span>
                     <span>Protocol704Status</span>
                     <span>{formatTime(realtimeState?.lastUpdateTime)}</span>

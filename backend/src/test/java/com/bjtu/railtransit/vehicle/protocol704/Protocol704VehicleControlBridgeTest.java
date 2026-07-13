@@ -46,6 +46,25 @@ class Protocol704VehicleControlBridgeTest {
     }
 
     @Test
+    void rejectedPlcCommandRetainsDriverCabDirectionButSyntheticAtoDoesNot() {
+        register("DIRECTION_SOURCE", DrivingMode.ATO);
+
+        MappedControlCommand reverse = command("traction", 50);
+        reverse.setDirection("REVERSE");
+        Protocol704CommandLifecycle rejected = bridge.execute(
+                "DIRECTION_SOURCE", reverse, Protocol704VehicleControlBridge.SOURCE_PLC, "plc", 8001);
+        assertEquals("MODE_NOT_MANUAL", rejected.getRejectionReason());
+        assertEquals("REVERSE", rejected.getDriverCabDirection());
+
+        MappedControlCommand emergency = command("emergency_brake", 100);
+        emergency.setDirection("ZERO");
+        Protocol704CommandLifecycle synthetic = bridge.execute(
+                "DIRECTION_SOURCE", emergency, Protocol704VehicleControlBridge.SOURCE_ATO, "ato", -1);
+        assertEquals("EXECUTED", synthetic.getStatus());
+        assertNull(synthetic.getDriverCabDirection());
+    }
+
+    @Test
     void ebLatchRejectsSetManual() {
         register("EB1", DrivingMode.MANUAL);
         bridge.execute("EB1", command("emergency_brake", 100));

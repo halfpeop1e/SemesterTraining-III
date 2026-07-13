@@ -19,6 +19,8 @@ public class RealtimeVehicleState {
 
     private double[] perCarLoadKg = new double[6];
     private boolean isReversing;
+    /** Driver desk direction from the latest real PLC or explicit local test input. */
+    private String driverCabDirection;
     private String direction = "UP";
 
     public RealtimeVehicleState() {
@@ -75,6 +77,8 @@ public class RealtimeVehicleState {
     }
     public boolean isReversing() { return isReversing; }
     public void setReversing(boolean reversing) { isReversing = reversing; }
+    public String getDriverCabDirection() { return driverCabDirection; }
+    public void setDriverCabDirection(String driverCabDirection) { this.driverCabDirection = driverCabDirection; }
     public String getDirection() { return direction; }
     public void setDirection(String direction) { this.direction = direction; }
 }

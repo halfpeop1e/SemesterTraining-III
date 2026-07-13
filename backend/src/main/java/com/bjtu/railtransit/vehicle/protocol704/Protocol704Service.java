@@ -677,6 +677,11 @@ public class Protocol704Service {
         if (lifecycle.getParsedCommand() != null) {
             state.setLastCommand(lifecycle.getParsedCommand());
         }
+        if ((Protocol704VehicleControlBridge.SOURCE_PLC.equals(lifecycle.getSource())
+                || Protocol704VehicleControlBridge.SOURCE_LOCAL_TEST.equals(lifecycle.getSource()))
+                && isDriverCabDirection(lifecycle.getDriverCabDirection())) {
+            state.setDriverCabDirection(lifecycle.getDriverCabDirection());
+        }
         if (lifecycle.getResultMode() != null) {
             state.setMode(lifecycle.getResultMode());
         }
@@ -722,6 +727,10 @@ public class Protocol704Service {
         status.setActiveBinding(readiness.ready()
                 ? "PLC desk -> simulated train " + trainId + " (ready)"
                 : "PLC desk -> train " + trainId + " not ready: " + readiness.reason());
+    }
+
+    private static boolean isDriverCabDirection(String direction) {
+        return "FORWARD".equals(direction) || "REVERSE".equals(direction) || "ZERO".equals(direction);
     }
 
     private void checkStaleInputs() {

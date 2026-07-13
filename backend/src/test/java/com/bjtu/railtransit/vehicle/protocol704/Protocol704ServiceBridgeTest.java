@@ -59,6 +59,30 @@ class Protocol704ServiceBridgeTest {
         assertEquals("EXECUTED", status.getLastCommandLifecycle().getStatus());
         assertTrue(status.getLastCommandLifecycle().getExecutedState().getAcceleration() > 0.0);
         assertTrue(status.getRealtimeVehicleState().getVelocityMs() > 0.0);
+        assertEquals("FORWARD", status.getRealtimeVehicleState().getDriverCabDirection());
+        assertEquals("UP", status.getRealtimeVehicleState().getDirection());
+    }
+
+    @Test
+    void staleInputFailSafeDoesNotOverwriteLastDriverCabDirection() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("STALE_DIRECTION", 1, 2, result, DrivingMode.MANUAL);
+        Protocol704Status status = service.injectTestFrame("STALE_DIRECTION", "traction");
+        assertEquals("FORWARD", status.getRealtimeVehicleState().getDriverCabDirection());
+
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, java.util.concurrent.atomic.AtomicBoolean> runningFlags =
+                (java.util.Map<String, java.util.concurrent.atomic.AtomicBoolean>)
+                        ReflectionTestUtils.getField(service, "runningFlags");
+        runningFlags.put("STALE_DIRECTION", new java.util.concurrent.atomic.AtomicBoolean(true));
+        ReflectionTestUtils.setField(service, "staleInputMs", 1L);
+        status.setLastValidFrameTime(System.currentTimeMillis() - 1000L);
+
+        ReflectionTestUtils.invokeMethod(service, "checkStaleInputs");
+
+        assertTrue(status.isStaleInputFailSafeTriggered());
+        assertTrue(status.getRealtimeVehicleState().isEmergencyLatched());
+        assertEquals("FORWARD", status.getRealtimeVehicleState().getDriverCabDirection());
     }
 
     @Test

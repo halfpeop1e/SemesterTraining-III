@@ -119,6 +119,43 @@ public class Protocol704ServiceTest {
     }
 
     @Test
+    public void driverCabDirectionSyncKeepsZeroAndTurnbackDirectionIndependent() {
+        RealtimeVehicleState state = service.getStatus("DIRECTION").getRealtimeVehicleState();
+        state.setDirection("DOWN");
+
+        Protocol704CommandLifecycle forward = new Protocol704CommandLifecycle();
+        forward.setSource(Protocol704VehicleControlBridge.SOURCE_PLC);
+        forward.setDriverCabDirection("FORWARD");
+        forward.setStatus("REJECTED");
+        ReflectionTestUtils.invokeMethod(service, "updateRealtimeStateFromLifecycle", "DIRECTION", forward);
+        assertEquals("FORWARD", state.getDriverCabDirection());
+        assertEquals("DOWN", state.getDirection());
+
+        Protocol704CommandLifecycle zero = new Protocol704CommandLifecycle();
+        zero.setSource(Protocol704VehicleControlBridge.SOURCE_PLC);
+        zero.setDriverCabDirection("ZERO");
+        zero.setStatus("EXECUTED");
+        ReflectionTestUtils.invokeMethod(service, "updateRealtimeStateFromLifecycle", "DIRECTION", zero);
+        assertEquals("ZERO", state.getDriverCabDirection());
+        assertEquals("DOWN", state.getDirection());
+
+        Protocol704CommandLifecycle withoutDirection = new Protocol704CommandLifecycle();
+        withoutDirection.setSource(Protocol704VehicleControlBridge.SOURCE_PLC);
+        withoutDirection.setStatus("EXECUTED");
+        ReflectionTestUtils.invokeMethod(service, "updateRealtimeStateFromLifecycle", "DIRECTION", withoutDirection);
+        assertEquals("ZERO", state.getDriverCabDirection());
+        assertEquals("DOWN", state.getDirection());
+
+        Protocol704CommandLifecycle ato = new Protocol704CommandLifecycle();
+        ato.setSource(Protocol704VehicleControlBridge.SOURCE_ATO);
+        ato.setDriverCabDirection("FORWARD");
+        ato.setStatus("EXECUTED");
+        ReflectionTestUtils.invokeMethod(service, "updateRealtimeStateFromLifecycle", "DIRECTION", ato);
+        assertEquals("ZERO", state.getDriverCabDirection());
+        assertEquals("DOWN", state.getDirection());
+    }
+
+    @Test
     public void plcAccumulatorDistinguishesTransportAndValidationStates() {
         Protocol704FrameAccumulator accumulator = new Protocol704FrameAccumulator();
 

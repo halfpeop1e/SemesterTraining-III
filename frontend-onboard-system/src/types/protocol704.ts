@@ -67,6 +67,8 @@ export interface RealtimeVehicleState704 {
   lastCommand: string;
   note: string;
   emergencyLatched?: boolean;
+  driverCabDirection?: 'FORWARD' | 'ZERO' | 'REVERSE';
+  direction?: string;
 }
 
 export interface Protocol704LogEntry {

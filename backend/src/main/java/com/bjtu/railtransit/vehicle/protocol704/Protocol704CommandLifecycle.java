@@ -10,6 +10,8 @@ public class Protocol704CommandLifecycle {
     private int port = -1;
     private long receivedAt;
     private String parsedCommand;
+    /** PLC/local-test driver desk direction; null for synthetic control commands. */
+    private String driverCabDirection;
     private double level;
     private String activeTrainId;
     private String sessionId;
@@ -40,6 +42,8 @@ public class Protocol704CommandLifecycle {
     public void setReceivedAt(long receivedAt) { this.receivedAt = receivedAt; }
     public String getParsedCommand() { return parsedCommand; }
     public void setParsedCommand(String parsedCommand) { this.parsedCommand = parsedCommand; }
+    public String getDriverCabDirection() { return driverCabDirection; }
+    public void setDriverCabDirection(String driverCabDirection) { this.driverCabDirection = driverCabDirection; }
     public double getLevel() { return level; }
     public void setLevel(double level) { this.level = level; }
     public String getActiveTrainId() { return activeTrainId; }
