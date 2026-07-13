@@ -195,11 +195,11 @@
 }
 
 /* ═══════════════════════════════════════════════
-   Console (底部5联仪表台)
+   Console (底部6联仪表台)
    ═══════════════════════════════════════════════ */
 .driver-cab-view__console {
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr 0.95fr 1.2fr 0.85fr;
+  grid-template-columns: 1.05fr 0.8fr 0.82fr 1.05fr 0.8fr 0.8fr;
   gap: var(--space-sm);
   min-width: 0;
   flex-shrink: 0;
@@ -545,10 +545,9 @@
 .cab-lever__fill {
   position: absolute;
   left: calc(50% - 6px);
-  bottom: 7px;
+  top: 50%;
   width: 12px;
-  height: var(--lever-level);
-  max-height: 68px;
+  height: 0;
   background: #57d996;
   border-radius: var(--radius-full);
 }
@@ -556,10 +555,10 @@
 .cab-lever__handle {
   position: absolute;
   left: 50%;
-  bottom: calc(7px + var(--lever-level));
+  top: var(--lever-top);
   width: 54px;
   height: 18px;
-  transform: translate(-50%, 50%);
+  transform: translate(-50%, -50%);
   background: linear-gradient(180deg, #eef5f7, #8da0a8);
   border: 1px solid #d7e2e5;
   border-radius: var(--radius-full);
@@ -567,10 +566,92 @@
 }
 
 .cab-lever--brake .cab-lever__fill {
+  top: 50%;
+  height: calc(var(--lever-top) - 50%);
   background: #f87171;
 }
+.cab-lever--traction .cab-lever__fill {
+  top: var(--lever-top);
+  height: calc(50% - var(--lever-top));
+}
 .cab-lever--neutral .cab-lever__fill {
+  top: calc(50% - 2px);
+  height: 4px;
   background: #8ca1aa;
+}
+
+/* ── Driver cab direction handle (司机台方向：上/中/下) ── */
+.cab-direction {
+  position: relative;
+  height: 82px;
+  margin: 20px auto 0;
+}
+
+.cab-direction__slot {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 18px;
+  height: 82px;
+  transform: translateX(-50%);
+  background: #0c1114;
+  border: 1px solid rgba(174, 194, 204, 0.24);
+  border-radius: var(--radius-full);
+}
+
+.cab-direction__mark {
+  position: absolute;
+  left: calc(50% + 18px);
+  color: #82949d;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.cab-direction__mark--forward {
+  top: 4px;
+}
+
+.cab-direction__mark--zero {
+  top: 36px;
+}
+
+.cab-direction__mark--reverse {
+  bottom: 4px;
+}
+
+.cab-direction__handle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 54px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(180deg, #eef5f7, #8da0a8);
+  border: 1px solid #d7e2e5;
+  border-radius: var(--radius-full);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.32);
+  transition: top 180ms ease, box-shadow 180ms ease;
+}
+
+.cab-direction--forward .cab-direction__handle {
+  top: 12px;
+  box-shadow: 0 0 12px rgba(87, 217, 150, 0.55);
+}
+
+.cab-direction--reverse .cab-direction__handle {
+  top: 70px;
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.55);
+}
+
+.cab-direction--zero .cab-direction__handle {
+  top: 41px;
+  box-shadow: 0 0 12px rgba(174, 194, 204, 0.42);
+}
+
+.cab-direction--unknown .cab-direction__handle {
+  opacity: 0.55;
 }
 
 /* ═══════════════════════════════════════════════

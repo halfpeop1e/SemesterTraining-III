@@ -10,6 +10,11 @@ import static org.junit.jupiter.api.Assertions.*;
 public class Protocol704FrameParserTest {
 
     private byte[] buildValidPlcFrame(int masterHandle, int tractionLevel, int brakeLevel, boolean ebButton) {
+        return buildValidPlcFrame(1, masterHandle, tractionLevel, brakeLevel, ebButton);
+    }
+
+    private byte[] buildValidPlcFrame(int directionHandle, int masterHandle, int tractionLevel,
+                                      int brakeLevel, boolean ebButton) {
         byte[] frame = new byte[46];
         ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
 
@@ -43,7 +48,7 @@ public class Protocol704FrameParserTest {
         frame[34] = 0x00;
         frame[35] = 0x02;
 
-        bb.putShort(36, (short) 1);
+        bb.putShort(36, (short) directionHandle);
         bb.putShort(38, (short) masterHandle);
         bb.putShort(40, (short) tractionLevel);
         bb.putShort(42, (short) brakeLevel);
@@ -151,6 +156,16 @@ public class Protocol704FrameParserTest {
         MappedControlCommand cmd = result.getMappedCommand();
         assertEquals(1, cmd.getDirectionHandle());
         assertEquals("向前", result.getFields().get("direction_desc"));
+    }
+
+    @Test
+    public void testDirectionSemanticsForwardReverseAndZero() {
+        assertEquals("FORWARD", Protocol704FrameParser.parseFrame(
+                buildValidPlcFrame(1, 0, 0, 0, false)).getMappedCommand().getDirection());
+        assertEquals("REVERSE", Protocol704FrameParser.parseFrame(
+                buildValidPlcFrame(2, 0, 0, 0, false)).getMappedCommand().getDirection());
+        assertEquals("ZERO", Protocol704FrameParser.parseFrame(
+                buildValidPlcFrame(0, 0, 0, 0, false)).getMappedCommand().getDirection());
     }
 
     @Test

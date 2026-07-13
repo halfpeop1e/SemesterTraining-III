@@ -489,6 +489,9 @@ public class Protocol704VehicleControlBridge {
         lifecycle.setCommandId("704-local-v1-" + UUID.randomUUID());
         lifecycle.setReceivedAt(System.currentTimeMillis());
         lifecycle.setParsedCommand(mapped == null ? null : mapped.getCommand());
+        if (SOURCE_PLC.equals(source) || SOURCE_LOCAL_TEST.equals(source)) {
+            lifecycle.setDriverCabDirection(mapped == null ? null : mapped.getDirection());
+        }
         lifecycle.setLevel(mapped == null ? 0.0 : mapped.getLevelPercent());
         lifecycle.setActiveTrainId(trainId);
         lifecycle.setSource(source);

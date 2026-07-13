@@ -60,6 +60,7 @@ interface InstanceState {
   toStationId: number;
   drivingMode: DrivingMode;
   controlSourceMode: ControlSourceMode;
+  driverCabDirection?: RealtimeVehicleState704["driverCabDirection"];
   allSafetyEvents: SafetyEvent[];
   handleResetToken: number;
   /** useRef 等效保持引用 (不触发重渲染) */
@@ -1281,6 +1282,12 @@ function Vehicle() {
               }
             }}
             onRealtimeState={(realtimeState: RealtimeVehicleState704) => {
+              if (realtimeState.driverCabDirection !== undefined) {
+                updateInstance(tid, (current) => ({
+                  ...current,
+                  driverCabDirection: realtimeState.driverCabDirection,
+                }));
+              }
               setDisplayState((previous) => {
                 const baseState = previous?.trainId === tid
                   ? previous
@@ -1341,6 +1348,7 @@ function Vehicle() {
           safetyEventCount={ai.allSafetyEvents.length}
           isPaused={labDriverDeskMode ? false : ai.isPaused}
           stationStops={ai.result?.stationStops}
+          driverCabDirection={ai.driverCabDirection}
           externalDriveMode={ai.drivingMode}
           onRequestManual={() => handleRequestManual(activeTrainId)}
           onTractionLevel={(level, percent) =>
