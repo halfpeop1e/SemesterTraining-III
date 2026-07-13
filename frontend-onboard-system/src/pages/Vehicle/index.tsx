@@ -21,6 +21,7 @@ import type {
   StationStop,
   TrainState,
 } from "../../types/vehicle";
+import type { RealtimeVehicleState704 } from "../../types/protocol704";
 import { STATIONS } from "./data/lineMap";
 import DriverCabView from "./components/DriverCabView";
 import LineRunView from "./components/LineRunView";
@@ -1278,6 +1279,26 @@ function Vehicle() {
                   };
                 });
               }
+            }}
+            onRealtimeState={(realtimeState: RealtimeVehicleState704) => {
+              setDisplayState((previous) => {
+                const baseState = previous?.trainId === tid
+                  ? previous
+                  : instanceRefs.current.get(tid)?.stateRef;
+                if (!baseState) return previous;
+
+                const lineStartPosition = instances.get(tid)?.result?.summary.lineStartPosition;
+                return {
+                  ...baseState,
+                  trainId: tid,
+                  position: realtimeState.positionM,
+                  velocity: realtimeState.velocityMs,
+                  acceleration: realtimeState.accelerationMs2,
+                  absolutePosition: lineStartPosition === undefined
+                    ? baseState.absolutePosition
+                    : lineStartPosition + realtimeState.positionM,
+                };
+              });
             }}
           />
         </div>

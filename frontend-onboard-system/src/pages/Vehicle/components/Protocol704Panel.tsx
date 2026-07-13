@@ -7,7 +7,11 @@ import {
   sendTestFrame,
   syncProtocol704State,
 } from '../../../api/protocol704';
-import type { Protocol704PortStatus, Protocol704Status } from '../../../types/protocol704';
+import type {
+  Protocol704PortStatus,
+  Protocol704Status,
+  RealtimeVehicleState704,
+} from '../../../types/protocol704';
 import type { SimulationControlRequest, SimulationResult, TrainState } from '../../../types/vehicle';
 
 interface Protocol704PanelProps {
@@ -23,6 +27,8 @@ interface Protocol704PanelProps {
     latched: boolean,
     result?: SimulationResult,
   ) => void;
+  /** 每次状态轮询都向主 Vehicle 页面发布后端实时车辆状态。 */
+  onRealtimeState?: (state: RealtimeVehicleState704) => void;
   /** 获取当前 ATO 播放状态，测试帧发送前同步到 Bridge，使 EB 从真实当前位置开始。 */
   getCurrentState?: () => SimulationControlRequest | null;
 }
@@ -113,6 +119,7 @@ export default function Protocol704Panel({
   enabled,
   onError,
   onExecutedState,
+  onRealtimeState,
   getCurrentState,
 }: Protocol704PanelProps) {
   const [status, setStatus] = useState<Protocol704Status | null>(null);
@@ -162,6 +169,9 @@ export default function Protocol704Panel({
     try {
       const next = await getProtocol704Status(trainId);
       setStatus(next);
+      if (next.realtimeVehicleState) {
+        onRealtimeState?.(next.realtimeVehicleState);
+      }
       processLifecycle(next, false);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
@@ -320,6 +330,9 @@ export default function Protocol704Panel({
 
       const next = await sendTestFrame(trainId, type);
       setStatus(next);
+      if (next.realtimeVehicleState) {
+        onRealtimeState?.(next.realtimeVehicleState);
+      }
       processLifecycle(next, true);
       setExpanded(true);
     } catch (error) {
