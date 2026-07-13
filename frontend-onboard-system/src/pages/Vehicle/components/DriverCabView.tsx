@@ -25,6 +25,8 @@ export interface DriverCabViewProps {
   stationStops?: StationStop[];
   /** Supplied by the shared dispatch model for downstream 3D/route extensions. */
   sidingStatuses?: SidingStatus[];
+  /** PLC 实际司机台方向手柄状态；未收到帧时保持 undefined。 */
+  driverCabDirection?: 'FORWARD' | 'ZERO' | 'REVERSE';
   // ---- 驾驶员控制回调（全部可选，不传时保持纯本地 UI 状态）----
   /** 当前有效驾驶模式（由父组件同步，仅用于显示；不在 render 中调 setState）。 */
   externalDriveMode?: 'ato' | 'manual' | 'emergency' | null;
@@ -689,6 +691,7 @@ function DriverCabView({
   safetyEventCount = 0,
   isPaused = false,
   stationStops,
+  driverCabDirection,
   externalDriveMode,
   onRequestManual,
   onTractionLevel,
@@ -857,7 +860,12 @@ function DriverCabView({
   const leverMode = currentAcceleration > 0.05 ? 'traction' : currentAcceleration < -0.05 ? 'brake' : 'neutral';
   const tractionLevel = clamp(currentAcceleration / 1.1, 0, 1);
   const brakeLevel = clamp(Math.abs(currentAcceleration) / 1.3, 0, 1);
-  const activeLeverLevel = leverMode === 'traction' ? tractionLevel : leverMode === 'brake' ? brakeLevel : 0.08;
+  const leverTopPercent =
+    leverMode === 'traction'
+      ? 50 - tractionLevel * 34
+      : leverMode === 'brake'
+        ? 50 + brakeLevel * 34
+        : 50;
   const accelMagnitude = clamp(Math.abs(currentAcceleration) / 1.4, 0, 1);
   const accelClass =
     currentAcceleration > 0.05
@@ -872,8 +880,25 @@ function DriverCabView({
   } as CSSProperties;
 
   const leverStyle = {
-    '--lever-level': `${activeLeverLevel * 100}%`,
+    '--lever-top': `${leverTopPercent}%`,
   } as CSSProperties;
+
+  const directionPosition =
+    driverCabDirection === 'FORWARD'
+      ? 'forward'
+      : driverCabDirection === 'REVERSE'
+        ? 'reverse'
+        : driverCabDirection === 'ZERO'
+          ? 'zero'
+          : 'unknown';
+  const directionLabel =
+    driverCabDirection === 'FORWARD'
+      ? '前进'
+      : driverCabDirection === 'REVERSE'
+        ? '后退'
+        : driverCabDirection === 'ZERO'
+          ? '零位'
+          : '暂无方向数据';
 
   const accelStyle = {
     '--accel-level': `${accelMagnitude * 50}%`,
@@ -1015,15 +1040,27 @@ function DriverCabView({
             </div>
 
             <div className={`cab-instrument cab-instrument--lever cab-lever--${leverMode}`} style={leverStyle}>
-              <div className="cab-instrument__label">牵 / 制趋势</div>
+              <div className="cab-instrument__label">牵引 / 制动手柄</div>
               <div className="cab-lever">
                 <span className="cab-lever__slot" />
                 <span className="cab-lever__fill" />
                 <span className="cab-lever__handle" />
               </div>
               <div className="cab-instrument__subline">
-                {leverMode === 'traction' ? '牵引' : leverMode === 'brake' ? '制动' : '惰行'}
+                {leverMode === 'traction' ? '牵引（向上）' : leverMode === 'brake' ? '制动（向下）' : '惰行（零位）'}
               </div>
+            </div>
+
+            <div className={`cab-instrument cab-instrument--direction cab-direction--${directionPosition}`}>
+              <div className="cab-instrument__label">司机台方向</div>
+              <div className="cab-direction" aria-label="司机台方向手柄">
+                <span className="cab-direction__slot" />
+                <span className="cab-direction__mark cab-direction__mark--forward">前进</span>
+                <span className="cab-direction__mark cab-direction__mark--zero">零位</span>
+                <span className="cab-direction__mark cab-direction__mark--reverse">后退</span>
+                <span className="cab-direction__handle" />
+              </div>
+              <div className="cab-instrument__subline">{directionLabel}</div>
             </div>
           </div>
 
