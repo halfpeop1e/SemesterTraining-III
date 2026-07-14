@@ -68,6 +68,10 @@ public class Protocol704Service {
         this.signalPlcDepartureService = null;
     }
 
+    Protocol704Service(Protocol704VehicleControlBridge vehicleControlBridge) {
+        this(vehicleControlBridge, null);
+    }
+
     @Autowired
     public Protocol704Service(Protocol704VehicleControlBridge vehicleControlBridge,
                               SignalPlcDepartureService signalPlcDepartureService) {

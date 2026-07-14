@@ -32,9 +32,10 @@ public class TrainOperationController {
             int linkId = number(body.get("headLinkId"), 1);
             String direction = String.valueOf(body.getOrDefault("direction", "UP"));
             int stationId = number(body.get("stationId"), "DOWN".equalsIgnoreCase(direction) ? 13 : 1);
+            int destinationStationId = number(body.get("destinationStationId"), 0);
             String routePattern = String.valueOf(body.getOrDefault("routePattern", "FULL"));
             return ApiResponse.ok("列车已添加", simulationService.addTrain(
-                    trainId, linkId, direction, stationId, routePattern));
+                    trainId, linkId, direction, stationId, routePattern, destinationStationId));
         } catch (Exception e) {
             return ApiResponse.error(e.getMessage());
         }

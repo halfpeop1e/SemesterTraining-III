@@ -182,6 +182,7 @@ export interface AddDispatchTrainRequest {
   headLinkId: number;
   direction: 'UP' | 'DOWN';
   stationId: number;
+  destinationStationId?: number;
   routePattern: 'FULL' | 'SHORT_N' | 'SHORT_S' | 'EXPRESS';
 }
 

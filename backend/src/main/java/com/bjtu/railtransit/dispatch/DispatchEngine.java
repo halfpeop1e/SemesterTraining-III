@@ -219,11 +219,32 @@ public class DispatchEngine {
      */
     public void generateSingleTrainTimetable(LineProfile lineProfile, String trainId,
                                               int startStationIndex, boolean isUp, double simTimeSeconds) {
+        int stationCount = lineProfile.getStations().size();
+        int destinationStationIndex = isUp ? stationCount - 1 : 0;
+        generateSingleTrainTimetable(lineProfile, trainId, startStationIndex,
+                destinationStationIndex, isUp, simTimeSeconds);
+    }
+
+    /**
+     * 为信号系统创建的点到点列车生成时刻表。
+     * 终点由信号页面明确选择，不能隐式扩展为全线交路。
+     */
+    public void generateSingleTrainTimetable(LineProfile lineProfile, String trainId,
+                                              int startStationIndex, int destinationStationIndex,
+                                              boolean isUp, double simTimeSeconds) {
         if (timetable == null)
             timetable = new LinkedHashMap<>();
 
         List<LineProfile.Station> stations = lineProfile.getStations();
         int stationCount = stations.size();
+        if (startStationIndex < 0 || startStationIndex >= stationCount
+                || destinationStationIndex < 0 || destinationStationIndex >= stationCount) {
+            throw new IllegalArgumentException("时刻表起终点站索引无效");
+        }
+        if ((isUp && destinationStationIndex < startStationIndex)
+                || (!isUp && destinationStationIndex > startStationIndex)) {
+            throw new IllegalArgumentException("终点必须位于列车运行方向的前方");
+        }
 
         // 确保区间运行时间已计算（基于真实逐段限速）
         if (sectionRunTimes == null || sectionRunTimes.isEmpty()) {
@@ -255,9 +276,9 @@ public class DispatchEngine {
         Map<Integer, TimetableEntry> trainSchedule = new LinkedHashMap<>();
 
         if (isUp) {
-            // 上行: startStationIndex → stationCount-1
+            // 上行: startStationIndex → destinationStationIndex
             double currentTime = simTimeSeconds;
-            for (int s = startStationIndex; s < stationCount; s++) {
+            for (int s = startStationIndex; s <= destinationStationIndex; s++) {
                 TimetableEntry entry = new TimetableEntry();
                 entry.stationId = stations.get(s).getId();
                 entry.stationName = stations.get(s).getName();
@@ -267,7 +288,7 @@ public class DispatchEngine {
                 if (s == startStationIndex) {
                     // 当前站: 计划到达=当前时刻，计划发车=当前时刻+停站时间
                     entry.plannedArrival = currentTime;
-                    double dwell = (s == stationCount - 1) ? TERMINAL_DWELL_SEC
+                    double dwell = (s == destinationStationIndex) ? TERMINAL_DWELL_SEC
                             : calcDwellTime(stations.get(s).getId(), currentTime);
                     entry.plannedDwell = dwell;
                     entry.plannedDeparture = currentTime + dwell;
@@ -275,7 +296,7 @@ public class DispatchEngine {
                     double runTime = sectionRunTimes.getOrDefault(s - 1, 120.0);
                     currentTime += runTime;
                     entry.plannedArrival = currentTime;
-                    double dwell = (s == stationCount - 1) ? TERMINAL_DWELL_SEC
+                    double dwell = (s == destinationStationIndex) ? TERMINAL_DWELL_SEC
                             : calcDwellTime(stations.get(s).getId(), currentTime);
                     entry.plannedDwell = dwell;
                     entry.plannedDeparture = currentTime + dwell;
@@ -284,9 +305,9 @@ public class DispatchEngine {
                 trainSchedule.put(s, entry);
             }
         } else {
-            // 下行: startStationIndex → 0
+            // 下行: startStationIndex → destinationStationIndex
             double currentTime = simTimeSeconds;
-            for (int s = startStationIndex; s >= 0; s--) {
+            for (int s = startStationIndex; s >= destinationStationIndex; s--) {
                 TimetableEntry entry = new TimetableEntry();
                 entry.stationId = stations.get(s).getId();
                 entry.stationName = stations.get(s).getName();
@@ -295,7 +316,7 @@ public class DispatchEngine {
 
                 if (s == startStationIndex) {
                     entry.plannedArrival = currentTime;
-                    double dwell = (s == 0) ? TERMINAL_DWELL_SEC
+                    double dwell = (s == destinationStationIndex) ? TERMINAL_DWELL_SEC
                             : calcDwellTime(stations.get(s).getId(), currentTime);
                     entry.plannedDwell = dwell;
                     entry.plannedDeparture = currentTime + dwell;
@@ -303,7 +324,7 @@ public class DispatchEngine {
                     double runTime = sectionRunTimes.getOrDefault(s - 1, 120.0);
                     currentTime += runTime;
                     entry.plannedArrival = currentTime;
-                    double dwell = (s == 0) ? TERMINAL_DWELL_SEC
+                    double dwell = (s == destinationStationIndex) ? TERMINAL_DWELL_SEC
                             : calcDwellTime(stations.get(s).getId(), currentTime);
                     entry.plannedDwell = dwell;
                     entry.plannedDeparture = currentTime + dwell;

@@ -329,13 +329,31 @@ public class SimulationService {
 
     public synchronized TrainState addTrain(String trainId, int headLinkId, String direction,
                                             int stationId, String routePattern) {
+        return addTrain(trainId, headLinkId, direction, stationId, routePattern, 0);
+    }
+
+    /**
+     * Creates one local point-to-point train controlled by the signal system.
+     * A missing destination keeps the legacy route-pattern terminal behaviour.
+     */
+    public synchronized TrainState addTrain(String trainId, int headLinkId, String direction,
+                                            int stationId, String routePattern,
+                                            int destinationStationId) {
         if (trainId == null || trainId.isBlank()) throw new IllegalArgumentException("trainId 不能为空");
         if (trains.containsKey(trainId)) throw new IllegalStateException("列车已存在: " + trainId);
         offlinedTrainIds.remove(trainId);
         if (lineProfile == null) lineProfile = lineDataService.getLineProfile();
         List<LineProfile.Station> stations = lineProfile.getStations();
-        int stationIndex = Math.max(0, Math.min(stations.size() - 1, stationId - 1));
+        int stationIndex = findStationIndex(stations, stationId, "起点站");
         boolean up = !"DOWN".equalsIgnoreCase(direction);
+        String normalizedRoutePattern = normalizeRoutePattern(routePattern);
+        RoutePattern pattern = routePatternFor(normalizedRoutePattern);
+        int destinationIndex = destinationStationId > 0
+                ? findStationIndex(stations, destinationStationId, "终点站")
+                : (up ? pattern.getUpEndStationIndex() : pattern.getDownEndStationIndex());
+        if ((up && destinationIndex <= stationIndex) || (!up && destinationIndex >= stationIndex)) {
+            throw new IllegalArgumentException("终点站必须位于列车运行方向的前方");
+        }
         int nextIndex = up ? Math.min(stations.size() - 1, stationIndex + 1)
                 : Math.max(0, stationIndex - 1);
 
@@ -344,7 +362,9 @@ public class SimulationService {
         train.setTrainName(trainId);
         train.setTrainNumber(trainId);
         train.setDirection(up ? "UP" : "DOWN");
-        train.setRoutePattern(normalizeRoutePattern(routePattern));
+        train.setRoutePattern(normalizedRoutePattern);
+        train.setOriginStationId(stations.get(stationIndex).getId());
+        train.setDestinationStationId(stations.get(destinationIndex).getId());
         train.setHeadLinkId(headLinkId);
         train.setOperationLevel(OperationLevel.NORMAL);
         train.setPositionMeters(stations.get(stationIndex).getKm() * 1000.0);
@@ -372,7 +392,8 @@ public class SimulationService {
         tractionStates.put(trainId, ts);
         brakeStates.put(trainId, bs);
         trains.put(trainId, train);
-        dispatchEngine.generateSingleTrainTimetable(lineProfile, trainId, stationIndex, up, simulationTimeSeconds);
+        dispatchEngine.generateSingleTrainTimetable(lineProfile, trainId, stationIndex,
+                destinationIndex, up, simulationTimeSeconds);
         TrainState result = copyTrainState(train);
         broadcastCurrentSnapshot();
         return result;
@@ -1200,6 +1221,21 @@ public class SimulationService {
         boolean dwellComplete = train.getActualDwellSeconds() >= train.getPlannedDwellSeconds();
 
         if (dwellComplete && !held) {
+            if (hasReachedRequestedDestination(train, stations)) {
+                train.setStatus("FINISHED");
+                train.setActiveCommand(null);
+                activeCommands.remove(tid);
+                signalPlcDepartureService.onDepartureRevoked(tid);
+
+                SimulationSnapshot.TrainCommand terminate = new SimulationSnapshot.TrainCommand();
+                terminate.setTrainId(tid);
+                terminate.setCommandType("TERMINATE");
+                terminate.setReason(String.format("到达选定终点 %s，本次仿真结束",
+                        stations.get(currentStationIdx).getName()));
+                commandLog.add(terminate);
+                return;
+            }
+
             RoutePattern rp = getRoutePattern(train);
             boolean isUp = train.isUpDirection();
 
@@ -1362,6 +1398,13 @@ public class SimulationService {
         } else {
             return idx <= rp.getDownEndStationIndex();
         }
+    }
+
+    private boolean hasReachedRequestedDestination(TrainState train, List<LineProfile.Station> stations) {
+        int currentIndex = train.getCurrentStationIndex();
+        return currentIndex >= 0 && currentIndex < stations.size()
+                && train.getDestinationStationId() > 0
+                && stations.get(currentIndex).getId() == train.getDestinationStationId();
     }
 
     // ── 运动学更新 (含状态转移, 双向感知, 运行等级感知) ──
@@ -2224,7 +2267,10 @@ public class SimulationService {
 
     /** 获取列车对应的交路模式 */
     private RoutePattern getRoutePattern(TrainState train) {
-        String pid = train.getRoutePattern();
+        return routePatternFor(train.getRoutePattern());
+    }
+
+    private RoutePattern routePatternFor(String pid) {
         if (RoutePattern.SHORT_S.equals(pid))
             return RoutePattern.shortSouth();
         if (RoutePattern.SHORT_N.equals(pid))
@@ -2232,6 +2278,13 @@ public class SimulationService {
         if (RoutePattern.EXPRESS.equals(pid))
             return RoutePattern.fullRoute();
         return RoutePattern.fullRoute();
+    }
+
+    private int findStationIndex(List<LineProfile.Station> stations, int stationId, String label) {
+        for (int i = 0; i < stations.size(); i++) {
+            if (stations.get(i).getId() == stationId) return i;
+        }
+        throw new IllegalArgumentException(label + "不存在: " + stationId);
     }
 
     /** 获取列车当前的运行等级参数 */
@@ -2597,6 +2650,8 @@ public class SimulationService {
         c.setTripId(src.getTripId());
         c.setLineId(src.getLineId());
         c.setRouteId(src.getRouteId());
+        c.setOriginStationId(src.getOriginStationId());
+        c.setDestinationStationId(src.getDestinationStationId());
         c.setHeadLinkId(src.getHeadLinkId());
         c.setCurrentSegmentId(src.getCurrentSegmentId());
         c.setTrainLengthMeters(src.getTrainLengthMeters());

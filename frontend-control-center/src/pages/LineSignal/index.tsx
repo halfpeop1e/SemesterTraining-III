@@ -49,6 +49,7 @@ import OperationsDock from './components/OperationsDock';
 import MaPanel from './components/MaPanel';
 import EventLog from './components/EventLog';
 import LabTrainQuickStart from './components/LabTrainQuickStart';
+import LocalTrainOperations from './components/LocalTrainOperations';
 import { pickDefaultStationId, sortedStations, nearestStationId } from './data/mileage';
 import { topologyStationIdForRoute, topologyStationIdForSignal } from './data/realTopology';
 import { STATION_NAMES } from './data/teacherDiagramLayout';
@@ -635,6 +636,15 @@ function LineSignal() {
           void refreshAll();
         }}
       />
+      <LocalTrainOperations
+        lineProfile={lineProfile}
+        trains={trains}
+        initialStationId={activeStationId || String(lineProfile.stations[0]?.id || '1')}
+        onChanged={() => {
+          void refreshSimulation();
+          void refreshAll();
+        }}
+      />
 
       {opsOpen && (
         <div className="signal-ops-top shrink-0 border-b border-amber-500/20 px-3 py-2">
@@ -678,7 +688,7 @@ function LineSignal() {
           banner
           showIcon
           message="仿真未启动"
-          description="请在上方“实验列车”栏创建列车，系统会自动启动仿真并连接司机台。"
+          description="本地仿真请使用“本地列车管理”；实验室联调请使用上方“实验列车”入口。"
         />
       )}
       {simLive && (

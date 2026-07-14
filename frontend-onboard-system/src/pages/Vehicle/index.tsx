@@ -9,11 +9,13 @@ import {
   callVehicleControl,
   getAllSidingStatuses,
   getOnboardSnapshot,
+  getSignalManagedTrains,
   reportOnboardEvent,
   resetVehicleSimulation,
   runVehicleSimulation,
 } from "../../api/vehicle";
 import type { OnboardSnapshot } from "../../api/vehicle";
+import type { SignalManagedTrain } from "../../api/vehicle";
 import { disconnectProtocol704, getHilGatewayStatus, resetProtocol704 } from "../../api/protocol704";
 import type {
   DrivingMode,
@@ -23,7 +25,6 @@ import type {
   StationStop,
   TrainState,
 } from "../../types/vehicle";
-import type { RealtimeVehicleState704 } from "../../types/protocol704";
 import { STATIONS } from "./data/lineMap";
 import DriverCabView from "./components/DriverCabView";
 import LineRunView from "./components/LineRunView";
@@ -37,7 +38,7 @@ const DEMO_SPEED_LIMIT_FALLBACK_MS = 20;
 const SPEED_MULTIPLIER_OPTIONS = [0.5, 1, 2, 4, 8] as const;
 type SpeedMultiplier = (typeof SPEED_MULTIPLIER_OPTIONS)[number];
 type PageStatus = "idle" | "loading" | "playing" | "finished" | "error";
-type ControlSourceMode = "SIMULATION" | "LAB_DRIVER_DESK";
+type ControlSourceMode = "SIMULATION" | "SIGNAL_SYSTEM" | "LAB_DRIVER_DESK";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -192,7 +193,7 @@ function getTrainId(existingTrainIds: string[]): string {
 function Vehicle() {
   // URL 参数作为初始 trainId
   const urlParam = new URLSearchParams(window.location.search).get("trainId");
-  const urlTrainId = urlParam || getTrainId([]);
+  const urlTrainId = urlParam || "";
 
   // 若 URL 提供了 trainId，同步计数器避免后续冲突
   if (urlParam) {
@@ -205,7 +206,7 @@ function Vehicle() {
   // 多实例存储
   const [instances, setInstances] = useState<Map<string, InstanceState>>(() => {
     const m = new Map<string, InstanceState>();
-    m.set(urlTrainId, createInstance(urlTrainId));
+    if (urlTrainId) m.set(urlTrainId, createInstance(urlTrainId));
     return m;
   });
   const [activeTrainId, setActiveTrainId] = useState<string>(urlTrainId);
@@ -252,6 +253,68 @@ function Vehicle() {
   const instancesRef = useRef(instances);
   instancesRef.current = instances;
   const adoptedLaboratoryTrainRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const stationIdFor = (value: number | undefined, fallback: number) =>
+      STATIONS.some((station) => station.stationId === value) ? Number(value) : fallback;
+
+    const syncFromSignalSystem = async () => {
+      try {
+        const trains = await getSignalManagedTrains();
+        if (cancelled) return;
+        const knownIds = new Set(trains.map((train) => train.trainId));
+        setInstances((previous) => {
+          const next = new Map(previous);
+          trains.forEach((train: SignalManagedTrain) => {
+            const existing = next.get(train.trainId);
+            if (existing?.controlSourceMode === "LAB_DRIVER_DESK") return;
+
+            const originStationId = stationIdFor(
+              train.originStationId,
+              Math.max(1, train.currentStationIndex + 1),
+            );
+            const destinationStationId = stationIdFor(
+              train.destinationStationId,
+              train.direction === "DOWN" ? 1 : STATIONS[STATIONS.length - 1].stationId,
+            );
+            const base = existing ?? createInstance(train.trainId);
+            next.set(train.trainId, {
+              ...base,
+              status: train.status === "FINISHED" ? "finished" : "playing",
+              result: null,
+              frameIndex: 0,
+              isPaused: true,
+              departureAuthorized: false,
+              fromStationId: originStationId,
+              toStationId: destinationStationId,
+              controlSourceMode: "SIGNAL_SYSTEM",
+              drivingMode: "ato",
+            });
+          });
+          Array.from(next.entries()).forEach(([trainId, instance]) => {
+            if (instance.controlSourceMode === "SIGNAL_SYSTEM" && !knownIds.has(trainId)) {
+              next.delete(trainId);
+            }
+          });
+          return next;
+        });
+        setActiveTrainId((current) => current || trains[0]?.trainId || "");
+      } catch {
+        // Keep the last known signal snapshot during a transient backend restart.
+      } finally {
+        if (!cancelled) timer = window.setTimeout(syncFromSignalSystem, 500);
+      }
+    };
+
+    void syncFromSignalSystem();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, []);
 
   // A laboratory train may be created from the signal page first. Adopt the
   // same backend-bound ID here instead of making the user create a second OB
@@ -936,10 +999,12 @@ function Vehicle() {
       ? ai.result.states[ai.frameIndex]
       : null;
   const labDriverDeskMode = ai.controlSourceMode === "LAB_DRIVER_DESK";
-  const activeSignalSnapshot = labDriverDeskMode
+  const signalSystemMode = ai.controlSourceMode === "SIGNAL_SYSTEM";
+  const signalControlledMode = labDriverDeskMode || signalSystemMode;
+  const activeSignalSnapshot = signalControlledMode
     ? signalSnapshots.get(activeTrainId)
     : undefined;
-  const signalViewState = labDriverDeskMode
+  const signalViewState = signalControlledMode
     ? mapSignalSnapshotToTrainState(
         activeSignalSnapshot,
         activeTrainId,
@@ -947,14 +1012,14 @@ function Vehicle() {
         ai.toStationId,
       )
     : null;
-  const viewState = labDriverDeskMode
+  const viewState = signalControlledMode
     ? signalViewState
     : displayState?.trainId === activeTrainId
       ? displayState
       : currentState;
   const canResetEmergency =
     ai.drivingMode === "emergency" && ai.result?.summary?.nextMode === "manual";
-  const targetStopPosition = labDriverDeskMode
+  const targetStopPosition = signalControlledMode
     ? resolveSignalTargetPosition(
         signalViewState?.absolutePosition,
         ai.fromStationId,
@@ -962,7 +1027,7 @@ function Vehicle() {
       )
     : ai.result?.stopResult?.targetStopPosition ?? 1200;
   const speedLimitValue =
-    labDriverDeskMode && activeSignalSnapshot
+    signalControlledMode && activeSignalSnapshot
       ? activeSignalSnapshot.speedLimitKmh / 3.6
       : ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
   const lineStartPosition =
@@ -981,20 +1046,19 @@ function Vehicle() {
   const completedStops = ai.result?.summary?.completedStops;
 
   const trainIds = Array.from(instances.keys());
-  const laboratoryTrainIdsDigest = Array.from(instances.entries())
-    .filter(([, instance]) => instance.controlSourceMode === "LAB_DRIVER_DESK")
+  const signalControlledTrainIdsDigest = Array.from(instances.entries())
+    .filter(([, instance]) => instance.controlSourceMode !== "SIMULATION")
     .map(([trainId]) => trainId)
     .sort()
     .join("|");
 
-  // The signal system is authoritative for a laboratory train. Poll its
-  // fused snapshot directly; PLC callbacks remain responsible for device I/O,
-  // but they no longer define a separate onboard display trajectory.
+  // Signal-owned trains and laboratory trains both render the authoritative
+  // signal snapshot. Only the laboratory mode also opens physical device I/O.
   useEffect(() => {
-    const laboratoryTrainIds = laboratoryTrainIdsDigest
+    const signalControlledTrainIds = signalControlledTrainIdsDigest
       .split("|")
       .filter((trainId) => trainId.length > 0);
-    if (laboratoryTrainIds.length === 0) {
+    if (signalControlledTrainIds.length === 0) {
       setSignalSnapshots(new Map());
       return undefined;
     }
@@ -1003,7 +1067,7 @@ function Vehicle() {
     let timerId: number | null = null;
     const refresh = async () => {
       const updates = await Promise.all(
-        laboratoryTrainIds.map(async (trainId) => {
+        signalControlledTrainIds.map(async (trainId) => {
           try {
             return [trainId, await getOnboardSnapshot(trainId)] as const;
           } catch {
@@ -1019,7 +1083,7 @@ function Vehicle() {
             if (update) next.set(update[0], update[1]);
           });
           Array.from(next.keys()).forEach((trainId) => {
-            if (!laboratoryTrainIds.includes(trainId)) next.delete(trainId);
+            if (!signalControlledTrainIds.includes(trainId)) next.delete(trainId);
           });
           return next;
         });
@@ -1032,10 +1096,10 @@ function Vehicle() {
       cancelled = true;
       if (timerId !== null) window.clearTimeout(timerId);
     };
-  }, [laboratoryTrainIdsDigest]);
+  }, [signalControlledTrainIdsDigest]);
 
   useEffect(() => {
-    if (labDriverDeskMode) return undefined;
+    if (signalControlledMode) return undefined;
     const states = ai.result?.states;
     if (!states || states.length === 0) {
       setDisplayState(null);
@@ -1105,7 +1169,7 @@ function Vehicle() {
     ai.isPaused,
     ai.speedMultiplier,
     ai.trajectoryVersion,
-    labDriverDeskMode,
+    signalControlledMode,
   ]);
 
   if (!activeInstance) {
@@ -1252,36 +1316,45 @@ function Vehicle() {
             </select>
           </div>
 
-          <div className="vehicle-control-mode" role="group" aria-label="控制来源">
-            <span>控制来源</span>
-            <button
-              type="button"
-              className={!labDriverDeskMode ? "is-active" : ""}
-              disabled={isLoading || isPlaying}
-              onClick={() => setControlSourceMode(activeTrainId, "SIMULATION")}
-            >
-              软件仿真
-            </button>
-            <button
-              type="button"
-              className={labDriverDeskMode ? "is-active" : ""}
-              disabled={isLoading || isPlaying}
-              onClick={() => setControlSourceMode(activeTrainId, "LAB_DRIVER_DESK")}
-            >
-              实验室司机台
-            </button>
-          </div>
+          {signalSystemMode ? (
+            <div className="vehicle-control-mode" aria-label="控制来源">
+              <span>控制来源</span>
+              <strong>信号系统同步</strong>
+            </div>
+          ) : (
+            <div className="vehicle-control-mode" role="group" aria-label="控制来源">
+              <span>控制来源</span>
+              <button
+                type="button"
+                className={!labDriverDeskMode ? "is-active" : ""}
+                disabled={isLoading || isPlaying}
+                onClick={() => setControlSourceMode(activeTrainId, "SIMULATION")}
+              >
+                软件仿真
+              </button>
+              <button
+                type="button"
+                className={labDriverDeskMode ? "is-active" : ""}
+                disabled={isLoading || isPlaying}
+                onClick={() => setControlSourceMode(activeTrainId, "LAB_DRIVER_DESK")}
+              >
+                实验室司机台
+              </button>
+            </div>
+          )}
 
           <button
             className="vehicle-start-btn"
             onClick={() => handleStart(activeTrainId)}
-            disabled={isLoading || isPlaying}
+            disabled={signalSystemMode || isLoading || isPlaying}
             type="button"
           >
             {isLoading
               ? "准备中..."
               : ai.status === "finished" || ai.status === "error"
                 ? "重新上线"
+                : signalSystemMode
+                  ? "由信号系统控制"
                 : labDriverDeskMode
                   ? "上线并启用手柄"
                   : "上线并等待发车"}
@@ -1289,10 +1362,12 @@ function Vehicle() {
           <button
             className="vehicle-secondary-btn"
             onClick={() => handleTogglePause(activeTrainId)}
-            disabled={labDriverDeskMode || !isPlaying || !ai.departureAuthorized}
+            disabled={signalControlledMode || !isPlaying || !ai.departureAuthorized}
             type="button"
           >
-            {labDriverDeskMode
+            {signalSystemMode
+              ? "由信号系统控制"
+              : labDriverDeskMode
               ? "由实体手柄控制"
               : !ai.departureAuthorized && isPlaying
                 ? "等待调度发车"
@@ -1321,7 +1396,7 @@ function Vehicle() {
                     speedMultiplier: m,
                   }))
                 }
-                disabled={labDriverDeskMode || (!ai.result && ai.status !== "playing")}
+                disabled={signalControlledMode || (!ai.result && ai.status !== "playing")}
                 aria-pressed={ai.speedMultiplier === m}
               >
                 {m}x
@@ -1355,8 +1430,8 @@ function Vehicle() {
 
           {isPlaying && viewState && (
             <span className="vehicle-status-text">
-              {labDriverDeskMode ? "司机台同步" : ai.isPaused ? "已暂停" : "播放中"}
-              {!labDriverDeskMode && <> · {ai.frameIndex + 1}/{ai.result?.states.length}</>}
+              {signalSystemMode ? "信号系统同步" : labDriverDeskMode ? "司机台同步" : ai.isPaused ? "已暂停" : "播放中"}
+              {!signalControlledMode && <> · {ai.frameIndex + 1}/{ai.result?.states.length}</>}
               {" · "}t={viewState.time.toFixed(1)}s{" · "}模式:
               {ai.drivingMode.toUpperCase()}
             </span>
@@ -1371,7 +1446,7 @@ function Vehicle() {
       {trainIds.map((tid) => {
         const inst = instances.get(tid)!;
         const instState: TrainState | null =
-          inst.controlSourceMode === "LAB_DRIVER_DESK"
+          inst.controlSourceMode !== "SIMULATION"
             ? mapSignalSnapshotToTrainState(
                 signalSnapshots.get(tid),
                 tid,
@@ -1422,7 +1497,8 @@ function Vehicle() {
               onDepartAuthorized={(state) => handleDepartAuthorized(tid, state)}
               onDispatchHold={() => handleDispatchHold(tid)}
               onDispatchRecovery={() => handleDispatchRecovery(tid)}
-              externalControl={inst.controlSourceMode === "LAB_DRIVER_DESK"}
+              externalControl={inst.controlSourceMode !== "SIMULATION"}
+              externalControlLabel={inst.controlSourceMode === "SIGNAL_SYSTEM" ? "信号系统状态同步" : "实验室司机台状态由 704 控制桥同步"}
               onManualApproved={() => {
                 updateInstance(tid, (cur) => ({
                   ...cur,
@@ -1535,26 +1611,6 @@ function Vehicle() {
                 });
               }
             }}
-            onRealtimeState={(realtimeState: RealtimeVehicleState704) => {
-              setDisplayState((previous) => {
-                const baseState = previous?.trainId === tid
-                  ? previous
-                  : instanceRefs.current.get(tid)?.stateRef;
-                if (!baseState) return previous;
-
-                const lineStartPosition = instances.get(tid)?.result?.summary.lineStartPosition;
-                return {
-                  ...baseState,
-                  trainId: tid,
-                  position: realtimeState.positionM,
-                  velocity: realtimeState.velocityMs,
-                  acceleration: realtimeState.accelerationMs2,
-                  absolutePosition: lineStartPosition === undefined
-                    ? baseState.absolutePosition
-                    : lineStartPosition + realtimeState.positionM,
-                };
-              });
-            }}
           />
         </div>
       ))}
@@ -1594,7 +1650,7 @@ function Vehicle() {
           speedLimit={speedLimitValue}
           stopResult={ai.result?.stopResult ?? null}
           safetyEventCount={ai.allSafetyEvents.length}
-          isPaused={labDriverDeskMode ? false : ai.isPaused}
+          isPaused={signalControlledMode ? false : ai.isPaused}
           stationStops={ai.result?.stationStops}
           externalDriveMode={ai.drivingMode}
           onRequestManual={() => handleRequestManual(activeTrainId)}
@@ -1610,8 +1666,10 @@ function Vehicle() {
           onResetEmergency={() => handleResetEmergency(activeTrainId)}
           canResetEmergency={canResetEmergency}
           handleResetToken={ai.handleResetToken}
-          controlLocked={labDriverDeskMode}
-          controlLockMessage="实验室司机台控制已启用，网页驾驶台只显示状态"
+          controlLocked={signalControlledMode}
+          controlLockMessage={signalSystemMode
+            ? "信号系统为当前列车的唯一控制源，车载驾驶台只显示状态"
+            : "实验室司机台控制已启用，网页驾驶台只显示状态"}
         />
         <div className="vehicle-right-panel">
           <div className="vehicle-right-tabs">
