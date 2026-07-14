@@ -15,6 +15,7 @@ import com.bjtu.railtransit.vehicle.service.DemoScenarioProvider;
 import com.bjtu.railtransit.vehicle.service.LineProfileJsonLoader;
 import com.bjtu.railtransit.vehicle.service.LineProfileJsonLoader.StationEntry;
 import com.bjtu.railtransit.vehicle.service.VehicleSimulationService;
+import com.bjtu.railtransit.vehicle.service.SimulationStreamingService;
 import com.bjtu.railtransit.vehicle.protocol704.Protocol704VehicleControlBridge;
 import com.bjtu.railtransit.vehicle.protocol704.Protocol704CommandLifecycle;
 import com.bjtu.railtransit.vehicle.protocol704.MappedControlCommand;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
@@ -40,9 +42,15 @@ import java.util.Map;
 /**
  * 郭逸晨车载模块——车辆仿真接口。
  *
- * <p>POST /api/vehicle/simulation/run：一次性仿真（单区间或多站连续）。</p>
- * <p>POST /api/vehicle/simulation/control：驾驶员控制续算。</p>
- * <p>POST /api/vehicle/siding/enter：调度侧线撤离后续算车辆驶入侧线停车状态序列。</p>
+ * <p>
+ * POST /api/vehicle/simulation/run：一次性仿真（单区间或多站连续）。
+ * </p>
+ * <p>
+ * POST /api/vehicle/simulation/control：驾驶员控制续算。
+ * </p>
+ * <p>
+ * POST /api/vehicle/siding/enter：调度侧线撤离后续算车辆驶入侧线停车状态序列。
+ * </p>
  */
 @RestController
 @RequestMapping("/api/vehicle")
@@ -60,34 +68,36 @@ public class VehicleSimulationController {
     private final OnboardEventHandler onboardEventHandler;
     private final SimulationService simulationService;
     private final SimulationWebSocketHandler webSocketHandler;
+    @Autowired
+    private SimulationStreamingService streamingService;
 
     public VehicleSimulationController(VehicleSimulationService vehicleSimulationService,
-                                        DemoScenarioProvider demoScenarioProvider,
-                                        LineProfileJsonLoader lineProfileJsonLoader,
-                                        SidingDispatchService sidingDispatchService) {
+            DemoScenarioProvider demoScenarioProvider,
+            LineProfileJsonLoader lineProfileJsonLoader,
+            SidingDispatchService sidingDispatchService) {
         this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, sidingDispatchService,
                 null, null, null, null, null);
     }
 
     public VehicleSimulationController(VehicleSimulationService vehicleSimulationService,
-                                        DemoScenarioProvider demoScenarioProvider,
-                                        LineProfileJsonLoader lineProfileJsonLoader,
-                                        SidingDispatchService sidingDispatchService,
-                                        Protocol704VehicleControlBridge protocol704VehicleControlBridge) {
+            DemoScenarioProvider demoScenarioProvider,
+            LineProfileJsonLoader lineProfileJsonLoader,
+            SidingDispatchService sidingDispatchService,
+            Protocol704VehicleControlBridge protocol704VehicleControlBridge) {
         this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, sidingDispatchService,
                 protocol704VehicleControlBridge, null, null, null, null);
     }
 
     @Autowired
     public VehicleSimulationController(VehicleSimulationService vehicleSimulationService,
-                                        DemoScenarioProvider demoScenarioProvider,
-                                        LineProfileJsonLoader lineProfileJsonLoader,
-                                        SidingDispatchService sidingDispatchService,
-                                        Protocol704VehicleControlBridge protocol704VehicleControlBridge,
-                                        CommandBus commandBus,
-                                        OnboardEventHandler onboardEventHandler,
-                                        SimulationService simulationService,
-                                        SimulationWebSocketHandler webSocketHandler) {
+            DemoScenarioProvider demoScenarioProvider,
+            LineProfileJsonLoader lineProfileJsonLoader,
+            SidingDispatchService sidingDispatchService,
+            Protocol704VehicleControlBridge protocol704VehicleControlBridge,
+            CommandBus commandBus,
+            OnboardEventHandler onboardEventHandler,
+            SimulationService simulationService,
+            SimulationWebSocketHandler webSocketHandler) {
         this.vehicleSimulationService = vehicleSimulationService;
         this.demoScenarioProvider = demoScenarioProvider;
         this.lineProfileJsonLoader = lineProfileJsonLoader;
@@ -102,11 +112,15 @@ public class VehicleSimulationController {
     /**
      * 运行仿真（单区间或多站）。
      *
-     * <p>toStationId > fromStationId+1 时自动触发多站连续仿真：
-     * 1→2→3→...→to，中间站驻留 dwellTimeSeconds（默认 30s）。</p>
+     * <p>
+     * toStationId > fromStationId+1 时自动触发多站连续仿真：
+     * 1→2→3→...→to，中间站驻留 dwellTimeSeconds（默认 30s）。
+     * </p>
      *
-     * <p>坐标约定：返回 states.position 为从 fromStation 起的连续累积里程，
-     * stopResult.targetStopPosition 为总距离。</p>
+     * <p>
+     * 坐标约定：返回 states.position 为从 fromStation 起的连续累积里程，
+     * stopResult.targetStopPosition 为总距离。
+     * </p>
      */
     @PostMapping("/simulation/run")
     public ApiResponse<SimulationResult> run(
@@ -181,6 +195,79 @@ public class VehicleSimulationController {
         }
     }
 
+    /**
+     * 启动 WebSocket 流式仿真（20Hz 推送，替代客户端回放）。
+     * 前端连接 ws://host/ws/simulation 后发送 subscribe 订阅。
+     */
+    @PostMapping("/simulation/stream")
+    public ApiResponse<java.util.Map<String, Object>> stream(
+            @RequestBody(required = false) SimulationRunRequest request,
+            @RequestParam(defaultValue = "1") double speed) {
+
+        if (request == null || request.getTrainId() == null || request.getTrainId().isBlank()) {
+            return ApiResponse.error("trainId 不能为空");
+        }
+        int fromId = request.resolvedFromId();
+        int toId = request.resolvedToId();
+        Double dwellTime = request.getDwellTimeSeconds();
+        String trainId = request.getTrainId();
+
+        try {
+            if (simulationService != null) {
+                simulationService.restoreTrain(trainId);
+            }
+            lineProfileJsonLoader.findStationPair(fromId, toId);
+
+            SimulationResult result;
+            if (toId > fromId + 1) {
+                List<StationEntry> all = lineProfileJsonLoader.listStations();
+                List<StationEntry> segment = new ArrayList<>();
+                for (StationEntry s : all) {
+                    if (s.id >= fromId && s.id <= toId) {
+                        segment.add(s);
+                    }
+                }
+                segment.sort((a, b) -> Integer.compare(a.id, b.id));
+                result = vehicleSimulationService.runMultiStation(segment, dwellTime, demoScenarioProvider);
+                result.getSummary().setDepartureState("READY_TO_DEPART");
+            } else {
+                LineProfile lineProfile = lineProfileJsonLoader.buildLineProfile(fromId, toId);
+                ScenarioConfig scenario = demoScenarioProvider.buildScenario(lineProfile);
+                StationEntry[] pair = lineProfileJsonLoader.findStationPair(fromId, toId);
+                StationEntry fromStation = pair[0];
+                StationEntry toStation = pair[1];
+                result = vehicleSimulationService.run(scenario);
+                result.getSummary().setDepartureState("READY_TO_DEPART");
+                result.getSummary().setLineStartPosition(fromStation.km * 1000.0);
+                result.getSummary().setLineTargetPosition(toStation.km * 1000.0);
+                result.getSummary().setFromStationName(fromStation.name);
+                result.getSummary().setToStationName(toStation.name);
+                result.getSummary().setTotalStations(2);
+                result.getSummary().setCompletedStops(1);
+                for (TrainState st : result.getStates()) {
+                    st.setAbsolutePosition(fromStation.km * 1000.0 + st.getPosition());
+                }
+            }
+
+            registerProtocol704Context(request, fromId, toId, result, DrivingMode.ATO);
+            streamingService.startStreaming(trainId, result, speed);
+
+            var resp = new java.util.HashMap<String, Object>();
+            resp.put("trainId", trainId);
+            resp.put("totalFrames", result.getStates().size());
+            resp.put("duration", result.getStates().isEmpty() ? 0
+                    : result.getStates().get(result.getStates().size() - 1).getTime());
+            resp.put("fromStationName", result.getSummary().getFromStationName());
+            resp.put("toStationName", result.getSummary().getToStationName());
+            resp.put("speedMultiplier", speed);
+            resp.put("message", "已启动流式推送，请连接 ws://host/ws/simulation 并发送 subscribe");
+            return ApiResponse.ok("streaming_started", resp);
+
+        } catch (Exception e) {
+            return ApiResponse.error("流式仿真启动失败: " + e.getMessage());
+        }
+    }
+
     @PostMapping("/simulation/turnback")
     public ApiResponse<java.util.Map<String, Object>> turnback(
             @RequestBody SimulationControlRequest request,
@@ -226,7 +313,7 @@ public class VehicleSimulationController {
     }
 
     private void registerProtocol704Context(SimulationRunRequest request, int fromId, int toId,
-                                            SimulationResult result, DrivingMode mode) {
+            SimulationResult result, DrivingMode mode) {
         if (protocol704VehicleControlBridge != null && request != null
                 && request.getTrainId() != null && !request.getTrainId().isBlank()) {
             if (request.isHardwareControlEnabled()) {
@@ -246,12 +333,20 @@ public class VehicleSimulationController {
     /**
      * 驾驶员控制续算：从当前帧状态开始，根据 currentMode 和 controlCommand 续算后续轨迹。
      *
-     * <p>ATO + brake → 拒绝，保持 ATO 自动策略（模式不变）。</p>
-     * <p>MANUAL + brake → 真实制动，速度曲线/停车位置变化。</p>
-     * <p>EB → EMERGENCY，中断多站任务，不继续驶向后续站。</p>
+     * <p>
+     * ATO + brake → 拒绝，保持 ATO 自动策略（模式不变）。
+     * </p>
+     * <p>
+     * MANUAL + brake → 真实制动，速度曲线/停车位置变化。
+     * </p>
+     * <p>
+     * EB → EMERGENCY，中断多站任务，不继续驶向后续站。
+     * </p>
      *
-     * <p>坐标约定：request.currentState.position 必须是全程累积里程；
-     * 返回 states.position 以当前位置为起点继续累积。</p>
+     * <p>
+     * 坐标约定：request.currentState.position 必须是全程累积里程；
+     * 返回 states.position 以当前位置为起点继续累积。
+     * </p>
      */
     @PostMapping("/simulation/control")
     public ApiResponse<?> control(
@@ -352,7 +447,8 @@ public class VehicleSimulationController {
     }
 
     /**
-     * Apply a dispatcher-approved MANUAL_APPROVED / MANUAL_REJECTED decision on the vehicle side.
+     * Apply a dispatcher-approved MANUAL_APPROVED / MANUAL_REJECTED decision on the
+     * vehicle side.
      * MANUAL_APPROVED switches Bridge + returns a MANUAL coast continuation;
      * MANUAL_REJECTED keeps ATO.
      */
@@ -409,7 +505,8 @@ public class VehicleSimulationController {
             event.setTrainId(trainId);
             event.setEventType("SIMULATION_RESET");
             event.setTimestampSeconds(simulationService != null
-                    ? simulationService.getSimulationTimeSeconds() : 0.0);
+                    ? simulationService.getSimulationTimeSeconds()
+                    : 0.0);
             event.setPositionMeters(positionMeters);
             event.setSpeedKmh(0);
             event.setSeverity("INFO");
@@ -437,7 +534,8 @@ public class VehicleSimulationController {
         }
         String command = request.getControlCommand() != null ? request.getControlCommand().getCommand() : null;
         DrivingMode resultMode = result != null && result.getSummary() != null
-                ? result.getSummary().getCurrentMode() : null;
+                ? result.getSummary().getCurrentMode()
+                : null;
 
         if ("emergency_brake".equals(command) || "atp_emergency_brake".equals(command)
                 || resultMode == DrivingMode.EMERGENCY) {
@@ -463,16 +561,21 @@ public class VehicleSimulationController {
     /**
      * 调度侧线撤离后续算：车辆从正线驶入侧线停车。
      *
-     * <p>流程：
+     * <p>
+     * 流程：
      * <ol>
-     *   <li>调用 dispatch 层 {@code requestSidingEntry} 为列车预留侧线（AVAILABLE→RESERVED）。</li>
-     *   <li>基于请求中的当前列车状态，调用 {@code enterSiding} 续算驶入侧线的状态序列。</li>
-     *   <li>调用 dispatch 层 {@code confirmOccupied} 确认车辆已停入侧线（RESERVED→OCCUPIED）。</li>
-     *   <li>返回状态序列供前端播放。</li>
+     * <li>调用 dispatch 层 {@code requestSidingEntry}
+     * 为列车预留侧线（AVAILABLE→RESERVED）。</li>
+     * <li>基于请求中的当前列车状态，调用 {@code enterSiding} 续算驶入侧线的状态序列。</li>
+     * <li>调用 dispatch 层 {@code confirmOccupied} 确认车辆已停入侧线（RESERVED→OCCUPIED）。</li>
+     * <li>返回状态序列供前端播放。</li>
      * </ol>
-     * 若预留/确认失败，直接返回 {@code success=false}，不生成状态序列。</p>
+     * 若预留/确认失败，直接返回 {@code success=false}，不生成状态序列。
+     * </p>
      *
-     * <p>请求体中 currentState.position 应为全程累计里程，返回 states 沿用同一坐标系。</p>
+     * <p>
+     * 请求体中 currentState.position 应为全程累计里程，返回 states 沿用同一坐标系。
+     * </p>
      */
     @PostMapping("/siding/enter")
     public ApiResponse<List<TrainState>> enterSiding(@RequestBody SidingEnterRequest request) {
@@ -492,14 +595,13 @@ public class VehicleSimulationController {
         boolean reservedByThisRequest = false;
         try {
             // 1. dispatch 层预留侧线（AVAILABLE → RESERVED）
-            //    若侧线非空闲（已被占用/预留），requestSidingEntry 抛 IllegalStateException，
-            //    reservedByThisRequest 仍为 false → 不释放（保护既有占用）。
-            //    调度若已为同一列车显式预留，则复用该 RESERVED 状态继续驶入；它不是
-            //    本请求创建的预留，因此后续失败也不能由本请求回滚释放。
+            // 若侧线非空闲（已被占用/预留），requestSidingEntry 抛 IllegalStateException，
+            // reservedByThisRequest 仍为 false → 不释放（保护既有占用）。
+            // 调度若已为同一列车显式预留，则复用该 RESERVED 状态继续驶入；它不是
+            // 本请求创建的预留，因此后续失败也不能由本请求回滚释放。
             SidingStatus existing = sidingDispatchService.getSidingStatus(stationId);
-            boolean reservationAlreadyHeldByTrain =
-                    "RESERVED".equals(existing.getStatus())
-                            && trainId.equals(existing.getOccupiedTrainId());
+            boolean reservationAlreadyHeldByTrain = "RESERVED".equals(existing.getStatus())
+                    && trainId.equals(existing.getOccupiedTrainId());
             if (!reservationAlreadyHeldByTrain) {
                 sidingDispatchService.requestSidingEntry(trainId, stationId);
                 reservedByThisRequest = true;
@@ -510,9 +612,9 @@ public class VehicleSimulationController {
                     trainId, stationId, request.getCurrentState());
 
             // 3. 确认车辆已停入侧线（RESERVED → OCCUPIED）。
-            //    若 confirmOccupied 失败，异常向外层 catch 传播，由外层统一按
-            //    reservedByThisRequest 守卫回滚——仅当本请求确实创建了预留才释放。
-            //    这样当列车复用既有预留、确认却失败时，不会误释放本请求并未创建的预留。
+            // 若 confirmOccupied 失败，异常向外层 catch 传播，由外层统一按
+            // reservedByThisRequest 守卫回滚——仅当本请求确实创建了预留才释放。
+            // 这样当列车复用既有预留、确认却失败时，不会误释放本请求并未创建的预留。
             sidingDispatchService.confirmOccupied(trainId, stationId);
 
             return ApiResponse.ok("侧线驶入仿真完成", sidingStates);
@@ -533,8 +635,10 @@ public class VehicleSimulationController {
      * 回滚本次请求申请的侧线预留：仅当 {@code reservedByThisRequest} 为 true 时释放，
      * 释放失败（如列车已不在占用列表中）静默忽略，不影响错误返回。
      *
-     * <p>必须传 {@code stationId}：精确释放本次请求刚刚预留的那一条侧线（trainId+stationId 双绑定），
-     * 不得遍历所有侧线释放"第一条匹配"，避免误释放该列车已占用的其它侧线。</p>
+     * <p>
+     * 必须传 {@code stationId}：精确释放本次请求刚刚预留的那一条侧线（trainId+stationId 双绑定），
+     * 不得遍历所有侧线释放"第一条匹配"，避免误释放该列车已占用的其它侧线。
+     * </p>
      */
     private void rollbackReservationIfHeld(String trainId, int stationId, boolean reservedByThisRequest) {
         if (!reservedByThisRequest) {
@@ -574,7 +678,7 @@ public class VehicleSimulationController {
     }
 
     private void validateClientTargetHints(SimulationControlRequest request, StationEntry nextStation,
-                                           double authoritativeTarget) {
+            double authoritativeTarget) {
         if (request.getNextStationId() != null && request.getNextStationId() != nextStation.id) {
             throw new IllegalArgumentException("客户端下一站与服务端路线解析不一致");
         }
@@ -588,7 +692,7 @@ public class VehicleSimulationController {
     }
 
     private void setAuthoritativeStationStops(SimulationResult result, SimulationControlRequest request,
-                                              StationEntry nextStation, double authoritativeTarget) {
+            StationEntry nextStation, double authoritativeTarget) {
         if (result.getStationStops() == null || result.getStationStops().isEmpty()) {
             double actualPosition = result.getStates().get(result.getStates().size() - 1).getPosition();
             double stopError = actualPosition - authoritativeTarget;

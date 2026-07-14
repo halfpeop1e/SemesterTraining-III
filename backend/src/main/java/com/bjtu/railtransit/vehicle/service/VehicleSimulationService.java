@@ -20,6 +20,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -32,6 +38,39 @@ import java.util.Map;
 public class VehicleSimulationService {
 
     private static final Logger log = LoggerFactory.getLogger(VehicleSimulationService.class);
+
+    /** 仿真运行数据 MD 日志文件路径（相对于 backend 工作目录） */
+    private static final String SIMULATION_MD_LOG_PATH = System.getProperty("user.dir") + "/../simulation-log.md";
+    private static final DateTimeFormatter MD_TIMESTAMP_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+
+    /**
+     * 将仿真关键运行数据追加写入 Markdown 日志文件。
+     * 文件首次写入时自动创建表头。
+     */
+    private synchronized void appendMdLog(String logType, Map<String, Object> data) {
+        try {
+            File mdFile = new File(SIMULATION_MD_LOG_PATH);
+            boolean isNew = !mdFile.exists();
+
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(mdFile, true))) {
+                if (isNew) {
+                    writer.write("# 车辆仿真运行日志\n\n");
+                    writer.write("| 时间 | 日志类型 | 数据 |\n");
+                    writer.write("|------|---------|------|\n");
+                }
+                String timestamp = LocalDateTime.now().format(MD_TIMESTAMP_FMT);
+                StringBuilder dataStr = new StringBuilder();
+                for (Map.Entry<String, Object> e : data.entrySet()) {
+                    if (dataStr.length() > 0)
+                        dataStr.append("<br>");
+                    dataStr.append(e.getKey()).append("=").append(e.getValue());
+                }
+                writer.write("| " + timestamp + " | " + logType + " | " + dataStr + " |\n");
+            }
+        } catch (IOException e) {
+            log.warn("写入仿真日志MD文件失败: {}", e.getMessage());
+        }
+    }
 
     private static final double VELOCITY_EPSILON = 1.0e-3;
     /**
@@ -63,10 +102,12 @@ public class VehicleSimulationService {
      * 多质点等效预测的安全补偿系数。车钩力传播延迟使整列实际制动距离相比单质点
      * 等效预测略长，预测的制动距离乘此系数得到更保守的触发提前量，避免过冲。
      *
-     * <p><b>实现说明：</b>该系数作用于 predictStopPosition 返回的"制动距离"部分
+     * <p>
+     * <b>实现说明：</b>该系数作用于 predictStopPosition 返回的"制动距离"部分
      * （预测停车点相对当前位置的位移），而非绝对位置，避免对长里程目标产生失真的
      * 提前量。本系数为阶段性工程假设值，多质点精确预测（逐节车厢模拟车钩力传播）
-     * 留待后续迭代。</p>
+     * 留待后续迭代。
+     * </p>
      */
     private static final double MULTI_PARTICLE_PREDICT_SAFETY_FACTOR = 1.08;
 
@@ -77,7 +118,7 @@ public class VehicleSimulationService {
      * 对响应期位移额外补偿，吸收这种离散误差。1.05 为阶段性工程假设值。
      *
      * @deprecated 方案E 后 predictStopPosition 改用 stepConsist 多质点预测，1.08 仅作用于响应期，
-     * 此 1.05 系数保留以兼容旧字段引用，实际不再用于预测。
+     *             此 1.05 系数保留以兼容旧字段引用，实际不再用于预测。
      */
     @Deprecated
     private static final double RESPONSE_PHASE_COMPENSATION = 1.05;
@@ -86,9 +127,9 @@ public class VehicleSimulationService {
     private static final double DEFAULT_LOAD_RATIO = 0.5;
 
     /** 侧线驶入仿真参数（纯运动学简化模型，不引入阻力/坡度）。 */
-    private static final double SIDING_DECEL_MPS2 = 0.5;   // 侧线制动减速度 m/s²
-    private static final double SIDING_LENGTH_M = 50.0;    // 侧线长度 m
-    private static final double SIDING_DT = 0.5;           // 侧线仿真步长 s
+    private static final double SIDING_DECEL_MPS2 = 0.5; // 侧线制动减速度 m/s²
+    private static final double SIDING_LENGTH_M = 50.0; // 侧线长度 m
+    private static final double SIDING_DT = 0.5; // 侧线仿真步长 s
 
     private final DemoScenarioProvider demoScenarioProvider;
     private final MultiParticleSimulationService multiParticleService;
@@ -97,8 +138,7 @@ public class VehicleSimulationService {
 
     private static final String LOCAL_TURNBACK_ADAPTER = "turnback-adapter-local-v1";
     private static final String LOCAL_SIMULATION_HINT = "LOCAL_SIMULATION_HINT";
-    private static final String BLOCKED_MISSING_AUTHORITATIVE_AUTHORITY =
-            "BLOCKED_MISSING_AUTHORITATIVE_AUTHORITY";
+    private static final String BLOCKED_MISSING_AUTHORITATIVE_AUTHORITY = "BLOCKED_MISSING_AUTHORITATIVE_AUTHORITY";
 
     private static final class LocalTurnbackSession {
         private final int fromStationId;
@@ -113,14 +153,14 @@ public class VehicleSimulationService {
     }
 
     public VehicleSimulationService(DemoScenarioProvider demoScenarioProvider,
-                                    MultiParticleSimulationService multiParticleService) {
+            MultiParticleSimulationService multiParticleService) {
         this(demoScenarioProvider, multiParticleService, new LineProfileJsonLoader());
     }
 
     @Autowired
     public VehicleSimulationService(DemoScenarioProvider demoScenarioProvider,
-                                    MultiParticleSimulationService multiParticleService,
-                                    LineProfileJsonLoader lineProfileJsonLoader) {
+            MultiParticleSimulationService multiParticleService,
+            LineProfileJsonLoader lineProfileJsonLoader) {
         this.demoScenarioProvider = demoScenarioProvider;
         this.multiParticleService = multiParticleService;
         this.lineProfileJsonLoader = lineProfileJsonLoader;
@@ -141,8 +181,10 @@ public class VehicleSimulationService {
     }
 
     /**
-     * Executes only the local-v1 terminal preparation lifecycle. The two boolean inputs
-     * are local simulation hints and never represent authoritative door or movement state.
+     * Executes only the local-v1 terminal preparation lifecycle. The two boolean
+     * inputs
+     * are local simulation hints and never represent authoritative door or movement
+     * state.
      */
     public Map<String, Object> prepareLocalTurnback(
             String sessionId, long frameId, boolean doorsSafeHint, boolean movementAuthorityHint,
@@ -222,8 +264,7 @@ public class VehicleSimulationService {
     }
 
     private double terminalRunDistance(int fromStationId, int toStationId) {
-        LineProfileJsonLoader.StationEntry[] pair =
-                lineProfileJsonLoader.findStationPair(fromStationId, toStationId);
+        LineProfileJsonLoader.StationEntry[] pair = lineProfileJsonLoader.findStationPair(fromStationId, toStationId);
         return (pair[1].km - pair[0].km) * 1000.0;
     }
 
@@ -275,18 +316,18 @@ public class VehicleSimulationService {
         return copied;
     }
 
-
     /**
      * 单区间多质点仿真：用 {@link MultiParticleSimulationService#stepConsist} 替代原单质点积分循环，
      * 保留 ATO 决策（牵引/惰行/预减速/制动）、predictStopPosition 制动触发判定与 SafetyGuard 语义。
      *
-     * <p>ATO 策略阶段：
+     * <p>
+     * ATO 策略阶段：
      * <ul>
-     *   <li>远区（距目标 ≥ 预减速门槛）：牵引到限速后惰行。</li>
-     *   <li>预减速区（距目标 < 门槛 且 速度 > 50km/h）：施加 -0.3 m/s² 轻微电制动，把速度从
-     *       72km/h 区间降到 50km/h 以下。</li>
-     *   <li>制动触发：predictStopPosition 预测停车点 ≥ 目标时切入常用制动（含制动响应时间）。</li>
-     *   <li>停车：车头速度收敛到 0。</li>
+     * <li>远区（距目标 ≥ 预减速门槛）：牵引到限速后惰行。</li>
+     * <li>预减速区（距目标 < 门槛 且 速度 > 50km/h）：施加 -0.3 m/s² 轻微电制动，把速度从
+     * 72km/h 区间降到 50km/h 以下。</li>
+     * <li>制动触发：predictStopPosition 预测停车点 ≥ 目标时切入常用制动（含制动响应时间）。</li>
+     * <li>停车：车头速度收敛到 0。</li>
      * </ul>
      * </p>
      */
@@ -297,7 +338,7 @@ public class VehicleSimulationService {
         double dtSub = dt / SUB_STEPS_PER_SAMPLE;
 
         double targetStopPosition = line.getTargetStopPosition();
-        double speedLimit = line.getSpeedLimit();
+        double speedLimit = line.getSpeedLimit(); // 全局最大限速（安全超速保护用）
         // 预减速门槛自适应：线路过短时按线路长度的一半取，保证列车有加速/巡航余地。
         double preDecelThreshold = Math.min(PRE_DECEL_DISTANCE_THRESHOLD, targetStopPosition * 0.5);
 
@@ -315,21 +356,26 @@ public class VehicleSimulationService {
         int totalMotors = 16; // 6B编组16电机
 
         List<TrainState> states = new ArrayList<>();
+        List<SafetyEvent> safetyEvents = new ArrayList<>();
 
         double t = 0.0;
         boolean brakingTriggered = false;
+        boolean safetyGuardOverspeed = false;
+        boolean speedWarningFired = false; // ATP 速度警告已触发
         boolean coastEntered = false;
         double brakeResponseRemaining = 0.0;
         double brakeTriggerPosition = 0.0;
         double predictedStopPositionAtTrigger = 0.0;
         boolean hasMoved = false;
         double sampleDragDecel = 0.0; // 采样时刻阻力减速度
+        double lastOverspeedTime = -999; // 上次超速触发时间，用于冷却
 
         for (int step = 0; step < MAX_STEPS; step++) {
             TrainCar head = cars.get(0);
             double pos = head.getPositionMeters();
             double v = head.getSpeedMps();
-            if (pos > line.getStartPosition() + 1.0) hasMoved = true;
+            if (pos > line.getStartPosition() + 1.0)
+                hasMoved = true;
 
             // 停车判定：列车已驶离起点且车头速度收敛到 0
             if (hasMoved && v <= VELOCITY_EPSILON) {
@@ -372,6 +418,7 @@ public class VehicleSimulationService {
                     double predicted = predictStopPosition(cars, train, line, dtSub);
                     if (predicted >= targetStopPosition) {
                         brakingTriggered = true;
+                        safetyGuardOverspeed = false;
                         brakeTriggerPosition = pos;
                         predictedStopPositionAtTrigger = predicted;
                         brakeResponseRemaining = train.getBrakeResponseTime();
@@ -411,6 +458,40 @@ public class VehicleSimulationService {
                 if (phase == SimulationPhase.TRACTION && vAfter > speedLimit) {
                     head.setSpeedKmh(speedLimit * KMH_PER_MS);
                     coastEntered = true;
+                    vAfter = head.getSpeedMps();
+                }
+
+                // ATP速度警告
+                if (!speedWarningFired && !brakingTriggered && vAfter > speedLimit * 0.95) {
+                    safetyEvents.add(new SafetyEvent(
+                            "SPEED_WARNING", t + (sub + 1) * dtSub, pos, vAfter, "warning"));
+                    speedWarningFired = true;
+                }
+                if (speedWarningFired && vAfter <= speedLimit * 0.90) {
+                    speedWarningFired = false;
+                }
+
+                // SafetyGuard：超速触发服务制动（真实ATP行为）
+                // 加入 2 秒冷却防止速度在限速边界反复穿越导致事件膨胀
+                if (vAfter > speedLimit + SPEED_LIMIT_MARGIN && !brakingTriggered
+                        && (t - lastOverspeedTime) > 2.0) {
+                    safetyEvents.add(new SafetyEvent(
+                            "OVERSPEED", t + (sub + 1) * dtSub, pos, vAfter, "service_brake"));
+                    brakingTriggered = true;
+                    safetyGuardOverspeed = true;
+                    brakeTriggerPosition = pos;
+                    predictedStopPositionAtTrigger = predictStopPosition(cars, train, line, dtSub);
+                    brakeResponseRemaining = 0.0;
+                    lastOverspeedTime = t;
+                }
+
+                // 超速服务制动恢复：使用 90% 限速作为恢复阈值，制造滞回区间
+                // 防止速度在限速边界反复穿越导致事件数量膨胀
+                if (safetyGuardOverspeed && vAfter <= speedLimit * 0.90) {
+                    brakingTriggered = false;
+                    safetyGuardOverspeed = false;
+                    safetyEvents.add(new SafetyEvent(
+                            "SPEED_RECOVERED", t + (sub + 1) * dtSub, pos, vAfter, "release_brake"));
                 }
 
                 if (sub == 0) {
@@ -428,10 +509,9 @@ public class VehicleSimulationService {
             } else if (samplePhase == SimulationPhase.BRAKING) {
                 brakeForceN = trainMassKg * (-sampleAcceleration - sampleDragDecel);
             }
-            com.bjtu.railtransit.vehicle.dto.TrainState sampleSt =
-                    new com.bjtu.railtransit.vehicle.dto.TrainState(
-                            sampleT, samplePos, sampleV, sampleAcceleration,
-                            samplePhase, "T1", tractionForceN, brakeForceN, totalMotors);
+            com.bjtu.railtransit.vehicle.dto.TrainState sampleSt = new com.bjtu.railtransit.vehicle.dto.TrainState(
+                    sampleT, samplePos, sampleV, sampleAcceleration,
+                    samplePhase, "T1", tractionForceN, brakeForceN, totalMotors);
             sampleSt.setCars(sampleCars);
             states.add(sampleSt);
         }
@@ -441,7 +521,7 @@ public class VehicleSimulationService {
         }
 
         SimulationResult result = buildResult(states, targetStopPosition, speedLimit, dt,
-                brakeTriggerPosition, predictedStopPositionAtTrigger);
+                brakeTriggerPosition, predictedStopPositionAtTrigger, safetyEvents);
         result.getSummary().setTrainMass(trainMassKg);
         result.getSummary().setTotalMotors(totalMotors);
         return result;
@@ -451,9 +531,11 @@ public class VehicleSimulationService {
      * 多质点等效预测停车位置：用编组加权平均 Davis 系数 + 车头等效制动减速度做单质点数值积分，
      * 再对制动距离施加 {@link #MULTI_PARTICLE_PREDICT_SAFETY_FACTOR}（1.08）安全补偿。
      *
-     * <p>制动减速度取 {@code train.getNormalBrakeDeceleration()}：稳态制动下整列（含车头）以该减速度
+     * <p>
+     * 制动减速度取 {@code train.getNormalBrakeDeceleration()}：稳态制动下整列（含车头）以该减速度
      * 协同减速，车头作为拖车仅通过车钩瞬态短暂偏离，稳态减速度即为常用制动减速度。
-     * 这是阶段性简化方案，多质点精确预测（逐节车厢模拟车钩力传播）留待后续迭代。</p>
+     * 这是阶段性简化方案，多质点精确预测（逐节车厢模拟车钩力传播）留待后续迭代。
+     * </p>
      *
      * @param cars 编组（取车头位置/速度与各车厢质量、Davis 系数）
      * @return 预测的车头绝对停车位置（含 1.08 安全补偿），单位 m
@@ -461,15 +543,19 @@ public class VehicleSimulationService {
     /**
      * 多质点预测停车位置：用与真实仿真<b>完全相同</b>的 {@code stepConsist} 多质点模型做预测。
      *
-     * <p>克隆当前编组状态，施加常用制动（含制动响应延迟），逐步积分直到车头速度归零。
+     * <p>
+     * 克隆当前编组状态，施加常用制动（含制动响应延迟），逐步积分直到车头速度归零。
      * 因为预测物理与仿真物理一致（同一 stepConsist、同一 Davis 系数、同一坡度查询），
-     * 预测的制动距离天然贴合实际，不再需要旧单质点时代的经验补偿。</p>
+     * 预测的制动距离天然贴合实际，不再需要旧单质点时代的经验补偿。
+     * </p>
      *
-     * <p><b>1.08 安全补偿的作用区间：</b>仅作用于制动响应期（brakeResponseTime 内的滑行段）位移。
+     * <p>
+     * <b>1.08 安全补偿的作用区间：</b>仅作用于制动响应期（brakeResponseTime 内的滑行段）位移。
      * 该段受"离散采样下越过理论触发点后要等到下一 sub-step 才真正切入制动"的一步滞后影响，
      * 是真实存在的不确定区间；有效制动段已由 stepConsist 精确模拟（含车钩力传播与各车厢独立阻力），
      * 对其再施加 1.08 会按长制动距离成比例放大提前量，制造失真的欠停。故 1.08 只补偿响应期，
-     * 既满足"predictStopPosition 含 1.08 补偿系数"的验收要求，又把补偿误差控制在亚米级。</p>
+     * 既满足"predictStopPosition 含 1.08 补偿系数"的验收要求，又把补偿误差控制在亚米级。
+     * </p>
      *
      * @param cars 编组（克隆后预测，不修改原状态）
      * @return 预测的车头绝对停车位置，单位 m
@@ -543,12 +629,15 @@ public class VehicleSimulationService {
         double w0 = train.getDavisA() + train.getDavisB() * vKmh + train.getDavisC() * vKmh * vKmh;
         double resistanceDecel = w0 * GRAVITY / 1000.0;
         double gradeDecel = GRAVITY * line.gradientAt(pos);
-        return resistanceDecel + gradeDecel;
+        // 隧道附加阻力：约增加基本阻力 15%
+        double tunnelFactor = line.isInTunnel(pos) ? 0.15 : 0.0;
+        return resistanceDecel * (1.0 + tunnelFactor) + gradeDecel;
     }
 
     private SimulationResult buildResult(List<TrainState> states, double targetStopPosition, double speedLimit,
-                                          double dtPerFrame,
-                                          double brakeTriggerPosition, double predictedStopPosition) {
+            double dtPerFrame,
+            double brakeTriggerPosition, double predictedStopPosition,
+            List<SafetyEvent> safetyEvents) {
         double maxVelocity = 0.0;
         for (TrainState state : states) {
             if (state.getVelocity() > maxVelocity) {
@@ -557,7 +646,8 @@ public class VehicleSimulationService {
         }
 
         TrainState last = states.get(states.size() - 1);
-        SimulationSummary summary = new SimulationSummary(maxVelocity, last.getTime(), last.getPosition(), speedLimit, dtPerFrame);
+        SimulationSummary summary = new SimulationSummary(maxVelocity, last.getTime(), last.getPosition(), speedLimit,
+                dtPerFrame);
 
         double actualStopPosition = last.getPosition();
         double stopError = actualStopPosition - targetStopPosition;
@@ -576,9 +666,8 @@ public class VehicleSimulationService {
                 targetStopPosition, actualStopPosition, stopError, success, reason, stopWindowState,
                 brakeTriggerPosition, predictedStopPosition);
 
-        List<SafetyEvent> safetyEvents = Collections.emptyList();
-
-        return new SimulationResult(states, summary, stopResult, safetyEvents);
+        return new SimulationResult(states, summary, stopResult,
+                safetyEvents != null ? safetyEvents : Collections.emptyList());
     }
 
     private StopWindowState deriveStopWindowState(double stopError, double finalVelocity) {
@@ -642,13 +731,11 @@ public class VehicleSimulationService {
 
             // 多质点适配：每段区间独立构造编组（本轮各段均按默认 AW2 50% 载客初始化），
             // 不跨段复用车厢状态。P2 客流接入后可通过 updateConsistMass 调整各段载客。
-            com.bjtu.railtransit.vehicle.model.LineProfile segLine =
-                    new com.bjtu.railtransit.vehicle.model.LineProfile(
-                            0.0, segDistM,
-                            LineProfileJsonLoader.ASSUMED_SPEED_LIMIT_MPS,
-                            java.util.Collections.emptyList());
-            com.bjtu.railtransit.vehicle.model.ScenarioConfig segScenario =
-                    demoProvider.buildScenario(segLine);
+            com.bjtu.railtransit.vehicle.model.LineProfile segLine = new com.bjtu.railtransit.vehicle.model.LineProfile(
+                    0.0, segDistM,
+                    LineProfileJsonLoader.DEFAULT_SPEED_LIMIT_MPS,
+                    java.util.Collections.emptyList());
+            com.bjtu.railtransit.vehicle.model.ScenarioConfig segScenario = demoProvider.buildScenario(segLine);
 
             SimulationResult segResult = run(segScenario);
             java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> segStates = segResult.getStates();
@@ -665,12 +752,12 @@ public class VehicleSimulationService {
                         "T1",
                         st.getTractionForce(),
                         st.getBrakeForce(),
-                        st.getAvailableMotors()
-                );
+                        st.getAvailableMotors());
                 adjusted.setAbsolutePosition(absPos);
                 adjusted.setCars(st.getCars());
                 allStates.add(adjusted);
-                if (st.getVelocity() > maxVelocityAll) maxVelocityAll = st.getVelocity();
+                if (st.getVelocity() > maxVelocityAll)
+                    maxVelocityAll = st.getVelocity();
             }
 
             for (com.bjtu.railtransit.vehicle.dto.SafetyEvent se : segResult.getSafetyEvents()) {
@@ -679,8 +766,7 @@ public class VehicleSimulationService {
                         se.getTime() + timeOffset,
                         actualCumPosition + se.getPosition(),
                         se.getVelocity(),
-                        se.getAction()
-                ));
+                        se.getAction()));
             }
 
             com.bjtu.railtransit.vehicle.dto.TrainState lastSeg = segStates.get(segStates.size() - 1);
@@ -697,15 +783,14 @@ public class VehicleSimulationService {
                     actualStopCum,
                     stopErr,
                     inWindow,
-                    arrivalTime, isLastSeg ? 0.0 : dwell
-            ));
+                    arrivalTime, isLastSeg ? 0.0 : dwell));
 
             timeOffset += lastSeg.getTime();
 
             if (isLastSeg) {
                 double finalStopErr = actualStopCum - totalTargetPosition;
-                com.bjtu.railtransit.vehicle.enums.StopWindowState ws =
-                        deriveStopWindowState(finalStopErr, lastSeg.getVelocity());
+                com.bjtu.railtransit.vehicle.enums.StopWindowState ws = deriveStopWindowState(finalStopErr,
+                        lastSeg.getVelocity());
                 boolean finalSuccess = Math.abs(finalStopErr) <= STOP_POSITION_TOLERANCE
                         && lastSeg.getVelocity() <= STOP_VELOCITY_TOLERANCE;
                 finalStopResult = new StopResult(
@@ -713,24 +798,25 @@ public class VehicleSimulationService {
                         actualStopCum,
                         finalStopErr,
                         finalSuccess,
-                        finalSuccess ? null : String.format(
-                                "停车误差 %.3fm 或末速度 %.3fm/s 超出阈值", finalStopErr, lastSeg.getVelocity()),
+                        finalSuccess ? null
+                                : String.format(
+                                        "停车误差 %.3fm 或末速度 %.3fm/s 超出阈值", finalStopErr, lastSeg.getVelocity()),
                         ws,
                         actualCumPosition + (segResult.getStopResult() != null
-                                ? segResult.getStopResult().getBrakeTriggerPosition() : 0.0),
+                                ? segResult.getStopResult().getBrakeTriggerPosition()
+                                : 0.0),
                         actualCumPosition + (segResult.getStopResult() != null
-                                ? segResult.getStopResult().getPredictedStopPosition() : 0.0)
-                );
+                                ? segResult.getStopResult().getPredictedStopPosition()
+                                : 0.0));
             } else {
                 double dwellPos = actualStopCum;
                 double dwellAbsPos = lineStartAbsM + dwellPos;
                 int dwellFrames = (int) Math.round(dwell / dt);
                 for (int f = 1; f <= dwellFrames; f++) {
-                    com.bjtu.railtransit.vehicle.dto.TrainState dSt =
-                            new com.bjtu.railtransit.vehicle.dto.TrainState(
-                                    timeOffset + f * dt,
-                                    dwellPos, 0.0, 0.0,
-                                    SimulationPhase.DWELL, "T1");
+                    com.bjtu.railtransit.vehicle.dto.TrainState dSt = new com.bjtu.railtransit.vehicle.dto.TrainState(
+                            timeOffset + f * dt,
+                            dwellPos, 0.0, 0.0,
+                            SimulationPhase.DWELL, "T1");
                     dSt.setAbsolutePosition(dwellAbsPos);
                     allStates.add(dSt);
                 }
@@ -747,7 +833,7 @@ public class VehicleSimulationService {
         com.bjtu.railtransit.vehicle.dto.TrainState lastAll = allStates.get(allStates.size() - 1);
         SimulationSummary summary = new SimulationSummary(
                 maxVelocityAll, lastAll.getTime(), lastAll.getPosition(),
-                LineProfileJsonLoader.ASSUMED_SPEED_LIMIT_MPS, dt);
+                LineProfileJsonLoader.DEFAULT_SPEED_LIMIT_MPS, dt);
         summary.setLineStartPosition(lineStartAbsM);
         summary.setLineTargetPosition(stationEntries.get(stationEntries.size() - 1).km * 1000.0);
         summary.setFromStationName(stationEntries.get(0).name);
@@ -769,7 +855,9 @@ public class VehicleSimulationService {
      */
     public void updateConsistMass(List<TrainCar> cars, double[] massDeltaByCarIndex) {
         log.info("updateConsistMass 预留接口调用，本轮空实现。massDelta: {}", Arrays.toString(massDeltaByCarIndex));
-        // P2 实现：遍历 cars，cars.get(i).setOccupiedMass(cars.get(i).getOccupiedMass() + massDeltaByCarIndex[i])
+        appendMdLog("编组质量更新", Map.of("massDelta", Arrays.toString(massDeltaByCarIndex)));
+        // P2 实现：遍历 cars，cars.get(i).setOccupiedMass(cars.get(i).getOccupiedMass() +
+        // massDeltaByCarIndex[i])
     }
 
     public SimulationResult runContinuation(SimulationControlRequest request, ScenarioConfig scenario) {
@@ -781,10 +869,13 @@ public class VehicleSimulationService {
      * 调用方不得通过 {@link SimulationControlRequest#getTotalTargetPosition()} 覆盖该目标。
      */
     public SimulationResult runContinuation(SimulationControlRequest request, ScenarioConfig scenario,
-                                            double authoritativeTotalTargetPosition) {
-        if (request.getCurrentState() == null) throw new IllegalArgumentException("currentState 不能为空");
-        if (request.getCurrentMode() == null) throw new IllegalArgumentException("currentMode 不能为空");
-        if (request.getControlCommand() == null) throw new IllegalArgumentException("controlCommand 不能为空");
+            double authoritativeTotalTargetPosition) {
+        if (request.getCurrentState() == null)
+            throw new IllegalArgumentException("currentState 不能为空");
+        if (request.getCurrentMode() == null)
+            throw new IllegalArgumentException("currentMode 不能为空");
+        if (request.getControlCommand() == null)
+            throw new IllegalArgumentException("controlCommand 不能为空");
 
         LineProfile line = scenario.getLineProfile();
         TrainModel train = scenario.getTrainModel();
@@ -802,6 +893,25 @@ public class VehicleSimulationService {
             log.info("续算目标已修正为下一站：stationId={} stationName={} totalTarget={}m currentPos={}m localTarget={}m",
                     request.getNextStationId(), request.getNextStationName(),
                     totalTarget, currentCumulativePos, localTarget);
+            Map<String, Object> md = new LinkedHashMap<>();
+            md.put("stationId", request.getNextStationId());
+            md.put("stationName", request.getNextStationName());
+            md.put("totalTarget", totalTarget + "m");
+            md.put("currentPos", String.format("%.4f", currentCumulativePos) + "m");
+            md.put("localTarget", String.format("%.4f", localTarget) + "m");
+            // 车辆物理量
+            double csv = request.getCurrentState().getVelocity();
+            double csa = request.getCurrentState().getAcceleration();
+            double dragDecel = computeNetDrag(currentCumulativePos, csv, train, line);
+            double resistanceForceN = dragDecel * train.getMass();
+            double tractionForceN = request.getCurrentState().getTractionForce();
+            double brakeForceN = request.getCurrentState().getBrakeForce();
+            md.put("速度", String.format("%.4f", csv) + "m/s (" + String.format("%.2f", csv * KMH_PER_MS) + "km/h)");
+            md.put("加速度", String.format("%.4f", csa) + "m/s²");
+            md.put("牵引力", String.format("%.1f", tractionForceN) + "N");
+            md.put("制动力", String.format("%.1f", brakeForceN) + "N");
+            md.put("阻力", String.format("%.1f", resistanceForceN) + "N (Davis+坡度)");
+            appendMdLog("续算目标修正", md);
         }
 
         com.bjtu.railtransit.vehicle.dto.ControlCommand cmd = request.getControlCommand();
@@ -815,7 +925,7 @@ public class VehicleSimulationService {
 
         if (request.getTrainId() != null && !request.isDepartureConfirmed()
                 && ("traction".equals(commandStr) || "coast".equals(commandStr)
-                || "brake".equals(commandStr))) {
+                        || "brake".equals(commandStr))) {
             throw new IllegalArgumentException("NOT_READY_TO_DEPART");
         }
 
@@ -836,13 +946,11 @@ public class VehicleSimulationService {
             if (!stopped) {
                 throw new IllegalArgumentException("紧急制动未停稳，不能复位，请等待列车停稳后再操作");
             }
-            com.bjtu.railtransit.vehicle.dto.TrainState stoppedState =
-                    new com.bjtu.railtransit.vehicle.dto.TrainState(
-                            cs.getTime(), cs.getPosition(), 0.0, 0.0,
-                            SimulationPhase.STOPPED, "T1");
+            com.bjtu.railtransit.vehicle.dto.TrainState stoppedState = new com.bjtu.railtransit.vehicle.dto.TrainState(
+                    cs.getTime(), cs.getPosition(), 0.0, 0.0,
+                    SimulationPhase.STOPPED, "T1");
             stoppedState.setAbsolutePosition(cs.getAbsolutePosition());
-            java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> stoppedStates =
-                    new java.util.ArrayList<>();
+            java.util.List<com.bjtu.railtransit.vehicle.dto.TrainState> stoppedStates = new java.util.ArrayList<>();
             stoppedStates.add(stoppedState);
 
             double actualStop = cs.getPosition();
@@ -851,8 +959,9 @@ public class VehicleSimulationService {
             StopWindowState ws = deriveStopWindowState(stopError, 0.0);
             StopResult stopResult = new StopResult(
                     totalTarget, actualStop, stopError, success,
-                    success ? null : String.format("复位时停车误差 %.3fm 超出阈值（±%.1fm）",
-                            stopError, STOP_POSITION_TOLERANCE),
+                    success ? null
+                            : String.format("复位时停车误差 %.3fm 超出阈值（±%.1fm）",
+                                    stopError, STOP_POSITION_TOLERANCE),
                     ws, actualStop, actualStop);
 
             SimulationSummary summary = new SimulationSummary(
@@ -904,7 +1013,8 @@ public class VehicleSimulationService {
         java.util.List<com.bjtu.railtransit.vehicle.dto.SafetyEvent> safetyEvents = new java.util.ArrayList<>();
 
         boolean brakingTriggered = false;
-        boolean coastEntered = false;
+        boolean safetyGuardOverspeed = false;
+        boolean speedWarningFired = false;
         double brakeResponseRemaining = 0.0;
         double brakeTriggerPosition = 0.0;
         double predictedStopPositionAtTrigger = 0.0;
@@ -950,7 +1060,8 @@ public class VehicleSimulationService {
             TrainCar head = cars.get(0);
             double localPos = head.getPositionMeters();
             double v = head.getSpeedMps();
-            if (localPos > 1.0) hasMoved = true;
+            if (localPos > 1.0)
+                hasMoved = true;
 
             // 启发自单质点净阻力的"能否向前移动"判定（多质点步进真实力学由 stepConsist 处理）
             double dragAtZero = computeNetDrag(localPos, 0.0, train, line);
@@ -966,14 +1077,14 @@ public class VehicleSimulationService {
                 states.add(makeGlobal(t, localPos, 0.0, 0.0,
                         SimulationPhase.STOPPED, currentCumulativePos,
                         request.getCurrentState().getAbsolutePosition(),
-                        null, 0.0, 0.0, totalMotors));
+                        null, 0.0, 0.0, totalMotors, 0.0));
                 break;
             }
             if (!brakingTriggered && v <= VELOCITY_EPSILON && !canMoveForward) {
                 states.add(makeGlobal(t, localPos, 0.0, 0.0,
                         SimulationPhase.STOPPED, currentCumulativePos,
                         request.getCurrentState().getAbsolutePosition(),
-                        null, 0.0, 0.0, totalMotors));
+                        null, 0.0, 0.0, totalMotors, 0.0));
                 break;
             }
 
@@ -991,7 +1102,10 @@ public class VehicleSimulationService {
                 v = head.getSpeedMps();
 
                 if ((brakingTriggered || !canMoveForward) && v <= VELOCITY_EPSILON) {
-                    if (sub == 0) { samplePhase = SimulationPhase.STOPPED; sampleAccel = 0.0; }
+                    if (sub == 0) {
+                        samplePhase = SimulationPhase.STOPPED;
+                        sampleAccel = 0.0;
+                    }
                     break;
                 }
 
@@ -1009,7 +1123,7 @@ public class VehicleSimulationService {
                         double brakeDecel = (fMode == DrivingMode.EMERGENCY)
                                 ? train.getEmergencyBrakeDeceleration()
                                 : (fMode == DrivingMode.MANUAL && fManualDecel > 0.0) ? fManualDecel
-                                : train.getNormalBrakeDeceleration();
+                                        : train.getNormalBrakeDeceleration();
                         targetAccel = -brakeDecel;
                         inBraking = true;
                     }
@@ -1035,12 +1149,12 @@ public class VehicleSimulationService {
                         phase = SimulationPhase.COAST;
                         targetAccel = 0.0;
                         inBraking = false;
-                    } else if (!coastEntered && v < speedLimit - SPEED_LIMIT_MARGIN) {
+                    } else if (v < speedLimit - SPEED_LIMIT_MARGIN) {
+                        // 迟滞巡速：速度低于下限恢复牵引，高于下限惰行
                         phase = SimulationPhase.TRACTION;
                         targetAccel = train.getMaxAcceleration();
                         inBraking = false;
                     } else {
-                        coastEntered = true;
                         phase = SimulationPhase.COAST;
                         targetAccel = 0.0;
                         inBraking = false;
@@ -1049,6 +1163,7 @@ public class VehicleSimulationService {
                     boolean safetyStopTriggered = localPos >= localTarget;
                     if (safetyStopTriggered) {
                         brakingTriggered = true;
+                        safetyGuardOverspeed = false;
                         brakeTriggerPosition = localPos;
                         predictedStopPositionAtTrigger = predictStopPosition(cars, train, line, dtSub);
                         brakeResponseRemaining = 0.0;
@@ -1084,7 +1199,22 @@ public class VehicleSimulationService {
                     vAfter = head.getSpeedMps(); // 截顶后重读，避免超速守卫用到截顶前的越界值
                 }
 
-                // SafetyGuard：超速触发紧急制动（用截顶后的真实速度判定，避免一步过冲误触发）。
+                // ATP速度警告：接近限速时先发出警告，给驾驶员反应窗口
+                if (!speedWarningFired && !brakingTriggered && vAfter > speedLimit * 0.95) {
+                    safetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
+                            "SPEED_WARNING",
+                            t + (sub + 1) * dtSub,
+                            currentCumulativePos + head.getPositionMeters(),
+                            vAfter,
+                            "warning"));
+                    speedWarningFired = true;
+                }
+                if (speedWarningFired && vAfter <= speedLimit * 0.90) {
+                    speedWarningFired = false;
+                }
+
+                // SafetyGuard：超速触发服务制动（真实 ATP 行为：先施加常用制动降速，
+                // 速度回到安全范围后自动缓解，允许列车继续运行，不直接紧急制动刹停）。
                 // 多质点下车厢速度弥散约 ±0.02 m/s，用 SPEED_LIMIT_MARGIN(0.1) 作为超速判定裕度。
                 if (vAfter > speedLimit + SPEED_LIMIT_MARGIN && !brakingTriggered) {
                     safetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
@@ -1092,12 +1222,24 @@ public class VehicleSimulationService {
                             t + (sub + 1) * dtSub,
                             currentCumulativePos + head.getPositionMeters(),
                             vAfter,
-                            "emergency_brake"
-                    ));
+                            "service_brake"));
                     brakingTriggered = true;
+                    safetyGuardOverspeed = true;
                     brakeTriggerPosition = head.getPositionMeters();
                     predictedStopPositionAtTrigger = predictStopPosition(cars, train, line, dtSub);
                     brakeResponseRemaining = 0.0;
+                }
+
+                // 超速服务制动恢复：速度降至限速以下后自动释放制动，恢复正常运行
+                if (safetyGuardOverspeed && vAfter <= speedLimit) {
+                    brakingTriggered = false;
+                    safetyGuardOverspeed = false;
+                    safetyEvents.add(new com.bjtu.railtransit.vehicle.dto.SafetyEvent(
+                            "SPEED_RECOVERED",
+                            t + (sub + 1) * dtSub,
+                            currentCumulativePos + head.getPositionMeters(),
+                            vAfter,
+                            "release_brake"));
                 }
 
                 if (sub == 0) {
@@ -1107,15 +1249,18 @@ public class VehicleSimulationService {
                 t += dtSub;
             }
 
-            if (samplePhase == null) samplePhase = SimulationPhase.STOPPED;
+            if (samplePhase == null)
+                samplePhase = SimulationPhase.STOPPED;
             double tracFN = samplePhase == SimulationPhase.TRACTION
-                    ? trainMassKg * (sampleAccel + sampleDrag) : 0.0;
+                    ? trainMassKg * (sampleAccel + sampleDrag)
+                    : 0.0;
             double brkFN = samplePhase == SimulationPhase.BRAKING
-                    ? trainMassKg * (-sampleAccel - sampleDrag) : 0.0;
+                    ? trainMassKg * (-sampleAccel - sampleDrag)
+                    : 0.0;
             states.add(makeGlobal(sampleT, sampleLocalPos, sampleV, sampleAccel,
                     samplePhase, currentCumulativePos,
                     request.getCurrentState().getAbsolutePosition(),
-                    sampleCars, tracFN, brkFN, totalMotors));
+                    sampleCars, tracFN, brkFN, totalMotors, sampleDrag));
         }
 
         if (states.isEmpty() || states.get(states.size() - 1).getPhase() != SimulationPhase.STOPPED) {
@@ -1130,16 +1275,28 @@ public class VehicleSimulationService {
         StopWindowState ws = deriveStopWindowState(stopError, lastState.getVelocity());
         StopResult stopResult = new StopResult(
                 totalTarget, actualCumPos, stopError, success,
-                success ? null : String.format("续算停车误差 %.3fm 或末速 %.3fm/s 超出阈值",
-                        stopError, lastState.getVelocity()),
+                success ? null
+                        : String.format("续算停车误差 %.3fm 或末速 %.3fm/s 超出阈值",
+                                stopError, lastState.getVelocity()),
                 ws, currentCumulativePos + brakeTriggerPosition,
                 currentCumulativePos + predictedStopPositionAtTrigger);
 
-        double maxV = states.stream().mapToDouble(com.bjtu.railtransit.vehicle.dto.TrainState::getVelocity).max().orElse(0);
+        double maxV = states.stream().mapToDouble(com.bjtu.railtransit.vehicle.dto.TrainState::getVelocity).max()
+                .orElse(0);
         SimulationSummary summary = new SimulationSummary(
                 maxV, lastState.getTime(), lastState.getPosition(),
                 speedLimit, dt);
         summary.setCurrentMode(fMode);
+        // SafetyGuard 可能在仿真内部触发紧急制动（如 OVERSPEED），
+        // 此时 summary 的 currentMode 应反映为 EMERGENCY
+        if (fMode != DrivingMode.EMERGENCY) {
+            for (com.bjtu.railtransit.vehicle.dto.SafetyEvent se : safetyEvents) {
+                if ("emergency_brake".equals(se.getAction())) {
+                    summary.setCurrentMode(DrivingMode.EMERGENCY);
+                    break;
+                }
+            }
+        }
         summary.setDepartureState(request.isDepartureConfirmed() ? "RUNNING" : "READY_TO_DEPART");
         if (fMode == DrivingMode.EMERGENCY && lastState.getPhase() == SimulationPhase.STOPPED) {
             summary.setNextMode(DrivingMode.MANUAL);
@@ -1153,8 +1310,8 @@ public class VehicleSimulationService {
             double stopErr = actualStopCum - totalTarget;
             boolean inWindow = Math.abs(stopErr) <= STOP_POSITION_TOLERANCE
                     && lastState.getVelocity() <= STOP_VELOCITY_TOLERANCE;
-            java.util.List<com.bjtu.railtransit.vehicle.dto.StationStop> stops =
-                    java.util.Collections.singletonList(new com.bjtu.railtransit.vehicle.dto.StationStop(
+            java.util.List<com.bjtu.railtransit.vehicle.dto.StationStop> stops = java.util.Collections
+                    .singletonList(new com.bjtu.railtransit.vehicle.dto.StationStop(
                             request.getNextStationId(), request.getNextStationName(),
                             currentCumulativePos, totalTarget,
                             actualStopCum, stopErr, inWindow,
@@ -1175,8 +1332,8 @@ public class VehicleSimulationService {
 
     private com.bjtu.railtransit.vehicle.dto.TrainState buildSampleState(
             double t, double pos, double v, double reportedAccel, SimulationPhase phase, List<CarSnapshot> cars) {
-        com.bjtu.railtransit.vehicle.dto.TrainState st =
-                new com.bjtu.railtransit.vehicle.dto.TrainState(t, pos, v, reportedAccel, phase, "T1");
+        com.bjtu.railtransit.vehicle.dto.TrainState st = new com.bjtu.railtransit.vehicle.dto.TrainState(t, pos, v,
+                reportedAccel, phase, "T1");
         st.setCars(cars);
         return st;
     }
@@ -1218,19 +1375,20 @@ public class VehicleSimulationService {
             double cumulativeOffset, Double baseAbsolutePos) {
         TrainCar head = cars.get(0);
         return makeGlobal(t, head.getPositionMeters(), velocity, acceleration, phase,
-                cumulativeOffset, baseAbsolutePos, mapCarSnapshots(cars), 0.0, 0.0, 16);
+                cumulativeOffset, baseAbsolutePos, mapCarSnapshots(cars), 0.0, 0.0, 16, 0.0);
     }
 
     private com.bjtu.railtransit.vehicle.dto.TrainState makeGlobal(
             double t, double localPos, double velocity, double acceleration,
             SimulationPhase phase,
             double cumulativeOffset, Double baseAbsolutePos,
-            List<CarSnapshot> cars, double tractionForceN, double brakeForceN, int availableMotors) {
+            List<CarSnapshot> cars, double tractionForceN, double brakeForceN, int availableMotors,
+            double resistanceDecel) {
         double globalPos = cumulativeOffset + localPos;
-        com.bjtu.railtransit.vehicle.dto.TrainState st =
-                new com.bjtu.railtransit.vehicle.dto.TrainState(
-                        t, globalPos, velocity, acceleration, phase, "T1",
-                        tractionForceN, brakeForceN, availableMotors);
+        com.bjtu.railtransit.vehicle.dto.TrainState st = new com.bjtu.railtransit.vehicle.dto.TrainState(
+                t, globalPos, velocity, acceleration, phase, "T1",
+                tractionForceN, brakeForceN, availableMotors);
+        st.setResistanceDecel(resistanceDecel);
         if (baseAbsolutePos != null) {
             st.setAbsolutePosition(baseAbsolutePos + localPos);
         }
@@ -1241,12 +1399,16 @@ public class VehicleSimulationService {
     /**
      * 模拟车辆从正线驶入侧线停车（新增方法，不修改已有方法签名）。
      *
-     * <p>调度发起侧线撤离指令后调用此方法，生成一段额外状态序列供前端播放：
+     * <p>
+     * 调度发起侧线撤离指令后调用此方法，生成一段额外状态序列供前端播放：
      * 从当前速度以固定减速度减速到 0，在侧线内行驶约 {@value #SIDING_LENGTH_M}m 后停稳。
-     * 纯运动学简化模型，不引入 Davis 阻力/坡度，用于演示侧线停车过程。</p>
+     * 纯运动学简化模型，不引入 Davis 阻力/坡度，用于演示侧线停车过程。
+     * </p>
      *
-     * <p>坐标系：返回 states 的 position / absolutePosition 沿用 {@code currentState}
-     * 的累计里程坐标系，继续单调前进，与多站仿真一致。</p>
+     * <p>
+     * 坐标系：返回 states 的 position / absolutePosition 沿用 {@code currentState}
+     * 的累计里程坐标系，继续单调前进，与多站仿真一致。
+     * </p>
      *
      * @param trainId      列车编号
      * @param stationId    目标站 id（仅用于日志，不影响运动学）
@@ -1306,6 +1468,21 @@ public class VehicleSimulationService {
                 trainId, stationId, String.format("%.2f", currentState.getVelocity()),
                 String.format("%.1f", traveled), String.format("%.1f", t - currentState.getTime()),
                 sidingStates.size());
+        Map<String, Object> md = new LinkedHashMap<>();
+        md.put("trainId", trainId);
+        md.put("stationId", stationId);
+        md.put("初速", String.format("%.2f", currentState.getVelocity()) + "m/s");
+        md.put("行驶距离", String.format("%.1f", traveled) + "m");
+        md.put("用时", String.format("%.1f", t - currentState.getTime()) + "s");
+        md.put("帧数", sidingStates.size());
+        // 车辆物理量（纯运动学简化模型，无 Davis 阻力/坡度）
+        md.put("速度", String.format("%.2f", currentState.getVelocity()) + "m/s ("
+                + String.format("%.2f", currentState.getVelocity() * KMH_PER_MS) + "km/h)");
+        md.put("加速度", String.format("%.4f", -decel) + "m/s² (匀减速)");
+        md.put("减速度目标", String.format("%.2f", decel) + "m/s²");
+        md.put("制动力", "纯运动学模型，无物理力计算");
+        md.put("阻力", "纯运动学模型，无阻力计算");
+        appendMdLog("侧线驶入", md);
 
         return sidingStates;
     }
@@ -1313,9 +1490,8 @@ public class VehicleSimulationService {
     private com.bjtu.railtransit.vehicle.dto.TrainState buildSidingState(
             double t, double globalPos, double velocity, double acceleration,
             SimulationPhase phase, String trainId, Double baseAbs, double localOffset) {
-        com.bjtu.railtransit.vehicle.dto.TrainState st =
-                new com.bjtu.railtransit.vehicle.dto.TrainState(
-                        t, globalPos, velocity, acceleration, phase, trainId);
+        com.bjtu.railtransit.vehicle.dto.TrainState st = new com.bjtu.railtransit.vehicle.dto.TrainState(
+                t, globalPos, velocity, acceleration, phase, trainId);
         if (baseAbs != null) {
             st.setAbsolutePosition(baseAbs + localOffset);
         }

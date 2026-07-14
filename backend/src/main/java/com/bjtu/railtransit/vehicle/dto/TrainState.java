@@ -72,6 +72,9 @@ public class TrainState {
     /** 当前可用电机数 (默认16, 故障降级时减少)。 */
     private int availableMotors;
 
+    /** 当前总阻力减速度 m/s²（Davis + 坡度 + 隧道），正值。 */
+    private double resistanceDecel;
+
     public TrainState() {
     }
 
@@ -125,7 +128,9 @@ public class TrainState {
     public void setBrakeForce(double brakeForce) { this.brakeForce = brakeForce; }
 
     public int getAvailableMotors() { return availableMotors; }
-    public void setAvailableMotors(int availableMotors) { this.availableMotors = availableMotors; }
+    public void setAvailableMotors(int v) { this.availableMotors = v; }
+    public double getResistanceDecel() { return resistanceDecel; }
+    public void setResistanceDecel(double v) { this.resistanceDecel = v; }
 
     /**
      * 车厢状态快照（多质点模型下车厢级详情，对应一次采样帧各车厢的瞬时状态）。

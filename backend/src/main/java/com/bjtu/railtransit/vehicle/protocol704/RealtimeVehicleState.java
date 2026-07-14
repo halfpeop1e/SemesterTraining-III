@@ -4,6 +4,7 @@ package com.bjtu.railtransit.vehicle.protocol704;
 public class RealtimeVehicleState {
     private String trainId;
     private long lastUpdateTime;
+    private double simulationTimeSeconds;  // 仿真时间（秒），与 SimulationService 统一
     private double positionM;
     private double velocityMs;
     private double accelerationMs2;
@@ -49,6 +50,8 @@ public class RealtimeVehicleState {
     public void setTrainId(String trainId) { this.trainId = trainId; }
     public long getLastUpdateTime() { return lastUpdateTime; }
     public void setLastUpdateTime(long lastUpdateTime) { this.lastUpdateTime = lastUpdateTime; }
+    public double getSimulationTimeSeconds() { return simulationTimeSeconds; }
+    public void setSimulationTimeSeconds(double v) { this.simulationTimeSeconds = v; }
     public double getPositionM() { return positionM; }
     public void setPositionM(double positionM) { this.positionM = positionM; }
     public double getVelocityMs() { return velocityMs; }

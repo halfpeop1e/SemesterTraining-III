@@ -5,28 +5,31 @@ import java.nio.ByteOrder;
 import java.time.LocalDateTime;
 
 /**
- * local-v1 PLC output frame encoder (上位机→PLC 26B); not validated with real PLC.
+ * local-v1 PLC output frame encoder (上位机→PLC 28B).
  *
- * <p>Per 轨交多系统平台接口协议汇总 Table 18/20:
- * frame header 24 bytes + data area 2 bytes = 26 bytes total.
- * Wire format: little-endian, identify bytes {@code 55 AA 55 AA}.</p>
+ * <p>
+ * Per 2026-07-12 laboratory capture: the friend system writes 28B with
+ * totalLen=28 (0x1C), dataLen=4. Frame layout:
+ * header 24 bytes + byte24 lamp + byte25 mode + byte26-27 speed WORD.
+ * Wire format: little-endian, identify bytes {@code 55 AA 55 AA}.
+ * </p>
  */
 public final class Protocol704OutputEncoder {
 
-    /** Total frame length per protocol doc Table 18. */
-    public static final int FRAME_LENGTH = 26;
-    /** Data area length per protocol doc Table 18. */
-    public static final int DATA_LENGTH = 2;
+    /** Total frame length per laboratory capture (28B). */
+    public static final int FRAME_LENGTH = 28;
+    /** Data area length (lamp + mode + speed = 4 bytes). */
+    public static final int DATA_LENGTH = 4;
 
     private Protocol704OutputEncoder() {
     }
 
     /**
-     * Encode the PLC output frame (26 bytes).
+     * Encode the PLC output frame (28 bytes).
      *
      * @param state     current vehicle state (nullable; defaults to safe values)
      * @param timestamp timestamp for the frame (nullable; defaults to now)
-     * @return 26-byte frame ready for TCP write
+     * @return 28-byte frame ready for TCP write
      */
     public static byte[] encodeOutputFrame(RealtimeVehicleState state, LocalDateTime timestamp) {
         RealtimeVehicleState s = state != null ? state : new RealtimeVehicleState();
@@ -35,12 +38,13 @@ public final class Protocol704OutputEncoder {
         byte[] frame = new byte[FRAME_LENGTH];
         ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
 
-        // ── frame header (bytes 0-23) per Table 20 ──
-        // 0-3: _uIdentify = 55 AA 55 AA (wire); putInt LE of 0xAA55AA55 produces 55 AA 55 AA
+        // ── frame header (bytes 0-23) ──
+        // 0-3: _uIdentify = 55 AA 55 AA (wire); putInt LE of 0xAA55AA55 produces 55 AA
+        // 55 AA
         bb.putInt(0, 0xAA55AA55);
-        // 4-5: _uTotalLen = 26 (0x001A)  →  wire 1A 00
+        // 4-5: _uTotalLen = 28 (0x001C) → wire 1C 00
         bb.putShort(4, (short) FRAME_LENGTH);
-        // 6-7: _uDataLen = 2 (0x0002)  →  wire 02 00
+        // 6-7: _uDataLen = 4 (0x0004) → wire 04 00
         bb.putShort(6, (short) DATA_LENGTH);
         // 8-9: _uYear
         bb.putShort(8, (short) ts.getYear());
@@ -59,10 +63,18 @@ public final class Protocol704OutputEncoder {
         // 22-23: _uVerifyCode
         bb.putShort(22, (short) 0);
 
+        // ── data area (bytes 24-27) ──
         PlcLampEncoder.LampInputs lamps = PlcLampEncoder.LampInputs.fromVehicleState(s);
         frame[24] = (byte) PlcLampEncoder.encodeByte24(lamps);
         frame[25] = (byte) PlcLampEncoder.encodeByte25(lamps);
+        // 26-27: vehicle speed in km/h (unsigned 16-bit WORD, little-endian)
+        int speedKmh = clampU16((int) Math.round(Math.max(0.0, s.getVelocityMs()) * 3.6));
+        bb.putShort(26, (short) speedKmh);
 
         return frame;
+    }
+
+    private static int clampU16(int value) {
+        return Math.max(0, Math.min(0xFFFF, value));
     }
 }
