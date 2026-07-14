@@ -30,8 +30,18 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw 'Docker Desktop was not found. Start Docker Desktop and try again.'
 }
 
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
+function Test-DockerReady {
+    try {
+        docker info *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        # PowerShell can promote a stopped Docker Desktop pipe to a terminating
+        # native-command error. It means "not ready", not that startup failed.
+        return $false
+    }
+}
+
+if (-not (Test-DockerReady)) {
     $desktopExe = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
     if (-not (Test-Path $desktopExe)) {
         throw 'Docker Desktop is not running and its executable was not found.'
@@ -40,10 +50,9 @@ if ($LASTEXITCODE -ne 0) {
     $dockerDeadline = (Get-Date).AddSeconds(90)
     do {
         Start-Sleep -Seconds 3
-        docker info *> $null
-        if ($LASTEXITCODE -eq 0) { break }
+        if (Test-DockerReady) { break }
     } while ((Get-Date) -lt $dockerDeadline)
-    if ($LASTEXITCODE -ne 0) {
+    if (-not (Test-DockerReady)) {
         throw 'Docker Desktop did not become ready within 90 seconds.'
     }
 }

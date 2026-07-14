@@ -95,7 +95,7 @@ export async function getLine(): Promise<LineProfile> {
   }
 }
 
-/** 上一帧运行时写回新 line：null 不盖；道岔 REVERSE 粘住（JSON 默认 NORMAL 会冲掉） */
+/** 上一帧运行时写回新 line：仅在静态线路数据没有运行态时补充。 */
 export function preserveRuntimeFromPrevious(
   line: LineProfile,
   previous: LineProfile,
@@ -112,10 +112,7 @@ export function preserveRuntimeFromPrevious(
   for (const sw of next.switches || []) {
     const p = prevSw.get(String(sw.id));
     if (!p?.state) continue;
-    // 静态导出默认 NORMAL；若上一帧是 REVERSE（用户单操），禁止被 NORMAL 冲掉
-    if (p.state === 'REVERSE' && (sw.state === 'NORMAL' || sw.state == null || sw.state === undefined)) {
-      sw.state = 'REVERSE';
-    } else if (sw.state == null || sw.state === undefined) {
+    if (sw.state == null || sw.state === undefined) {
       sw.state = p.state;
     }
   }
@@ -133,7 +130,7 @@ export function preserveRuntimeFromPrevious(
 /**
  * 合并远程运行时。
  * - aspects: 仅非 null 写入
- * - switches: REVERSE 优先；远程 NORMAL 不得盖掉 previous REVERSE
+ * - switches: 联锁服务返回的实时状态优先；接口暂不可用时才保留上一帧
  * - built: 远程空不强制清零
  */
 export function mergeRuntimeState(
@@ -160,13 +157,7 @@ export function mergeRuntimeState(
     for (const sw of next.switches || []) {
       const id = String(sw.id);
       const live = byId.get(id);
-      const prevState = prevSw.get(id);
-      if (live?.state === 'REVERSE') {
-        sw.state = 'REVERSE';
-      } else if (prevState === 'REVERSE') {
-        // 远程仍回 NORMAL（缓存未热/未重启）时粘住本地反位
-        sw.state = 'REVERSE';
-      } else if (live?.state != null) {
+      if (live?.state != null) {
         sw.state = live.state;
       }
       if (live && typeof live.positionM === 'number' && live.positionM > 0) {
@@ -174,7 +165,7 @@ export function mergeRuntimeState(
       }
     }
   } else {
-    // 无远程 switches 列表：仍粘 previous REVERSE
+    // 无远程道岔列表时，保留上一帧的反位状态；定位是静态线路的默认状态。
     for (const sw of next.switches || []) {
       if (prevSw.get(String(sw.id)) === 'REVERSE') sw.state = 'REVERSE';
     }

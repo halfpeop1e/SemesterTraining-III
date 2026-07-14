@@ -49,6 +49,16 @@ export interface OnboardSnapshot {
   signalSource?: string;
 }
 
+export interface SignalManagedTrain {
+  trainId: string;
+  direction: 'UP' | 'DOWN';
+  status: string;
+  currentStationIndex: number;
+  nextStationIndex: number;
+  originStationId?: number;
+  destinationStationId?: number;
+}
+
 async function integrationRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' }, ...init,
@@ -60,6 +70,10 @@ async function integrationRequest<T>(path: string, init?: RequestInit): Promise<
 
 export const getOnboardSnapshot = (trainId: string) =>
   integrationRequest<OnboardSnapshot>(`/signal/train/${trainId}/snapshot`);
+export const getSignalManagedTrains = async () => {
+  const snapshot = await integrationRequest<{ trains?: SignalManagedTrain[] }>('/simulations/snapshot');
+  return snapshot.trains ?? [];
+};
 export const ackDispatchCommand = (commandId: string, executionStatus = 'EXECUTING') =>
   integrationRequest<DispatchCommand>('/dispatch/commands/ack', {
     method: 'POST', body: JSON.stringify({ commandId, accepted: true, executionStatus }),

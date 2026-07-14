@@ -50,6 +50,7 @@ interface IntegrationPanelProps {
   onDispatchRecovery: () => void;
   /** In laboratory mode the PLC bridge, rather than this web page, reports state. */
   externalControl?: boolean;
+  externalControlLabel?: string;
   onManualApproved?: () => void;
   onManualRejected?: () => void;
   /** Control centre removed this train; stop the local HMI instance as well. */
@@ -73,6 +74,7 @@ export default function IntegrationPanel({
   onDispatchHold,
   onDispatchRecovery,
   externalControl = false,
+  externalControlLabel = "外部控制源正在同步状态",
   onManualApproved,
   onManualRejected,
   onTrainOfflined,
@@ -274,7 +276,7 @@ export default function IntegrationPanel({
     <section className="integration-panel" aria-label="总控联调">
       <div>
         <strong>总控联调 · {trainId}</strong>　
-        <span>{externalControl ? "实验室司机台状态由 704 控制桥同步" : message}</span>　
+        <span>{externalControl ? externalControlLabel : message}</span>　
         <span>
           ATP {snapshot?.safetyStatus ?? "--"} · 发车状态{" "}
           {departureState ?? "READY_TO_DEPART"}

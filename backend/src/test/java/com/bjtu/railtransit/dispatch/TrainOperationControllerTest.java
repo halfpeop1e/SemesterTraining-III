@@ -11,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -38,7 +39,7 @@ class TrainOperationControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"trainId":"T99","headLinkId":17,"direction":"UP",
-                                 "stationId":1,"routePattern":"FULL"}
+                                 "stationId":1,"destinationStationId":3,"routePattern":"FULL"}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
@@ -46,6 +47,8 @@ class TrainOperationControllerTest {
                 .andExpect(jsonPath("$.data.headLinkId").value(17))
                 .andExpect(jsonPath("$.data.routeId").value("L9-FULL"))
                 .andExpect(jsonPath("$.data.currentStationIndex").value(0))
+                .andExpect(jsonPath("$.data.originStationId").value(1))
+                .andExpect(jsonPath("$.data.destinationStationId").value(3))
                 .andExpect(jsonPath("$.data.routePattern").value("FULL"));
 
         mockMvc.perform(post("/api/dispatch/trains/T99/route-pattern")
@@ -78,6 +81,42 @@ class TrainOperationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.removed").value(1));
+    }
+
+    @Test
+    void localSignalTrainsKeepIndependentDirectionsAndDestinations() throws Exception {
+        mockMvc.perform(post("/api/dispatch/trains")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"trainId":"LOCAL_UP","headLinkId":1,"direction":"UP",
+                                 "stationId":1,"destinationStationId":3,"routePattern":"FULL"}
+                                """))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.originStationId").value(1))
+                .andExpect(jsonPath("$.data.destinationStationId").value(3));
+
+        mockMvc.perform(post("/api/dispatch/trains")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"trainId":"LOCAL_DOWN","headLinkId":1,"direction":"DOWN",
+                                 "stationId":13,"destinationStationId":11,"routePattern":"FULL"}
+                                """))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.originStationId").value(13))
+                .andExpect(jsonPath("$.data.destinationStationId").value(11));
+
+        mockMvc.perform(get("/api/simulations/snapshot"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.trains.length()").value(2))
+                .andExpect(jsonPath("$.data.trains[0].trainId").value("LOCAL_UP"))
+                .andExpect(jsonPath("$.data.trains[1].trainId").value("LOCAL_DOWN"));
+
+        mockMvc.perform(delete("/api/dispatch/trains/LOCAL_UP"))
+                .andExpect(jsonPath("$.success").value(true));
+
+        mockMvc.perform(get("/api/simulations/snapshot"))
+                .andExpect(jsonPath("$.data.trains.length()").value(1))
+                .andExpect(jsonPath("$.data.trains[0].trainId").value("LOCAL_DOWN"));
     }
 
     @Test

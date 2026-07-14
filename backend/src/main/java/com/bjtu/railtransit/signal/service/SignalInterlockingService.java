@@ -72,11 +72,31 @@ public class SignalInterlockingService {
      */
     public synchronized List<Route> buildAndAssignLaboratoryStationLeg(
             String trainId, int fromStationId, int toStationId, double nowSeconds) {
+        return buildAndAssignStationLeg(trainId, fromStationId, toStationId,
+                com.bjtu.railtransit.signal.domain.Direction.UP, "LAB_STATION_LEG", nowSeconds);
+    }
+
+    /**
+     * Establishes one complete CBI station leg for a backend-owned local train.
+     * It has the same topology proof and transactional lock semantics as the
+     * hardware workflow, but its arrival is confirmed by the simulation engine.
+     */
+    public synchronized List<Route> buildAndAssignLocalStationLeg(
+            String trainId, int fromStationId, int toStationId,
+            com.bjtu.railtransit.signal.domain.Direction direction, double nowSeconds) {
+        return buildAndAssignStationLeg(trainId, fromStationId, toStationId,
+                direction, "LOCAL_STATION_LEG", nowSeconds);
+    }
+
+    private List<Route> buildAndAssignStationLeg(
+            String trainId, int fromStationId, int toStationId,
+            com.bjtu.railtransit.signal.domain.Direction direction,
+            String source, double nowSeconds) {
         requireTrainId(trainId);
         LaboratoryStationLegResolver resolver = new LaboratoryStationLegResolver(
                 lineProfileLoader.getLineProfile());
         LaboratoryStationLegResolver.LaboratoryStationLeg leg = resolver.resolve(
-                fromStationId, toStationId, com.bjtu.railtransit.signal.domain.Direction.UP);
+                fromStationId, toStationId, direction);
 
         Integer old = routeBindings.get(trainId);
         if (old != null) {
@@ -86,7 +106,7 @@ public class SignalInterlockingService {
         List<Route> established = new ArrayList<>();
         try {
             for (int routeId : leg.routeIds()) {
-                established.add(establish(routeId, null, "LAB_STATION_LEG", nowSeconds));
+                established.add(establish(routeId, null, source, nowSeconds));
             }
             for (Route route : established) runtimes.get(route.getId()).trainId = trainId;
             routeBindings.put(trainId, leg.primaryRouteId());
@@ -196,6 +216,11 @@ public class SignalInterlockingService {
             cancelLaboratoryStationLeg(runtime.trainId, runtime.updatedAtSeconds);
             return route;
         }
+        if (runtime != null && "LOCAL_STATION_LEG".equals(runtime.source)) {
+            if (runtime.trainId == null) throw new IllegalStateException("local station leg has no owner");
+            cancelLocalStationLeg(runtime.trainId, runtime.updatedAtSeconds);
+            return route;
+        }
         if (runtime != null && (runtime.state == RouteLifecycleState.OCCUPIED
                 || runtime.state == RouteLifecycleState.RELEASING)) {
             throw new IllegalStateException("列车已进入进路，禁止直接取消: " + routeId);
@@ -220,7 +245,7 @@ public class SignalInterlockingService {
             // A physical ATO station leg spans several CBI routes whose Seg
             // coordinates are not the vehicle platform chainage. Its release
             // is therefore driven only by the bridge's confirmed platform stop.
-            if ("LAB_STATION_LEG".equals(runtime.source)) continue;
+            if (isStationLegSource(runtime.source)) continue;
             Route route = builtRoutes.get(routeId);
             TrainState owner = byId.get(runtime.trainId);
             boolean ownerInside = owner != null && hasEnteredRoute(owner)
@@ -293,8 +318,8 @@ public class SignalInterlockingService {
         Integer routeId = routeBindings.get(trainId);
         if (routeId == null) return;
         MutableRouteRuntime runtime = runtimes.get(routeId);
-        if (runtime != null && "LAB_STATION_LEG".equals(runtime.source)) {
-            throw new IllegalStateException("cancel the complete laboratory station leg instead");
+        if (runtime != null && isStationLegSource(runtime.source)) {
+            throw new IllegalStateException("cancel the complete station leg instead");
         }
         if (runtime != null && (runtime.state == RouteLifecycleState.OCCUPIED
                 || runtime.state == RouteLifecycleState.RELEASING)) {
@@ -319,15 +344,25 @@ public class SignalInterlockingService {
      * station-leg adapter while LK/Seg-to-line-mileage mapping is unavailable.
      */
     public synchronized boolean completeRouteAfterLaboratoryArrival(String trainId, double nowSeconds) {
+        return completeStationLegAfterArrival(trainId, nowSeconds, "LAB_STATION_LEG");
+    }
+
+    /** Completes a local station leg after the backend-owned train reaches its target platform. */
+    public synchronized boolean completeLocalStationLegAfterArrival(String trainId, double nowSeconds) {
+        return completeStationLegAfterArrival(trainId, nowSeconds, "LOCAL_STATION_LEG");
+    }
+
+    private boolean completeStationLegAfterArrival(String trainId, double nowSeconds, String source) {
         List<Route> routes = builtRoutes.values().stream()
                 .filter(route -> {
                     MutableRouteRuntime runtime = runtimes.get(route.getId());
-                    return runtime != null && trainId.equals(runtime.trainId) && !runtime.state.isTerminal();
+                    return runtime != null && trainId.equals(runtime.trainId)
+                            && source.equals(runtime.source) && !runtime.state.isTerminal();
                 }).toList();
         if (routes.isEmpty()) return false;
         for (Route route : routes) {
-            finishRoute(route, RouteLifecycleState.COMPLETED, "LAB_STATION_ARRIVAL",
-                    "实验车已确认停靠目标站，进路释放", nowSeconds);
+            finishRoute(route, RouteLifecycleState.COMPLETED, "STATION_LEG_ARRIVAL",
+                    "列车已确认停靠目标站，进路释放", nowSeconds);
         }
         return true;
     }
@@ -343,12 +378,21 @@ public class SignalInterlockingService {
 
     /** Cancels an entire unoccupied laboratory station-leg route sequence. */
     public synchronized List<Route> cancelLaboratoryStationLeg(String trainId, double nowSeconds) {
+        return cancelStationLeg(trainId, nowSeconds, "LAB_STATION_LEG", "laboratory");
+    }
+
+    /** Cancels every unoccupied CBI route in the selected local station leg. */
+    public synchronized List<Route> cancelLocalStationLeg(String trainId, double nowSeconds) {
+        return cancelStationLeg(trainId, nowSeconds, "LOCAL_STATION_LEG", "local");
+    }
+
+    private List<Route> cancelStationLeg(String trainId, double nowSeconds, String source, String label) {
         List<Route> routes = getBuiltRoutesForTrain(trainId);
-        if (routes.isEmpty()) throw new NoSuchElementException("no laboratory station leg for " + trainId);
+        if (routes.isEmpty()) throw new NoSuchElementException("no " + label + " station leg for " + trainId);
         for (Route route : routes) {
             MutableRouteRuntime runtime = runtimes.get(route.getId());
-            if (runtime == null || !"LAB_STATION_LEG".equals(runtime.source)) {
-                throw new IllegalStateException("train " + trainId + " does not own a laboratory station leg");
+            if (runtime == null || !source.equals(runtime.source)) {
+                throw new IllegalStateException("train " + trainId + " does not own a " + label + " station leg");
             }
             if (runtime != null && (runtime.state == RouteLifecycleState.OCCUPIED
                     || runtime.state == RouteLifecycleState.RELEASING)) {
@@ -356,8 +400,8 @@ public class SignalInterlockingService {
             }
         }
         for (Route route : routes) {
-            finishRoute(route, RouteLifecycleState.CANCELLED, "LAB_LEG_CANCELLED",
-                    "laboratory station leg cancelled", nowSeconds);
+            finishRoute(route, RouteLifecycleState.CANCELLED, "STATION_LEG_CANCELLED",
+                    label + " station leg cancelled", nowSeconds);
         }
         return routes;
     }
@@ -511,6 +555,10 @@ public class SignalInterlockingService {
     private MutableRouteRuntime runtimeForTrain(String trainId) {
         Integer routeId = routeBindings.get(trainId);
         return routeId == null ? null : runtimes.get(routeId);
+    }
+
+    private static boolean isStationLegSource(String source) {
+        return "LAB_STATION_LEG".equals(source) || "LOCAL_STATION_LEG".equals(source);
     }
 
     private void requireTrainId(String trainId) {
