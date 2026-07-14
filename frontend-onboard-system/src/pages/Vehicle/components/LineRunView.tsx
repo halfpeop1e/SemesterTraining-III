@@ -13,6 +13,8 @@ export interface LineRunViewProps {
   stopResult: StopResult | null;
   positionOffset?: number;
   stationStops?: StationStop[];
+  /** 1=上行(UP), -1=下行(DOWN), 决定目标位置计算方向 */
+  directionSign?: number;
   /** Shared siding snapshot passed through the vehicle page. */
   sidingStatuses?: SidingStatus[];
 }
@@ -130,15 +132,22 @@ function computeDrivingAid(
   targetStopPosition: number,
   positionOffset: number,
   stopResult: StopResult | null,
+  directionSign: number,
 ) {
   // 找下一个未到达的停车站（绝对里程坐标）
+  // 下行时目标站在反方向（更小的绝对里程），directionSign=-1
   let nextStopName = '终点';
-  let nextStopAbsM = positionOffset + targetStopPosition;
+  let nextStopAbsM = directionSign > 0
+    ? positionOffset + targetStopPosition
+    : positionOffset - targetStopPosition;
 
   if (stationStops && stationStops.length > 0) {
     for (const stop of stationStops) {
-      const absTarget = positionOffset + stop.targetPosition;
-      if (absTarget >= currentPosition - 0.5) {
+      const absTarget = positionOffset + stop.targetPosition * directionSign;
+      const isAhead = directionSign > 0
+        ? absTarget >= currentPosition - 0.5
+        : absTarget <= currentPosition + 0.5;
+      if (isAhead) {
         nextStopName = stop.stationName;
         nextStopAbsM = absTarget;
         break;
@@ -146,7 +155,10 @@ function computeDrivingAid(
     }
   }
 
-  const distanceM = Math.max(0, nextStopAbsM - currentPosition);
+  // 方向感知距离：上行 target > position，下行 position > target
+  const distanceM = directionSign > 0
+    ? Math.max(0, nextStopAbsM - currentPosition)
+    : Math.max(0, currentPosition - nextStopAbsM);
 
   // 推荐制动点：v² / (2 * a_brake)，a_brake = 1.1 m/s²（SIM 常用制动默认值）
   const SIM_BRAKE_DECEL = 1.1; // m/s²
@@ -192,6 +204,7 @@ function LineRunView({
   stopResult,
   positionOffset = 0,
   stationStops,
+  directionSign = 1,
 }: LineRunViewProps) {
   // 坐标优先级：TrainState.absolutePosition（多站时已正确填充）> positionOffset + position
   const relativePosition = currentState?.position ?? startPosition;
@@ -211,6 +224,7 @@ function LineRunView({
       targetStopPosition,
       positionOffset,
       stopResult,
+      directionSign,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [currentPosition, currentVelocity, speedLimit, stationStops, targetStopPosition, positionOffset, stopResult],

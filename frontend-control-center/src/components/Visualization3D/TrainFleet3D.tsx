@@ -1,8 +1,10 @@
 /**
  * 列车编队管理（/10 比例）
+ * 使用 useFrame 对列车位置做帧间插值，消除 1Hz 快照导致的跳跃感。
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useEffect } from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import Train3D from './Train3D';
 import { interpolatePosition } from './CoordinateConverter';
@@ -18,6 +20,49 @@ export default function TrainFleet3D({ trains, stationPositions, stationKms }: P
       stationPositions.map(p => new THREE.Vector3(p.x, p.y, p.z)), false, 'catmullrom', 0.5,
     );
   }, [stationPositions]);
+
+  // ── 位置插值：存储每列车的上帧、目标、当前显示位置 ──
+  const prevPositions = useRef<Map<string, number>>(new Map());
+  const targetPositions = useRef<Map<string, number>>(new Map());
+  const displayPositions = useRef<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    for (const train of trains) {
+      const tid = train.trainId;
+      // 上一帧位置 = 当前显示位置（如果存在），否则直接设为目标位置
+      const current = displayPositions.current.get(tid);
+      if (current !== undefined) {
+        prevPositions.current.set(tid, current);
+      } else {
+        // 首次出现，直接跳到目标位置
+        prevPositions.current.set(tid, train.positionMeters);
+        displayPositions.current.set(tid, train.positionMeters);
+      }
+      targetPositions.current.set(tid, train.positionMeters);
+    }
+    // 清理已下线的列车
+    const activeIds = new Set(trains.map(t => t.trainId));
+    for (const id of prevPositions.current.keys()) {
+      if (!activeIds.has(id)) {
+        prevPositions.current.delete(id);
+        targetPositions.current.delete(id);
+        displayPositions.current.delete(id);
+      }
+    }
+  }, [trains]);
+
+  // ── 每帧 lerp 插值 ──
+  useFrame((_, delta) => {
+    const lerpFactor = Math.min(1, delta * 10);
+    for (const [id, target] of targetPositions.current) {
+      const current = displayPositions.current.get(id);
+      if (current === undefined) {
+        displayPositions.current.set(id, target);
+        continue;
+      }
+      displayPositions.current.set(id, current + (target - current) * lerpFactor);
+    }
+  });
 
   const getPT = (posMeters: number) => {
     const pos = interpolatePosition(posMeters, stationPositions, stationKms);
@@ -35,7 +80,9 @@ export default function TrainFleet3D({ trains, stationPositions, stationKms }: P
   return (
     <group>
       {trains.filter(t => t.status !== 'FINISHED').map(train => {
-        const { position, tangent } = getPT(train.positionMeters);
+        // 使用插值后的显示位置，而非原始快照位置
+        const displayPos = displayPositions.current.get(train.trainId) ?? train.positionMeters;
+        const { position, tangent } = getPT(displayPos);
         return <Train3D key={train.trainId} train={train} position={position} tangent={tangent} />;
       })}
     </group>
