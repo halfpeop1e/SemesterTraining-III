@@ -5,30 +5,28 @@ import com.bjtu.railtransit.domain.model.*;
 import com.bjtu.railtransit.signal.service.SignalPlcDepartureService;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
-import com.bjtu.railtransit.signal.domain.MovingAuthority;
-import com.bjtu.railtransit.signal.service.MovementAuthorityRegistry;
 
+/**
+ * 调度侧集成控制器 —— 仅保留调度特有端点。
+ *
+ * <p>架构原则：信号系统是车载唯一事实源。车载快照/状态上报/命令确认/事件上报
+ * 统一走 {@code SignalController}。</p>
+ * <p>本控制器只保留调度工作站、调度命令管理（下发+确认）、车载监控等调度特有接口。</p>
+ */
 @RestController
 @RequestMapping("/api")
 public class OnboardIntegrationController {
     private final CommandBus commands;
     private final StatusFusion fusion;
-    private final OnboardEventHandler events;
     private final SimulationService simulation;
-    private final MovementAuthorityRegistry movementAuthorities;
-    private final DispatchEngine dispatchEngine;
     private final SignalPlcDepartureService signalPlcDepartureService;
 
     public OnboardIntegrationController(CommandBus commands, StatusFusion fusion,
-            OnboardEventHandler events, SimulationService simulation,
-            MovementAuthorityRegistry movementAuthorities, DispatchEngine dispatchEngine,
+            SimulationService simulation,
             SignalPlcDepartureService signalPlcDepartureService) {
         this.commands = commands;
         this.fusion = fusion;
-        this.events = events;
         this.simulation = simulation;
-        this.movementAuthorities = movementAuthorities;
-        this.dispatchEngine = dispatchEngine;
         this.signalPlcDepartureService = signalPlcDepartureService;
     }
 
@@ -56,67 +54,9 @@ public class OnboardIntegrationController {
                 !Boolean.FALSE.equals(body.get("approved")), simulation.getSimulationTimeSeconds()));
     }
 
-    @PostMapping("/dispatch/commands/ack")
-    public ApiResponse<TrainCommand> ack(@RequestBody Map<String, Object> body) {
-        String id = String.valueOf(body.get("commandId"));
-        TrainCommand c = commands.acknowledge(id, !Boolean.FALSE.equals(body.get("accepted")),
-                simulation.getSimulationTimeSeconds());
-        if (body.get("executionStatus") != null)
-            c = commands.updateExecution(id, String.valueOf(body.get("executionStatus")),
-                    simulation.getSimulationTimeSeconds());
-        return ApiResponse.ok("ack recorded", c);
-    }
-
-    @PostMapping("/dispatch/report/status")
-    public ApiResponse<String> status(@RequestBody StatusReport report) {
-        simulation.acceptOnboardReport(report);
-        return ApiResponse.ok("status fused", "ONBOARD_REPORTED");
-    }
-
     @GetMapping("/onboard/monitoring")
     public ApiResponse<List<Map<String, Object>>> monitoring() {
         return ApiResponse.ok("onboard monitoring", fusion.monitoring());
-    }
-
-    @PostMapping("/dispatch/report/event")
-    public ApiResponse<String> event(@RequestBody OnboardEvent event) {
-        events.accept(event);
-        return ApiResponse.ok("event accepted", event.getEventId());
-    }
-
-    @GetMapping("/onboard/{trainId}/snapshot")
-    public ApiResponse<Map<String, Object>> onboard(@PathVariable String trainId) {
-        TrainState train = simulation.findTrain(trainId);
-        MovingAuthority ma = movementAuthorities.get(trainId);
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("train", train);
-        data.put("commands", commands.forTrain(trainId));
-        data.put("currentTimeSeconds", simulation.getSimulationTimeSeconds());
-        data.put("movementAuthorityMeters", ma == null ? 0 : ma.getEndOfAuthorityM());
-        data.put("speedLimitKmh", ma == null ? 0 : ma.getMaxSpeedKmh());
-        data.put("movementAuthority", ma);
-        data.put("communicationStatus", fusion.communicationStale(trainId) ? "STALE" : "ONLINE");
-        data.put("safetyStatus", train != null && train.isEmergencyBraking() ? "EMERGENCY" : "NORMAL");
-        // 该车辆的时刻表
-        List<Map<String, Object>> timetableList = new ArrayList<>();
-        Map<Integer, DispatchEngine.TimetableEntry> trainTimetable = dispatchEngine.getTimetable() != null
-                ? dispatchEngine.getTimetable().get(trainId)
-                : null;
-        if (trainTimetable != null) {
-            for (DispatchEngine.TimetableEntry te : trainTimetable.values()) {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("stationId", te.stationId);
-                item.put("stationName", te.stationName);
-                item.put("stationIndex", te.stationIndex);
-                item.put("stationKm", te.stationKm);
-                item.put("plannedArrival", te.plannedArrival);
-                item.put("plannedDeparture", te.plannedDeparture);
-                item.put("plannedDwell", te.plannedDwell);
-                timetableList.add(item);
-            }
-        }
-        data.put("timetable", timetableList);
-        return ApiResponse.ok("onboard snapshot", data);
     }
 
     @GetMapping("/dispatch/workstation")
@@ -126,7 +66,6 @@ public class OnboardIntegrationController {
         data.put("commands", commands.all());
         data.put("pendingManualConfirmations", commands.pendingConfirmations());
         data.put("onboardReports", fusion.reports());
-        data.put("onboardEvents", events.events());
         data.put("onboardMonitoring", fusion.monitoring());
         boolean communicationHealthy = fusion.monitoring().stream()
                 .anyMatch(item -> Boolean.TRUE.equals(item.get("online")));
