@@ -54,7 +54,7 @@ public class G1RouteBindingVerification {
 
         // 2. build r1 → assign T1 成功
         System.out.println("\nbuild + assign:");
-        svc.buildRoute(id1);
+        svc.selectRoute(id1, "TEST", 0);
         Route bound = svc.assignRoute("T1", id1);
         check(bound.getId() == id1, "assign 返回正确 Route");
         check(svc.getRouteBindings().get("T1") == id1, "bindings[T1] = " + id1);
@@ -62,7 +62,7 @@ public class G1RouteBindingVerification {
 
         // 3. 一车一条（覆盖）：T1 从 r1 换到 r2
         System.out.println("\n一车一条（覆盖）:");
-        svc.buildRoute(id2);
+        svc.selectRoute(id2, "TEST", 0);
         svc.assignRoute("T1", id2);
         check(svc.getRouteBindings().get("T1") == id2, "T1 覆盖到 r2");
         check(!svc.getRouteBindings().containsValue(id1), "r1 不再被 T1 绑");

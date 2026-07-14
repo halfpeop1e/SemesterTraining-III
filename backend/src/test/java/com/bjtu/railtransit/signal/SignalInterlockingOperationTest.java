@@ -21,7 +21,7 @@ class SignalInterlockingOperationTest {
 
         service.setSignalAspect(String.valueOf(route.getStartSignalId()), SignalAspect.RED);
         service.setSignalAspect(String.valueOf(route.getEndSignalId()), SignalAspect.RED);
-        service.buildRoute(route.getId());
+        service.selectRoute(route.getId(), "TEST", 0);
 
         assertEquals(SignalAspect.GREEN,
                 service.getAllSignalAspects().get(String.valueOf(route.getStartSignalId())));

@@ -11,14 +11,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * Backend-owned signal cycle:
  * dispatch/onboard state -> signal domain -> full teacher-data MA -> ATP constraints.
+ * 每周期集成联锁进路生命周期、信号保持和列车占用通知。
  */
 @Service
 public class SignalCycleService {
@@ -45,21 +43,19 @@ public class SignalCycleService {
         this.registry = registry;
         this.interlockingService = interlockingService;
         this.eventLog = eventLog;
-        // 必须与联锁/GET /line 共用同一 LineProfile，否则扳道/设灯不影响 MA 周期
         this.lineProfile = loader.getLineProfile();
         this.simulatedInterlocking = simulatedInterlocking;
-        // A missing aspect is intentionally left unset. Both the frontend and the
-        // interlocking API treat it as RED, which is the fail-safe protective state.
-        // GREEN is set only by a built route or an explicit signal command.
     }
 
     public synchronized Map<String, MovingAuthority> runCycle(
             Iterable<TrainState> runtimeTrains, double nowSeconds) {
+
+        // Step 0: 推进联锁进路生命周期（道岔转换计时 → 锁闭 → 开放信号）
+        interlockingService.processRouteTransitions(nowSeconds);
+
         // G1: 从联锁同步 trainId→Route 绑定到 activeRoutes（MA 只读）
         Map<String, Integer> bindings = interlockingService.getRouteBindings();
-        // 清除不再绑定的车
         activeRoutes.keySet().removeIf(tid -> !bindings.containsKey(tid));
-        // 写入/更新绑定的 Route
         for (Map.Entry<String, Integer> entry : bindings.entrySet()) {
             String trainId = entry.getKey();
             int routeId = entry.getValue();
@@ -73,9 +69,19 @@ public class SignalCycleService {
             }
         }
 
-        // G2: 按车 positionM 刷新 axleSections.occupied（compute 前生效）
+        // G2: 按车 positionM 刷新 axleSections.occupied（记录新旧占用状态）
+        Map<Integer, Boolean> prevOccupancy = snapshotOccupancy();
         refreshAxleOccupancy(runtimeTrains);
+        Map<Integer, Boolean> newOccupancy = snapshotOccupancy();
 
+        // G2.5: 通知联锁区段占用/出清变化
+        notifyOccupancyChanges(prevOccupancy, newOccupancy);
+        // 接近锁闭检查
+        interlockingService.checkApproachLocking();
+        // 信号保持检查
+        interlockingService.signalHoldingCheck();
+
+        // 转换到 signal 域
         List<com.bjtu.railtransit.signal.domain.TrainState> signalTrains = new ArrayList<>();
         for (TrainState runtime : runtimeTrains) {
             if (!runtime.occupiesTrack()) continue;
@@ -110,7 +116,6 @@ public class SignalCycleService {
             MovingAuthority ma = values.get(runtime.getTrainId());
             if (ma != null) {
                 applyAtpConstraint(runtime, ma);
-                // G4: MA 降级事件写入（5s 节流）
                 if (eventLog != null && ma.getEvent() != null) {
                     SignalEvent ev = ma.getEvent();
                     if (ev == SignalEvent.DEGRADED || ev == SignalEvent.MA_EXPIRED
@@ -146,8 +151,6 @@ public class SignalCycleService {
             return;
         }
 
-        // Service-braking supervision curve approaching EoA. ATO may run below this value,
-        // but can never exceed it.
         double supervisedSpeedKmh = Math.sqrt(
                 Math.max(0, 2 * SERVICE_BRAKE_MPS2 * (remaining - STOP_MARGIN_METERS))) * 3.6;
         train.setMaxSpeedLimit(Math.min(train.getMaxSpeedLimit(), supervisedSpeedKmh));
@@ -156,26 +159,41 @@ public class SignalCycleService {
         }
     }
 
+    private Map<Integer, Boolean> snapshotOccupancy() {
+        Map<Integer, Boolean> map = new LinkedHashMap<>();
+        if (lineProfile.getAxleSections() != null) {
+            for (AxleCounterSection a : lineProfile.getAxleSections()) {
+                map.put(a.getId(), a.isOccupied());
+            }
+        }
+        return map;
+    }
+
+    private void notifyOccupancyChanges(Map<Integer, Boolean> prev, Map<Integer, Boolean> next) {
+        for (Map.Entry<Integer, Boolean> e : next.entrySet()) {
+            int id = e.getKey();
+            boolean was = prev.getOrDefault(id, false);
+            boolean now = e.getValue();
+            if (!was && now) {
+                interlockingService.notifySectionOccupied(id);
+            } else if (was && !now) {
+                interlockingService.notifySectionCleared(id);
+            }
+        }
+    }
+
     public LineProfile getLineProfile() { return lineProfile; }
     public boolean isSimulatedInterlocking() { return simulatedInterlocking; }
     public Map<String, Route> getActiveRoutes() { return Collections.unmodifiableMap(activeRoutes); }
 
-    /**
-     * G2: 按车 positionM 刷新 axleSections.occupied。
-     * 先全清 false，再遍历 occupiesTrack 的列车，车头/车尾落在区段里程范围内 → occupied=true。
-     * 在 compute 前调用，确保 eoaFromAxleOccupancy 读到的是当前 tick 的真实占用态。
-     */
     private void refreshAxleOccupancy(Iterable<TrainState> runtimeTrains) {
         if (lineProfile.getAxleSections() == null || lineProfile.getAxleSections().isEmpty())
             return;
-        // 先全清
         for (AxleCounterSection a : lineProfile.getAxleSections()) {
             a.setOccupied(false);
         }
-        // 按车 positionM 标记占用
         for (TrainState t : runtimeTrains) {
-            if (!t.occupiesTrack())
-                continue;
+            if (!t.occupiesTrack()) continue;
             double head = t.getPositionMeters();
             double tail = head - t.getTrainLengthMeters();
             double lo = Math.min(head, tail);
@@ -183,9 +201,7 @@ public class SignalCycleService {
             for (AxleCounterSection a : lineProfile.getAxleSections()) {
                 double aStart = axleSectionStartM(a);
                 double aEnd = axleSectionEndM(a);
-                if (Double.isNaN(aStart) || Double.isNaN(aEnd))
-                    continue;
-                // 车体 [lo, hi] 与区段 [aStart, aEnd] 有交集 → occupied
+                if (Double.isNaN(aStart) || Double.isNaN(aEnd)) continue;
                 if (hi >= aStart && lo <= aEnd) {
                     a.setOccupied(true);
                 }
@@ -193,29 +209,26 @@ public class SignalCycleService {
         }
     }
 
-    /** 计轴区段起点里程 m（委托 TrackConstraintService 的同款算法） */
     private double axleSectionStartM(AxleCounterSection a) {
         if (a.getSegIds() == null) return Double.NaN;
         double min = Double.NaN;
         for (Integer segId : a.getSegIds()) {
             double sm = lineProfile.segStartM(String.valueOf(segId));
-            if (!Double.isNaN(sm) && (Double.isNaN(min) || sm < min))
-                min = sm;
+            if (!Double.isNaN(sm) && (Double.isNaN(min) || sm < min)) min = sm;
         }
         return min;
     }
 
-    /** 计轴区段终点里程 m */
     private double axleSectionEndM(AxleCounterSection a) {
         if (a.getSegIds() == null) return Double.NaN;
         double max = Double.NaN;
         for (Integer segId : a.getSegIds()) {
             double em = lineProfile.segEndM(String.valueOf(segId));
-            if (!Double.isNaN(em) && (Double.isNaN(max) || em > max))
-                max = em;
+            if (!Double.isNaN(em) && (Double.isNaN(max) || em > max)) max = em;
         }
         return max;
     }
+
     public void assignRoute(String trainId, Route route) {
         if (route == null) activeRoutes.remove(trainId);
         else activeRoutes.put(trainId, route);

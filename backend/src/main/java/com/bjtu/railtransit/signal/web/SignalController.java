@@ -3,8 +3,10 @@ package com.bjtu.railtransit.signal.web;
 import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.dispatch.CommandBus;
 import com.bjtu.railtransit.dispatch.DispatchEngine;
+import com.bjtu.railtransit.dispatch.OnboardEventHandler;
 import com.bjtu.railtransit.dispatch.SimulationService;
 import com.bjtu.railtransit.dispatch.StatusFusion;
+import com.bjtu.railtransit.domain.model.OnboardEvent;
 import com.bjtu.railtransit.domain.model.StatusReport;
 import com.bjtu.railtransit.domain.model.TrainCommand;
 import com.bjtu.railtransit.domain.model.TrainState;
@@ -61,13 +63,15 @@ public class SignalController {
     private final CommandBus commandBus;
     private final DispatchEngine dispatchEngine;
     private final SimulationService simulationService;
+    private final OnboardEventHandler onboardEventHandler;
 
     @Autowired
     public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader,
                             MovementAuthorityRegistry registry, SignalInterlockingService interlocking,
                             TsrService tsrService, SignalEventLog eventLog,
                             StatusFusion statusFusion, CommandBus commandBus,
-                            DispatchEngine dispatchEngine, SimulationService simulationService) {
+                            DispatchEngine dispatchEngine, SimulationService simulationService,
+                            OnboardEventHandler onboardEventHandler) {
         this.maService = maService;
         this.lineProfileLoader = lineProfileLoader;
         this.registry = registry;
@@ -78,11 +82,12 @@ public class SignalController {
         this.commandBus = commandBus;
         this.dispatchEngine = dispatchEngine;
         this.simulationService = simulationService;
+        this.onboardEventHandler = onboardEventHandler;
     }
 
     /** Backward-compatible constructor for the existing standalone verification harnesses. */
     public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader) {
-        this(maService, lineProfileLoader, new MovementAuthorityRegistry(), null, null, null, null, null, null, null);
+        this(maService, lineProfileLoader, new MovementAuthorityRegistry(), null, null, null, null, null, null, null, null);
     }
 
     @GetMapping("/events")
@@ -171,42 +176,119 @@ public class SignalController {
         return ApiResponse.ok("switches", interlocking.getAllSwitches());
     }
 
+    @PostMapping("/route/select")
+    public ApiResponse<Map<String, Object>> selectRoute(
+            @RequestParam int routeId,
+            @RequestParam(defaultValue = "MANUAL") String source) {
+        try {
+            double nowSec = simulationService != null ? simulationService.getSimulationTimeSeconds() : 0.0;
+            Route route = interlocking.selectRoute(routeId, source, nowSec);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("routeId", routeId);
+            data.put("lockState", route.getLockState().name());
+            data.put("source", source);
+            if (eventLog != null) eventLog.add("INFO", "SIGNAL",
+                    "进路 " + routeId + " 已选排，状态=" + route.getLockState(), String.valueOf(routeId));
+            return ApiResponse.ok("进路 " + routeId + " 选排成功，等待道岔转换和锁闭", data);
+        } catch (Exception e) {
+            if (eventLog != null) eventLog.add("ERROR", "SIGNAL",
+                    "进路 " + routeId + " 选排失败: " + e.getMessage(), String.valueOf(routeId));
+            return new ApiResponse<>(false, e.getMessage(), null);
+        }
+    }
+
+    /** 保持向后兼容：旧的 buildRoute 接口委托到 selectRoute。*/
     @PostMapping("/route/build")
     public ApiResponse<Map<String, Object>> buildRoute(
             @RequestParam int routeId,
             @RequestParam(required = false) String trainId) {
         try {
-            Route route = interlocking.buildRoute(routeId);
+            double nowSec = simulationService != null ? simulationService.getSimulationTimeSeconds() : 0.0;
+            Route route = interlocking.selectRoute(routeId, "MANUAL", nowSec);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("routeId", routeId);
+            data.put("lockState", route.getLockState().name());
             data.put("built", true);
 
             if (trainId != null && !trainId.isBlank()) {
                 try {
-                    interlocking.assignRoute(trainId, routeId);
+                    // 等待进路开放后才能绑定（由信号周期自动推进）
                     data.put("trainId", trainId);
-                    data.put("bound", true);
+                    data.put("bound", false);
+                    data.put("bindNote", "进路已选排，待道岔转换完成并开放信号后可绑定列车");
                     if (eventLog != null) eventLog.add("INFO", "SIGNAL",
-                            "进路 " + routeId + " 建立并绑定 " + trainId, String.valueOf(routeId));
-                    return ApiResponse.ok(
-                            "进路 " + routeId + " 已建立并绑定 " + trainId, data);
+                            "进路 " + routeId + " 已选排（待开放），火车 " + trainId + " 待绑定", String.valueOf(routeId));
+                    return ApiResponse.ok("进路 " + routeId + " 已选排", data);
                 } catch (Exception ae) {
-                    // 非原子：build 成功但 assign 失败 → 不回滚 build；bound=false + 明确 message
                     data.put("bound", false);
                     data.put("boundError", ae.getMessage());
                     if (eventLog != null) eventLog.add("WARN", "SIGNAL",
-                            "进路 " + routeId + " 已建立；绑车失败：" + ae.getMessage(), String.valueOf(routeId));
-                    return ApiResponse.ok(
-                            "进路 " + routeId + " 已建立；绑车失败：" + ae.getMessage(), data);
+                            "进路 " + routeId + " 选排成功；绑车失败：" + ae.getMessage(), String.valueOf(routeId));
+                    return ApiResponse.ok("进路 " + routeId + " 已选排；绑车失败：" + ae.getMessage(), data);
                 }
             }
             data.put("bound", false);
             if (eventLog != null) eventLog.add("INFO", "SIGNAL",
-                    "进路 " + routeId + " 已建立（站场）", String.valueOf(routeId));
-            return ApiResponse.ok("进路 " + routeId + " 已建立（站场）。未绑列车，MA 进路维不生效。", data);
+                    "进路 " + routeId + " 已选排（站场），等待道岔转换", String.valueOf(routeId));
+            return ApiResponse.ok("进路 " + routeId + " 已选排", data);
         } catch (Exception e) {
             if (eventLog != null) eventLog.add("ERROR", "SIGNAL",
-                    "进路 " + routeId + " 建立失败: " + e.getMessage(), String.valueOf(routeId));
+                    "进路 " + routeId + " 选排失败: " + e.getMessage(), String.valueOf(routeId));
+            return new ApiResponse<>(false, e.getMessage(), null);
+        }
+    }
+
+    @PostMapping("/route/{routeId}/delayed-cancel")
+    public ApiResponse<Map<String, Object>> delayedCancelRoute(@PathVariable int routeId) {
+        try {
+            double nowSec = simulationService != null ? simulationService.getSimulationTimeSeconds() : 0.0;
+            interlocking.delayedCancel(routeId, nowSec);
+            if (eventLog != null) eventLog.add("INFO", "SIGNAL",
+                    "进路 " + routeId + " 延时取消", String.valueOf(routeId));
+            return ApiResponse.ok("进路 " + routeId + " 延时取消", Map.of("routeId", routeId));
+        } catch (Exception e) {
+            return new ApiResponse<>(false, e.getMessage(), null);
+        }
+    }
+
+    @PostMapping("/route/{routeId}/fault-unlock")
+    public ApiResponse<Map<String, Object>> faultUnlockRoute(@PathVariable int routeId) {
+        try {
+            interlocking.faultUnlock(routeId);
+            if (eventLog != null) eventLog.add("WARN", "SIGNAL",
+                    "进路 " + routeId + " 故障解锁", String.valueOf(routeId));
+            return ApiResponse.ok("进路 " + routeId + " 故障解锁", Map.of("routeId", routeId));
+        } catch (Exception e) {
+            return new ApiResponse<>(false, e.getMessage(), null);
+        }
+    }
+
+    @PostMapping("/switch/{switchId}/lock")
+    public ApiResponse<Map<String, Object>> lockSwitch(@PathVariable String switchId) {
+        try {
+            Switch sw = null;
+            for (Switch s : interlocking.getAllSwitches()) {
+                if (switchId.equals(s.getId())) { sw = s; break; }
+            }
+            if (sw == null) return new ApiResponse<>(false, "道岔不存在: " + switchId, null);
+            sw.setFunctionLocked(true);
+            return ApiResponse.ok("道岔 " + switchId + " 已功能锁闭", Map.of("switchId", switchId));
+        } catch (Exception e) {
+            return new ApiResponse<>(false, e.getMessage(), null);
+        }
+    }
+
+    @PostMapping("/switch/{switchId}/unlock")
+    public ApiResponse<Map<String, Object>> unlockSwitch(@PathVariable String switchId) {
+        try {
+            Switch sw = null;
+            for (Switch s : interlocking.getAllSwitches()) {
+                if (switchId.equals(s.getId())) { sw = s; break; }
+            }
+            if (sw == null) return new ApiResponse<>(false, "道岔不存在: " + switchId, null);
+            sw.setFunctionLocked(false);
+            return ApiResponse.ok("道岔 " + switchId + " 已解除功能锁闭", Map.of("switchId", switchId));
+        } catch (Exception e) {
             return new ApiResponse<>(false, e.getMessage(), null);
         }
     }
@@ -390,5 +472,39 @@ public class SignalController {
         data.put("timetable", timetableList);
 
         return ApiResponse.ok("signal system snapshot", data);
+    }
+
+    // ═══ 车载命令确认与事件上报（信号系统中转）═══
+
+    /**
+     * 车载确认调度命令。
+     * HMI → 信号系统 → CommandBus
+     */
+    @PostMapping("/command/ack")
+    public ApiResponse<TrainCommand> ackCommand(@RequestBody Map<String, Object> body) {
+        String id = String.valueOf(body.get("commandId"));
+        if (commandBus == null) return new ApiResponse<>(false, "CommandBus not available", null);
+        TrainCommand c = commandBus.acknowledge(id, !Boolean.FALSE.equals(body.get("accepted")),
+                simulationService != null ? simulationService.getSimulationTimeSeconds() : 0);
+        if (body.get("executionStatus") != null)
+            c = commandBus.updateExecution(id, String.valueOf(body.get("executionStatus")),
+                    simulationService != null ? simulationService.getSimulationTimeSeconds() : 0);
+        if (eventLog != null) eventLog.add("INFO", "SIGNAL",
+                "车载 " + c.getTrainId() + " 确认命令 " + c.getCommandType() + " → " + c.getStatus(), id);
+        return ApiResponse.ok("command ack via signal system", c);
+    }
+
+    /**
+     * 车载上报事件（紧急制动等）。
+     * HMI → 信号系统 → OnboardEventHandler（中控）
+     */
+    @PostMapping("/report/event")
+    public ApiResponse<String> reportEvent(@RequestBody OnboardEvent event) {
+        if (onboardEventHandler != null) {
+            onboardEventHandler.accept(event);
+            if (eventLog != null) eventLog.add("INFO", "SIGNAL",
+                    "车载 " + event.getTrainId() + " 上报事件 " + event.getEventType(), event.getEventId());
+        }
+        return ApiResponse.ok("signal system received event", event.getEventId());
     }
 }
