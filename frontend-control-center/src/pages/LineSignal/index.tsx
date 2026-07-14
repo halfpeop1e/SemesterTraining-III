@@ -688,7 +688,7 @@ function LineSignal() {
           banner
           showIcon
           message="仿真未启动"
-          description="本地仿真请使用“本地列车管理”；实验室联调请使用上方“实验列车”入口。"
+          description="本地仿真请使用“添加本地列车”；连接实体司机台时再展开上方“704 联调”入口。"
         />
       )}
       {simLive && (
@@ -729,7 +729,6 @@ function LineSignal() {
               onStationChange={setStationId}
               onBuildRoute={(id, tid) => void handleBuildRoute(id, tid)}
               onCancelRoute={(id) => void handleCancelRoute(id)}
-              onTrainChanged={() => void refreshSimulation()}
             />
           ) : null}
         </div>

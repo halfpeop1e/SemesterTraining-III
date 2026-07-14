@@ -115,6 +115,7 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
   const [hil, setHil] = useState<HilStatus | null>(null);
   const [workflow, setWorkflow] = useState<DriverWorkflow | null>(null);
   const [capabilities, setCapabilities] = useState<LaboratoryStationLegCapability[]>([]);
+  const [expanded, setExpanded] = useState(false);
 
   const contiguousTerminalStation = useMemo(() => {
     const bySource = new Map(capabilities.map((capability) => [capability.fromStationId, capability]));
@@ -180,10 +181,11 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
   }, [trainId]);
 
   useEffect(() => {
+    if (!expanded) return undefined;
     void refresh();
     const timer = window.setInterval(() => void refresh(), 1000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [expanded, refresh]);
 
   useEffect(() => {
     const activeFrom = workflow?.control?.fromStationId;
@@ -327,9 +329,24 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
       ? (desk?.receivedValidFrame ? '8001 输入超时' : '8001 等待 46B')
       : '8001 未连接';
 
+  if (!expanded) {
+    return (
+      <section className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-amber-500/20 bg-slate-950/60 px-4 py-2">
+        <div className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-amber-100">
+          <LinkOutlined /> 实验室联调 <Tag color="gold">704</Tag>
+        </div>
+        <span className="text-xs text-slate-400">连接实体司机台时使用，日常本地仿真无需打开</span>
+        <Button size="small" icon={<LinkOutlined />} onClick={() => setExpanded(true)}>
+          展开704联调
+        </Button>
+      </section>
+    );
+  }
+
   return (
     <section className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-amber-500/20 bg-slate-950/70 px-4 py-2">
       <div className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-amber-100"><LinkOutlined /> 实验列车</div>
+      <Button type="text" size="small" onClick={() => setExpanded(false)}>收起</Button>
       <Input aria-label="实验列车编号" size="small" value={trainId} disabled={Boolean(desk?.simulationReady)}
         onChange={(event) => setTrainId(event.target.value.toUpperCase())} style={{ width: 88 }} />
       <Select aria-label="实验列车起点站" size="small" value={fromStationId} options={stationOptions}

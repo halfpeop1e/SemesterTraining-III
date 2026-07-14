@@ -17,7 +17,6 @@ import {
   type StationTopology,
 } from '../data/realTopology';
 import { C, PLATFORM_CODES, STATION_NAMES, specOf } from '../data/teacherDiagramLayout';
-import StationTrainOperations from './StationTrainOperations';
 import StationCoreTopologyCanvas from './StationCoreTopologyCanvas';
 
 interface Props {
@@ -31,7 +30,6 @@ interface Props {
   onStationChange: (stationId: string) => void;
   onBuildRoute: (routeId: number, trainId?: string) => void;
   onCancelRoute: (routeId: number) => void;
-  onTrainChanged: () => void;
 }
 
 interface StationCanvasProps {
@@ -337,7 +335,6 @@ export default function StationTopologyDetail({
   onStationChange,
   onBuildRoute,
   onCancelRoute,
-  onTrainChanged,
 }: Props) {
   const [routeStartSignalId, setRouteStartSignalId] = useState<number>();
   const [routeEndSignalId, setRouteEndSignalId] = useState<number>();
@@ -568,7 +565,6 @@ export default function StationTopologyDetail({
             ]}
             onChange={(value) => setDiagramMode(value as 'core' | 'sections')}
           />
-          <StationTrainOperations stationId={stationId} trains={trains} onChanged={onTrainChanged} />
         </div>
       </div>
 

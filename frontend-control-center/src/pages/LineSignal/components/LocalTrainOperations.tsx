@@ -18,13 +18,12 @@ function stationName(lineProfile: LineProfile, stationId: number) {
 
 const issuedLocalTrainIds = new Set<string>();
 
-function nextLocalTrainId(existingIds: string[]) {
+function findNextLocalTrainId(existingIds: string[]) {
   const occupied = new Set(existingIds);
   let sequence = 1;
   while (true) {
     const candidate = `LOCAL-${String(sequence).padStart(3, '0')}`;
     if (!occupied.has(candidate) && !issuedLocalTrainIds.has(candidate)) {
-      issuedLocalTrainIds.add(candidate);
       return candidate;
     }
     sequence += 1;
@@ -45,7 +44,7 @@ export default function LocalTrainOperations({ lineProfile, trains, initialStati
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const nextTrainId = useMemo(
-    () => nextLocalTrainId(trains.map((train) => train.trainId)),
+    () => findNextLocalTrainId(trains.map((train) => train.trainId)),
     [trains],
   );
 
@@ -80,12 +79,13 @@ export default function LocalTrainOperations({ lineProfile, trains, initialStati
   }, [destinationStationId, destinationStationIds, fromStationId]);
 
   const createTrain = async () => {
-    const id = nextTrainId;
     if (!destinationStationIds.includes(destinationStationId)) {
       message.warning('终点站必须位于列车运行方向的前方');
       return;
     }
 
+    const id = findNextLocalTrainId(trains.map((train) => train.trainId));
+    issuedLocalTrainIds.add(id);
     setCreating(true);
     try {
       await startSimulation(3600);
@@ -125,7 +125,7 @@ export default function LocalTrainOperations({ lineProfile, trains, initialStati
   return (
     <section className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-emerald-500/20 bg-slate-950/70 px-4 py-2">
       <div className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-emerald-100">
-        <PlusOutlined /> 本地列车管理
+        <PlusOutlined /> 添加本地列车
       </div>
       <Tag color="cyan" aria-label="自动生成的本地列车编号">下次编号 {nextTrainId}</Tag>
       <Select aria-label="本地列车运行方向" size="small" value={direction}
@@ -139,7 +139,7 @@ export default function LocalTrainOperations({ lineProfile, trains, initialStati
         options={destinationStationIds.map((stationId) => ({ value: stationId, label: stationName(lineProfile, stationId) }))} />
       <Button type="primary" size="small" icon={<PlusOutlined />} loading={creating}
         disabled={destinationStationIds.length === 0} onClick={() => void createTrain()}>
-        创建本地列车
+        添加本地列车
       </Button>
       <Select aria-label="已创建本地列车" size="small" placeholder="选择列车" value={selectedTrainId}
         onChange={setSelectedTrainId} style={{ width: 130 }}
