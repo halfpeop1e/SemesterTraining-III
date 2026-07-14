@@ -1,4 +1,4 @@
-import { Drawer, Descriptions, Tag } from 'antd';
+import { Button, Descriptions, Drawer, Popconfirm, Tag } from 'antd';
 import type { SelectedEntity } from './TrackDiagram';
 import type { LineProfile, MovingAuthority, TrainState, SignalAspect, SignalEvent, AuthorityBasis } from '../../../types/signal';
 
@@ -7,6 +7,8 @@ interface MaPanelProps {
   lineProfile: LineProfile;
   maMap: Record<string, MovingAuthority>;
   trains: TrainState[];
+  deletingTrainId?: string | null;
+  onDeleteTrain?: (trainId: string) => void;
   onClose: () => void;
 }
 
@@ -42,7 +44,15 @@ const ASPECT_LABEL: Record<SignalAspect, string> = {
   RED_BROKEN: '红断', GREEN_BROKEN: '绿断', YELLOW_BROKEN: '黄断', WHITE_BROKEN: '白断',
 };
 
-export default function MaPanel({ entity, lineProfile, maMap, trains, onClose }: MaPanelProps) {
+export default function MaPanel({
+  entity,
+  lineProfile,
+  maMap,
+  trains,
+  deletingTrainId,
+  onDeleteTrain,
+  onClose,
+}: MaPanelProps) {
   const open = entity !== null;
 
   const renderContent = () => {
@@ -75,6 +85,22 @@ export default function MaPanel({ entity, lineProfile, maMap, trains, onClose }:
                 <Descriptions.Item label="截断信号机">#{ma.capSignalId}</Descriptions.Item>
               )}
             </Descriptions>
+          )}
+          {onDeleteTrain && (
+            <div className="mt-5 border-t border-slate-200 pt-4">
+              <Popconfirm
+                title={`删除列车 ${train.trainId}？`}
+                description="将解除进路、清除线路占用、MA 和 704 司机台连接。"
+                okText="确认删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => onDeleteTrain(train.trainId)}
+              >
+                <Button danger block loading={deletingTrainId === train.trainId}>
+                  删除车辆并解除线路占用
+                </Button>
+              </Popconfirm>
+            </div>
           )}
         </>
       );

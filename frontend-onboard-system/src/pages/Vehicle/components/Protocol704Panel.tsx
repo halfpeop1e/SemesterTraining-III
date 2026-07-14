@@ -7,11 +7,7 @@ import {
   sendTestFrame,
   syncProtocol704State,
 } from '../../../api/protocol704';
-import type {
-  Protocol704PortStatus,
-  Protocol704Status,
-  RealtimeVehicleState704,
-} from '../../../types/protocol704';
+import type { Protocol704Status } from '../../../types/protocol704';
 import type { SimulationControlRequest, SimulationResult, TrainState } from '../../../types/vehicle';
 
 interface Protocol704PanelProps {
@@ -27,91 +23,15 @@ interface Protocol704PanelProps {
     latched: boolean,
     result?: SimulationResult,
   ) => void;
-  /** 每次状态轮询都向主 Vehicle 页面发布后端实时车辆状态。 */
-  onRealtimeState?: (state: RealtimeVehicleState704) => void;
+  /** Continuous backend state used by the physical-desk ATO timeline. */
+  onRealtimeState?: (state: TrainState, mode: string, departureState?: string) => void;
   /** 获取当前 ATO 播放状态，测试帧发送前同步到 Bridge，使 EB 从真实当前位置开始。 */
   getCurrentState?: () => SimulationControlRequest | null;
 }
 
 function formatTime(timestamp?: number) {
-  if (!timestamp) return '暂无数据';
+  if (!timestamp) return '-';
   return new Date(timestamp).toLocaleTimeString('zh-CN', { hour12: false });
-}
-
-const inputStateLabels: Record<string, string> = {
-  TCP_NOT_CONNECTED: '设备未连接',
-  TCP_CONNECTING: '连接中',
-  CHANNEL_DISABLED: '通道未启用',
-  CONNECTED_NO_BYTES: '已连接，未收到数据',
-  PARTIAL_FRAME: '已收到部分数据，等待完整帧',
-  HEADER_MISMATCH: '帧头错误',
-  TOTAL_LENGTH_MISMATCH: '总长度错误',
-  DATA_LENGTH_MISMATCH: '数据长度错误',
-  STRUCTURE_INVALID: '解析失败',
-  FIRST_FRAME_RECEIVED: '首帧成功',
-  FRAME_RECEIVED: '后续帧成功',
-};
-
-const parsedFieldLabels: Record<string, string> = {
-  header_valid: '帧头有效',
-  total_len_field: '总长度字段',
-  data_len_field: '数据长度字段',
-  year: '年',
-  month: '月',
-  day: '日',
-  hour: '时',
-  minute: '分',
-  second: '秒',
-  mode_byte: '模式字节',
-  direction_handle: '方向手柄',
-  direction_desc: '方向语义',
-  direction_semantic: '方向语义',
-  master_handle: '主手柄',
-  control_mode_request: '司机台驾驶模式输入',
-  traction_level_raw: '牵引级位原始值',
-  traction_level_percent_raw: '牵引输入/级位',
-  brake_level_raw: '制动级位原始值',
-  brake_level_percent_raw: '制动输入/级位',
-  mapped_command: '映射命令',
-};
-
-function presentValue(value: unknown) {
-  if (value === undefined || value === null || value === '') return '暂无数据';
-  if (Array.isArray(value)) return value.length === 0 ? '[]' : JSON.stringify(value);
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value);
-}
-
-function inputStateLabel(state?: string) {
-  return state ? (inputStateLabels[state] ?? state) : '未接收';
-}
-
-type DeviceKey = 'PLC' | 'HMI' | 'MMI';
-type ConnectionAction = 'connect' | 'disconnect' | 'reset' | null;
-
-function deviceConnectionLabel(
-  enabled: boolean,
-  port: Protocol704PortStatus | undefined,
-  action: ConnectionAction,
-) {
-  if (!enabled) return '设备模式未启用';
-  if (action === 'disconnect') return '断开中';
-  if (action === 'connect') return port?.lastError || port?.lastDisconnectTime ? '重连中' : '连接中';
-  if (port?.connected) return '已连接';
-  if (port?.connecting && port.reconnecting) return '重连中';
-  if (port?.connecting) return '连接中';
-  if (port?.lastError) return '连接失败';
-  if (port?.lastDisconnectTime) return '已断开';
-  return '已断开';
-}
-
-function deviceStatusClass(label: string) {
-  if (label === '已连接') return 'vehicle-704-device-card--connected';
-  if (label === '连接中' || label === '重连中' || label === '断开中') {
-    return 'vehicle-704-device-card--connecting';
-  }
-  if (label === '连接失败') return 'vehicle-704-device-card--error';
-  return '';
 }
 
 export default function Protocol704Panel({
@@ -126,8 +46,6 @@ export default function Protocol704Panel({
   const [polling, setPolling] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [testFrameLoading, setTestFrameLoading] = useState<string | null>(null);
-  const [connectionAction, setConnectionAction] = useState<ConnectionAction>(null);
-  const [requestFeedback, setRequestFeedback] = useState<string | null>(null);
 
   // commandId 去重：同一个 lastCommandLifecycle.commandId 只允许触发一次 onExecutedState。
   // 防止 500ms 轮询反复用历史 executedState 覆盖主页面 displayState。
@@ -169,8 +87,16 @@ export default function Protocol704Panel({
     try {
       const next = await getProtocol704Status(trainId);
       setStatus(next);
-      if (next.realtimeVehicleState) {
-        onRealtimeState?.(next.realtimeVehicleState);
+      const realtime = next.realtimeVehicleState;
+      if (realtime) {
+        onRealtimeState?.({
+          trainId,
+          time: realtime.lastUpdateTime / 1000,
+          position: realtime.positionM,
+          velocity: realtime.velocityMs,
+          acceleration: realtime.accelerationMs2,
+          phase: realtime.phase ?? (realtime.velocityMs > 0.05 ? 'TRACTION' : 'STOPPED'),
+        }, realtime.mode, realtime.departureState ?? next.lastCommandLifecycle?.departureState);
       }
       processLifecycle(next, false);
     } catch (error) {
@@ -191,6 +117,9 @@ export default function Protocol704Panel({
     }
     firstRefreshRef.current = true;
     lastProcessedCommandIdRef.current = null;
+    // The signal-page quick start has already opened the PLC socket. Poll it
+    // immediately so the onboard HMI can display that same physical train.
+    setPolling(true);
     void refresh();
   }, [trainId, enabled]);
 
@@ -210,104 +139,43 @@ export default function Protocol704Panel({
   const simulationReady = status?.simulationReady ?? false;
   const lastMappedCommand = status?.lastMappedCommand;
   const realtimeState = status?.realtimeVehicleState;
-  const plcPortNumber = status?.ports?.[0] ?? 8001;
-  const plcInput = portStatuses.find((port) => port.port === plcPortNumber);
-  const hmiInput = portStatuses.find((port) => port.channel?.includes('hmi-input'))
-    ?? portStatuses.find((port) => port.port === 8888);
-  const mmiOutput = portStatuses.find((port) => port.channel?.includes('mmi-output'))
-    ?? portStatuses.find((port) => port.port === 9999);
-  const plcInputReceived = (plcInput?.frameCount ?? 0) > 0;
-  const parsedFields = Object.entries(status?.lastParsedFrame?.fields ?? {});
-  const parsedValue = (key: string) => status?.lastParsedFrame?.fields?.[key];
-
-  const devicePorts: Record<DeviceKey, Protocol704PortStatus | undefined> = {
-    PLC: plcInput,
-    HMI: hmiInput,
-    MMI: mmiOutput,
-  };
-
-  const deviceDefinitions: Array<{
-    key: DeviceKey;
-    name: string;
-    purpose: string;
-    channel: string;
-    frame: string;
-  }> = [
-    {
-      key: 'PLC',
-      name: 'PLC（可编程逻辑控制器）',
-      purpose: '704控制帧接收与控制回写',
-      channel: plcInput?.channel ?? 'plc-input / plc-output',
-      frame: '46B local-v1 输入 / 协议输出',
-    },
-    {
-      key: 'HMI',
-      name: 'HMI（网络屏）',
-      purpose: '牵引切除输入和网络屏输出',
-      channel: hmiInput?.channel ?? 'hmi-input / hmi-output',
-      frame: '26B local-v1 输入 / HMI 输出',
-    },
-    {
-      key: 'MMI',
-      name: 'MMI（信号屏）',
-      purpose: '信号屏状态输出',
-      channel: mmiOutput?.channel ?? 'mmi-output',
-      frame: 'MMI 输出',
-    },
-  ];
+  const plcInputs = status?.lastParsedFrame?.fields ?? {};
+  const inputText = (field: string, active: string, inactive: string) =>
+    plcInputs[field] === true ? active : inactive;
+  const directionText = String(plcInputs.direction_desc ?? plcInputs.direction_semantic ?? '-');
+  const masterHandle = plcInputs.master_handle ?? '-';
 
   const handleConnect = async () => {
     if (!enabled) return;
-    setConnectionAction('connect');
-    setRequestFeedback(null);
     try {
       await connectProtocol704(trainId);
       setPolling(true);
       setExpanded(true);
-      setRequestFeedback('连接请求已发送，等待设备状态确认');
       await refresh();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setRequestFeedback(`连接请求失败：${message}`);
-      onError(message);
-    } finally {
-      setConnectionAction(null);
+      onError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const handleDisconnect = async () => {
     if (!enabled) return;
-    setConnectionAction('disconnect');
-    setRequestFeedback(null);
     try {
       await disconnectProtocol704(trainId);
       setPolling(false);
-      setRequestFeedback('断开请求已发送，等待设备状态确认');
       await refresh();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setRequestFeedback(`断开请求失败：${message}`);
-      onError(message);
-    } finally {
-      setConnectionAction(null);
+      onError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const handleReset = async () => {
     if (!enabled) return;
-    setConnectionAction('reset');
-    setRequestFeedback(null);
     try {
       await resetProtocol704(trainId);
       setPolling(false);
-      setRequestFeedback('重置请求已发送，等待设备状态确认');
       await refresh();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setRequestFeedback(`重置请求失败：${message}`);
-      onError(message);
-    } finally {
-      setConnectionAction(null);
+      onError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -330,9 +198,6 @@ export default function Protocol704Panel({
 
       const next = await sendTestFrame(trainId, type);
       setStatus(next);
-      if (next.realtimeVehicleState) {
-        onRealtimeState?.(next.realtimeVehicleState);
-      }
       processLifecycle(next, true);
       setExpanded(true);
     } catch (error) {
@@ -415,6 +280,7 @@ export default function Protocol704Panel({
           <button
             type="button"
             className="vehicle-704-expand-btn"
+            disabled={!enabled}
             aria-label={expanded ? '收起704协议详情' : '展开704协议详情'}
             onClick={() => setExpanded((value) => !value)}
           >
@@ -423,94 +289,18 @@ export default function Protocol704Panel({
         </div>
       </div>
 
-      {expanded && (
+      {enabled && expanded && (
         <div className="vehicle-704-panel__body">
           <div className="vehicle-704-section">
             <div className="vehicle-704-section__title">联调前置条件</div>
             <div className="vehicle-704-preflight">
-              <strong>
-                {!enabled
-                  ? '设备模式未启用'
-                  : simulationReady
-                    ? '当前列车可接收 PLC 控制'
-                    : '当前列车尚未准备好'}
-              </strong>
-              <span>
-                {!enabled
-                  ? '切换到实验室司机台模式后，才会发送704连接请求'
-                  : status?.simulationReadiness ?? '正在检查仿真状态'}
-              </span>
-            </div>
-            {requestFeedback && <div className="vehicle-704-request-feedback">{requestFeedback}</div>}
-          </div>
-
-          <div className="vehicle-704-section">
-            <div className="vehicle-704-section__title">704设备连接</div>
-            <div className="vehicle-704-device-grid">
-              {deviceDefinitions.map((device) => {
-                const port = devicePorts[device.key];
-                const stateLabel = deviceConnectionLabel(enabled, port, connectionAction);
-                const endpoint = port?.host && port.port
-                  ? `${port.host}:${port.port}`
-                  : port?.port
-                    ? `暂无数据:${port.port}`
-                    : '暂无数据';
-                return (
-                <div
-                  key={device.key}
-                  className={`vehicle-704-device-card ${deviceStatusClass(stateLabel)}`}
-                >
-                  <div className="vehicle-704-device-card__header">
-                    <div>
-                      <strong>{device.name}</strong>
-                      <small>原始标识：{device.key}</small>
-                    </div>
-                    <span>{stateLabel}</span>
-                  </div>
-                  <div className="vehicle-704-device-card__details">
-                    <span><b>用途</b>{device.purpose}</span>
-                    <span><b>endpoint</b>{endpoint}</span>
-                    <span><b>通道</b>{device.channel}</span>
-                    <span><b>帧</b>{device.frame}</span>
-                    <span><b>最近连接</b>{formatTime(port?.lastConnectSuccessTime)}</span>
-                    <span><b>最近断开</b>{formatTime(port?.lastDisconnectTime)}</span>
-                    <span><b>最近数据</b>{port?.lastReceiveTime ? formatTime(port.lastReceiveTime) : '未接收'}</span>
-                    <span><b>最近错误</b>{presentValue(port?.lastError ?? port?.lastOutputError)}</span>
-                  </div>
-                  <div className="vehicle-704-device-card__actions">
-                    <button
-                      type="button"
-                      disabled={!enabled || connectionAction !== null || stateLabel === '已连接'}
-                      onClick={() => void handleConnect()}
-                    >
-                      连接/重试
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!enabled || connectionAction !== null || (!port?.connected && !polling)}
-                      onClick={() => void handleDisconnect()}
-                    >
-                      断开
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!enabled || connectionAction !== null}
-                      onClick={() => void handleReset()}
-                    >
-                      重置
-                    </button>
-                  </div>
-                  <div className="vehicle-704-device-card__note">
-                    卡片操作复用整体704连接/断开/重置接口；接口成功仅代表请求已发送。
-                  </div>
-                </div>
-                );
-              })}
+              <strong>{simulationReady ? '当前列车可接收 PLC 控制' : '当前列车尚未准备好'}</strong>
+              <span>{status?.simulationReadiness ?? '正在检查仿真状态'}</span>
             </div>
           </div>
 
           <div className="vehicle-704-section">
-            <div className="vehicle-704-section__title">端口状态与输出统计</div>
+            <div className="vehicle-704-section__title">端口状态</div>
             <div className="vehicle-704-port-grid">
               {portStatuses.map((port) => (
                 <div
@@ -524,159 +314,22 @@ export default function Protocol704Panel({
                   }`}
                 >
                   <div className="vehicle-704-port-card__header">
-                    <strong>{port.channel ?? `端口 ${port.port}`}</strong>
-                    <span>{deviceConnectionLabel(enabled, port, null)}</span>
+                    <strong>PLC {port.port}</strong>
+                    <span>
+                      {port.connecting ? '连接中' : port.connected ? '已连接' : '未连接'}
+                    </span>
                   </div>
                   <div className="vehicle-704-port-card__details">
-                    <span>endpoint {port.host ? `${port.host}:${port.port}` : `暂无数据:${port.port}`}</span>
-                    <span>输入字节 {presentValue(port.bytesReceived)}</span>
-                    <span>输入帧数 {presentValue(port.frameCount)}</span>
-                    <span>输出帧数 {presentValue(port.outputFrameCount)}</span>
-                    <span>输出字节 {presentValue(port.bytesSent)}</span>
-                    <span>最近输出 {formatTime(port.lastOutputTime)}</span>
+                    <span>最近接收 {formatTime(port.lastReceiveTime)}</span>
+                    <span>帧数 {port.frameCount ?? 0}</span>
+                    <span>帧长 {port.lastFrameLength ?? 0}B</span>
+                    <span>字节 {port.bytesReceived ?? 0}</span>
                   </div>
-                  {(port.lastError || port.lastOutputError) && (
-                    <div className="vehicle-704-port-card__error">{port.lastError ?? port.lastOutputError}</div>
+                  {port.lastError && (
+                    <div className="vehicle-704-port-card__error">{port.lastError}</div>
                   )}
                 </div>
               ))}
-            </div>
-          </div>
-
-          <div className="vehicle-704-section vehicle-704-live-data-section">
-            <div className="vehicle-704-section__title">协议704实时数据与输入诊断</div>
-            <div className="vehicle-704-input-diagnostic-grid">
-              {[
-                { name: 'PLC 输入', endpoint: `${status?.host ?? '192.168.100.123'}:${plcPortNumber}`, frame: '46B local-v1', port: plcInput },
-                {
-                  name: 'HMI 输入',
-                  endpoint: hmiInput?.host && hmiInput.port
-                    ? `${hmiInput.host}:${hmiInput.port}`
-                    : '地址未返回',
-                  frame: '26B local-v1',
-                  port: hmiInput,
-                },
-              ].map(({ name, endpoint, frame, port }) => (
-                <div className="vehicle-704-input-diagnostic" key={name}>
-                  <div className="vehicle-704-input-diagnostic__header">
-                    <strong>{name}</strong>
-                    <span>{inputStateLabel(port?.inputState)}</span>
-                  </div>
-                  <div className="vehicle-704-input-diagnostic__endpoint">{endpoint} · {frame}</div>
-                  <div className="vehicle-704-input-diagnostic__message">
-                    {port?.inputDiagnostic ?? (port ? '未接收' : '暂无数据')}
-                  </div>
-                  <div className="vehicle-704-input-diagnostic__stats">
-                    <span>bytesReceived {presentValue(port?.bytesReceived)}</span>
-                    <span>frameCount {presentValue(port?.frameCount)}</span>
-                    <span>lastFrameLength {presentValue(port?.lastFrameLength)}</span>
-                    <span>pending {presentValue(port?.pendingInputBytes)}</span>
-                    <span>最近更新 {formatTime(port?.lastReceiveTime)}</span>
-                  </div>
-                  <div className="vehicle-704-input-diagnostic__stats">
-                    <span>header {presentValue(port?.lastInputHeader)}</span>
-                    <span>totalLength {presentValue(port?.lastInputTotalLength)}</span>
-                    <span>dataLength {presentValue(port?.lastInputDataLength)}</span>
-                    <span>已接收 {port?.inputState === 'FIRST_FRAME_RECEIVED' || port?.inputState === 'FRAME_RECEIVED' ? '是' : '否'}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="vehicle-704-live-data-block">
-              <strong>最近PLC原始帧与解析字段</strong>
-              <div className="vehicle-704-live-data-caption">
-                原始字段名 / 中文名称 · 当前值 · 解析状态 · 数据来源 · 最近更新时间 · 是否已接收
-              </div>
-              <div className="vehicle-704-live-data-table">
-                {parsedFields.length > 0 ? parsedFields.map(([key, value]) => (
-                  <div className="vehicle-704-live-data-row" key={key}>
-                    <span><code>{key}</code><small>{parsedFieldLabels[key] ?? '未定义字段'}</small></span>
-                    <span>{presentValue(value)}</span>
-                    <span>{plcInputReceived ? '已解析' : '未接收'}</span>
-                    <span>PLC 46B local-v1</span>
-                    <span>{formatTime(plcInput?.lastReceiveTime)}</span>
-                    <span>{plcInputReceived ? '是' : '否'}</span>
-                  </div>
-                )) : (
-                  <div className="vehicle-704-live-data-empty">暂无数据 · 未接收合法PLC输入帧</div>
-                )}
-              </div>
-              <div className="vehicle-704-live-data-raw">
-                <span>rawFrame</span>
-                <code>{status?.lastRawHex ?? '未接收'}</code>
-              </div>
-            </div>
-
-            <div className="vehicle-704-live-data-block">
-              <strong>实时车辆数据</strong>
-              <div className="vehicle-704-live-data-table vehicle-704-live-data-table--compact">
-                {[
-                  ['velocityMs', '速度', realtimeState?.velocityMs],
-                  ['positionM', '位置', realtimeState?.positionM],
-                  ['accelerationMs2', '加速度', realtimeState?.accelerationMs2],
-                  ['mode', '模式', realtimeState?.mode],
-                  ['lastCommand', '最近命令', realtimeState?.lastCommand],
-                ].map(([key, label, value]) => (
-                  <div className="vehicle-704-live-data-row" key={String(key)}>
-                    <span><code>{String(key)}</code><small>{String(label)}</small></span>
-                    <span>{presentValue(value)}</span>
-                    <span>{plcInputReceived ? '已接收' : '未接收'}</span>
-                    <span>Protocol704Status</span>
-                    <span>{formatTime(realtimeState?.lastUpdateTime)}</span>
-                    <span>{plcInputReceived ? '是' : '否'}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="vehicle-704-live-data-block">
-              <strong>司机台驾驶输入与方向</strong>
-              <div className="vehicle-704-live-data-table vehicle-704-live-data-table--compact">
-                {[
-                  ['mode', '当前驾驶模式', realtimeState?.mode],
-                  ['control_mode_request', '司机台驾驶模式输入', parsedValue('control_mode_request') ?? parsedValue('mode_byte')],
-                  ['direction_handle', '方向手柄', parsedValue('direction_handle')],
-                  ['direction_semantic', '前进/后退方向', parsedValue('direction_semantic') ?? parsedValue('direction_desc')],
-                  ['master_handle', '主手柄', parsedValue('master_handle')],
-                  ['traction_level_percent_raw', '牵引输入和牵引级位', parsedValue('traction_level_percent_raw')],
-                  ['brake_level_percent_raw', '制动输入和制动级位', parsedValue('brake_level_percent_raw')],
-                ].map(([key, label, value]) => (
-                  <div className="vehicle-704-live-data-row" key={String(key)}>
-                    <span><code>{String(key)}</code><small>{String(label)}</small></span>
-                    <span>{presentValue(value)}</span>
-                    <span>{plcInputReceived ? '已解析' : '未接收'}</span>
-                    <span>PLC 46B local-v1</span>
-                    <span>{formatTime(plcInput?.lastReceiveTime)}</span>
-                    <span>{plcInputReceived ? '是' : '否'}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="vehicle-704-live-data-block">
-              <strong>最近映射命令与输出帧</strong>
-              <div className="vehicle-704-live-data-table vehicle-704-live-data-table--compact">
-                {[
-                  ['command', '最近映射命令', lastMappedCommand?.command],
-                  ['source', '数据来源', status?.activeBinding ?? status?.connectionNote],
-                  ['updatedAt', '最近更新时间', realtimeState?.lastUpdateTime
-                    ? formatTime(realtimeState.lastUpdateTime)
-                    : undefined],
-                  ['protocolOutputFrame', '协议输出帧', status?.lastOutputFrame],
-                  ['hmiOutputFrame', 'HMI输出帧', status?.lastOutputHmi],
-                  ['mmiOutputFrame', 'MMI输出帧', mmiOutput?.lastOutputHex],
-                ].map(([key, label, value]) => (
-                  <div className="vehicle-704-live-data-row" key={String(key)}>
-                    <span><code>{String(key)}</code><small>{String(label)}</small></span>
-                    <span>{presentValue(value)}</span>
-                    <span>{value === undefined || value === null ? '暂无数据' : '已返回'}</span>
-                    <span>Protocol704Status / PortConnectionStatus</span>
-                    <span>{formatTime(realtimeState?.lastUpdateTime)}</span>
-                    <span>{value === undefined || value === null ? '否' : '是'}</span>
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
 
@@ -727,10 +380,17 @@ export default function Protocol704Panel({
                 </div>
               </div>
               <div className="vehicle-704-parse-grid">
-                <div className="vehicle-704-parse-item"><span>PLC输入帧</span><strong>{inputStateLabel(plcInput?.inputState)}</strong></div>
+                <div className="vehicle-704-parse-item"><span>收到合法帧</span><strong>{status?.receivedValidFrame ? '是' : '否'}</strong></div>
                 <div className="vehicle-704-parse-item"><span>最近合法帧</span><strong>{formatTime(status?.lastValidFrameTime)}</strong></div>
                 <div className="vehicle-704-parse-item"><span>命令生命周期</span><strong>{status?.lastCommandLifecycle?.status ?? '-'}</strong></div>
                 <div className="vehicle-704-parse-item"><span>拒绝/失败原因</span><strong>{status?.lastCommandLifecycle?.rejectionReason ?? status?.lastCommandLifecycle?.executionError ?? '-'}</strong></div>
+              </div>
+              <div className="vehicle-704-section__title">实体司机台输入（按下时应立即变化）</div>
+              <div className="vehicle-704-parse-grid">
+                <div className="vehicle-704-parse-item"><span>钥匙</span><strong>{inputText('key_switch_on', '已开', '未开')}</strong></div>
+                <div className="vehicle-704-parse-item"><span>方向手柄</span><strong>{directionText}</strong></div>
+                <div className="vehicle-704-parse-item"><span>主手柄</span><strong>{String(masterHandle)}</strong></div>
+                <div className="vehicle-704-parse-item"><span>ATO 启动位</span><strong>{inputText('ato_start_btn', '已触发', '未触发')}</strong></div>
               </div>
               {status?.activeBinding && <div className="vehicle-704-test-warning">绑定：{status.activeBinding}</div>}
             </div>

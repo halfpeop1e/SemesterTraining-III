@@ -1,0 +1,8 @@
+{"record_type": "event", "captured_at": "2026-07-13T08:29:44.822+00:00", "event_type": "capture_started", "label": null, "source": "live"}
+{"record_type": "event", "captured_at": "2026-07-13T08:29:44.827+00:00", "event_type": "connected", "peer": "192.168.100.123:8001"}
+{"record_type": "event", "captured_at": "2026-07-13T08:29:44.829+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:29:46.852+00:00", "event_type": "connected", "peer": "192.168.100.123:8001"}
+{"record_type": "event", "captured_at": "2026-07-13T08:29:46.852+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:29:48.883+00:00", "event_type": "connected", "peer": "192.168.100.123:8001"}
+{"record_type": "event", "captured_at": "2026-07-13T08:29:48.884+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:29:49.839+00:00", "event_type": "capture_stopped", "error": "operator interrupted capture"}

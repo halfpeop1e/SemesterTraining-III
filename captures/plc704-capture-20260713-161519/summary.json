@@ -1,0 +1,22 @@
+{
+  "safety": "read-only; no PLC or screen write is performed by this tool",
+  "source": "live",
+  "host": "192.168.100.123",
+  "port": 8001,
+  "started_at": "2026-07-13T08:15:19.599+00:00",
+  "stopped_at": "2026-07-13T08:15:33.938+00:00",
+  "bytes_received": 0,
+  "frames_valid": 0,
+  "invalid_chunks": 0,
+  "reconnects": 8,
+  "first_frame_at": null,
+  "last_frame_at": null,
+  "frame_interval_ms": {
+    "count": 0,
+    "min": null,
+    "max": null,
+    "average": null
+  },
+  "changed_field_counts": {},
+  "error": "operator interrupted capture"
+}

@@ -35,11 +35,17 @@ public class OnboardIntegrationController {
 
     @PostMapping("/dispatch/commands")
     public ApiResponse<TrainCommand> issue(@RequestBody Map<String, Object> body) {
-        return ApiResponse.ok("command issued", commands.issue(
-                String.valueOf(body.get("trainId")), String.valueOf(body.get("commandType")),
+        String trainId = String.valueOf(body.get("trainId"));
+        String commandType = String.valueOf(body.get("commandType"));
+        if ("DEPART".equals(commandType) && simulation.isDriverDeskControlled(trainId)) {
+            return ApiResponse.error("driver-desk-controlled train requires a physical ATO_START");
+        }
+        TrainCommand issued = commands.issue(
+                trainId, commandType,
                 number(body.get("targetValue")), String.valueOf(body.getOrDefault("reason", "Dispatcher request")),
                 (int) number(body.getOrDefault("priority", 50)), String.valueOf(body.getOrDefault("source", "MANUAL")),
-                simulation.getSimulationTimeSeconds()));
+                simulation.getSimulationTimeSeconds());
+        return ApiResponse.ok("command issued", issued);
     }
 
     @PostMapping("/dispatch/commands/confirm")
@@ -61,7 +67,7 @@ public class OnboardIntegrationController {
 
     @PostMapping("/dispatch/report/status")
     public ApiResponse<String> status(@RequestBody StatusReport report) {
-        fusion.accept(report);
+        simulation.acceptOnboardReport(report);
         return ApiResponse.ok("status fused", "ONBOARD_REPORTED");
     }
 

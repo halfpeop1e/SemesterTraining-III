@@ -1,0 +1,22 @@
+{"record_type": "event", "captured_at": "2026-07-13T08:16:31.936+00:00", "event_type": "capture_started", "label": null, "source": "live"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:31.956+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:31.957+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:33.990+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:33.990+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:36.016+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:36.016+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:38.046+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:38.046+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:40.078+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:40.078+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:42.084+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:42.086+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:44.104+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:44.104+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:46.142+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:46.142+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:48.159+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:48.159+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:50.167+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:50.170+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:52.171+00:00", "event_type": "capture_stopped", "error": null}

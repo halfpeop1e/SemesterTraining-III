@@ -56,10 +56,21 @@ class Protocol704OutputEncoderTest {
     @Test
     void encodeOutputFrame_modeAto_bits() {
         RealtimeVehicleState state = new RealtimeVehicleState();
+        state.setAtoReady(true);
         state.setMode("ATO");
         byte[] frame = Protocol704OutputEncoder.encodeOutputFrame(state, LocalDateTime.of(2026, 1, 1, 0, 0, 0));
         assertEquals(1, frame[25] & 0x01);
         assertEquals(1, (frame[25] >> 2) & 1);
+    }
+
+    @Test
+    void encodeOutputFrame_atoReadyWithoutAtoMode() {
+        RealtimeVehicleState state = new RealtimeVehicleState();
+        state.setAtoReady(true);
+        state.setMode("MANUAL");
+        byte[] frame = Protocol704OutputEncoder.encodeOutputFrame(state, LocalDateTime.of(2026, 1, 1, 0, 0, 0));
+        assertEquals(1, frame[25] & 0x01);
+        assertEquals(0, (frame[25] >> 2) & 1);
     }
 
     @Test
@@ -72,7 +83,7 @@ class Protocol704OutputEncoderTest {
         assertEquals(1, (frame[24] >> 5) & 1);
         assertEquals(1, (frame[24] >> 6) & 1);
         assertEquals(0, (frame[24] >> 7) & 1);
-        assertEquals(1, frame[25] & 0x01);
+        assertEquals(0, frame[25] & 0x01);
         assertEquals(0, (frame[25] >> 2) & 1);
     }
 
@@ -82,7 +93,7 @@ class Protocol704OutputEncoderTest {
         assertEquals(26, frame.length);
         assertEquals((byte) 0x55, frame[0]);
         assertEquals(1, (frame[24] >> 5) & 1);
-        assertEquals(1, frame[25] & 0x01);
+        assertEquals(0, frame[25] & 0x01);
     }
 
     @Test
@@ -95,14 +106,15 @@ class Protocol704OutputEncoderTest {
         LocalDateTime ts = LocalDateTime.of(2026, 7, 12, 10, 30, 45);
         byte[] hmi = Protocol704HmiEncoder.encodeHmiFrame(state, ts);
 
-        assertEquals(572, hmi.length);
+        assertEquals(570, hmi.length);
         assertEquals((byte) 0x55, hmi[0]);
         assertEquals((byte) 0xAA, hmi[1]);
         assertEquals((byte) 0x55, hmi[2]);
         assertEquals((byte) 0xAA, hmi[3]);
 
         ByteBuffer bb = ByteBuffer.wrap(hmi).order(ByteOrder.LITTLE_ENDIAN);
-        assertEquals(572, bb.getShort(4) & 0xFFFF);
+        assertEquals(570, bb.getShort(4) & 0xFFFF);
+        assertEquals(546, bb.getShort(6) & 0xFFFF);
         assertEquals(12.5f, bb.getFloat(40), 1e-5);
         assertEquals(-0.8f, bb.getFloat(44), 1e-5);
         assertEquals(3, hmi[54] & 0xFF);
@@ -153,7 +165,7 @@ class Protocol704OutputEncoderTest {
     void encodeMmiFrame_lengthAndHeader() {
         RealtimeVehicleState state = new RealtimeVehicleState();
         byte[] mmi = Protocol704MmiEncoder.encodeMmiFrame(state, LocalDateTime.of(2026, 7, 12, 10, 30, 45));
-        assertEquals(66, mmi.length);
+        assertEquals(68, mmi.length);
         // wire bytes 55 AA 55 AA
         assertEquals((byte) 0x55, mmi[0]);
         assertEquals((byte) 0xAA, mmi[1]);
@@ -161,8 +173,9 @@ class Protocol704OutputEncoderTest {
         assertEquals((byte) 0xAA, mmi[3]);
 
         ByteBuffer bb = ByteBuffer.wrap(mmi).order(ByteOrder.LITTLE_ENDIAN);
-        assertEquals(66, bb.getShort(4) & 0xFFFF);
-        assertEquals(30, bb.getShort(6) & 0xFFFF);
+        // Real MMI frames are 68B while their historic header still says 62/42.
+        assertEquals(62, bb.getShort(4) & 0xFFFF);
+        assertEquals(42, bb.getShort(6) & 0xFFFF);
     }
 
     @Test
@@ -172,7 +185,7 @@ class Protocol704OutputEncoderTest {
         state.setAccelerationMs2(0.8);
         byte[] mmi = Protocol704MmiEncoder.encodeMmiFrame(state, LocalDateTime.of(2026, 1, 1, 0, 0, 0));
         ByteBuffer bb = ByteBuffer.wrap(mmi).order(ByteOrder.LITTLE_ENDIAN);
-        assertEquals(15.5f, bb.getFloat(44), 1e-5);
+        assertEquals(55.8f, bb.getFloat(44), 1e-5);
         assertEquals(0.8f, bb.getFloat(48), 1e-5);
     }
 

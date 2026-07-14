@@ -526,7 +526,7 @@ export default function InterlockingTopologyDiagram({
           const spanM = Math.max(1, last.positionM - first.positionM);
           const progress = Math.max(0, Math.min(1, (tr.positionM - first.positionM) / spanM));
           const x = firstX + (lastX - firstX) * progress;
-          const y = tr.direction === 'DOWN' ? L.yBot : L.yTop;
+          const y = tr.direction === 'UP' ? L.yBot : L.yTop;
           return (
             <g
               key={tr.trainId}

@@ -1,0 +1,66 @@
+name: rail-transit-sim
+
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      # BACKEND_PORT is the host-side mapping only. Container networking and
+      # nginx service discovery always use Spring's fixed internal port 8080.
+      SERVER_PORT: "8080"
+      VEHICLE_PROTOCOL704_HOST: ${PLC_HOST:-192.168.100.123}
+      VEHICLE_PROTOCOL704_PORTS: ${PLC_PORTS:-8001,8002,8003}
+      VEHICLE_PROTOCOL704_CONTROL_PORT: ${PLC_CONTROL_PORT:-8001}
+      VEHICLE_PROTOCOL704_AUTO_START: ${PLC_AUTO_START:-false}
+      VEHICLE_PROTOCOL704_STALE_INPUT_MS: ${PLC_STALE_INPUT_MS:-5000}
+      HIL_ENABLED: ${HIL_ENABLED:-false}
+      HIL_TRAIN_ID: ${HIL_TRAIN_ID:-LB}
+      HIL_SCREEN_TRAIN_NUMBER: ${HIL_SCREEN_TRAIN_NUMBER:-1001}
+      HIL_PLC_OUTPUT_ENABLED: ${PLC_OUTPUT_ENABLED:-false}
+      HIL_PLC_OUTPUT_FRAME_FORMAT: ${PLC_OUTPUT_FRAME_FORMAT:-capture-variant-28}
+      HIL_SIGNAL_SCREEN_ENABLED: ${HIL_SIGNAL_SCREEN_ENABLED:-false}
+      HIL_SIGNAL_SCREEN_HOST: ${SIGNAL_SCREEN_HOST:-192.168.100.122}
+      HIL_SIGNAL_SCREEN_PORT: ${SIGNAL_SCREEN_PORT:-9999}
+      HIL_NETWORK_SCREEN_ENABLED: ${HIL_NETWORK_SCREEN_ENABLED:-false}
+      HIL_NETWORK_SCREEN_HOST: ${NETWORK_SCREEN_HOST:-192.168.100.121}
+      HIL_NETWORK_SCREEN_PORT: ${NETWORK_SCREEN_PORT:-8888}
+      HIL_VISION_ENABLED: ${HIL_VISION_ENABLED:-false}
+      HIL_VISION_HOST: ${VISION_HOST:-192.168.100.124}
+      HIL_VISION_PORT: ${VISION_PORT:-8303}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/api/health >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  control-center:
+    build:
+      context: ./frontend-control-center
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_PORT: "${BACKEND_PORT:-8080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${CONTROL_CENTER_PORT:-5173}:80"
+
+  onboard-system:
+    build:
+      context: ./frontend-onboard-system
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_PORT: "${BACKEND_PORT:-8080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${ONBOARD_PORT:-5174}:80"

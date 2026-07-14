@@ -52,6 +52,8 @@ interface IntegrationPanelProps {
   externalControl?: boolean;
   onManualApproved?: () => void;
   onManualRejected?: () => void;
+  /** Control centre removed this train; stop the local HMI instance as well. */
+  onTrainOfflined?: (trainId: string) => void;
 }
 
 export default function IntegrationPanel({
@@ -73,12 +75,17 @@ export default function IntegrationPanel({
   externalControl = false,
   onManualApproved,
   onManualRejected,
+  onTrainOfflined,
 }: IntegrationPanelProps) {
   const [snapshot, setSnapshot] = useState<OnboardSnapshot | null>(null);
   const [message, setMessage] = useState("等待车载启动");
   const localStateRef = useRef(localState);
   const processedCommandsRef = useRef(new Set<string>());
+  const wasRegisteredRef = useRef(false);
+  const offlinedRef = useRef(false);
+  const onTrainOfflinedRef = useRef(onTrainOfflined);
   localStateRef.current = localState;
+  onTrainOfflinedRef.current = onTrainOfflined;
 
   const deviceIdRef = useRef("");
   if (!deviceIdRef.current) {
@@ -94,6 +101,16 @@ export default function IntegrationPanel({
       // Snapshot already uses CommandBus.forOnboard() (increments deliveryAttempts).
       // Fall back to dedicated onboard commands API if snapshot fails partially.
       const snap = await getOnboardSnapshot(trainId);
+      if (snap.train) {
+        wasRegisteredRef.current = true;
+      } else if (wasRegisteredRef.current && !offlinedRef.current) {
+        // Do not remove a newly opened, not-yet-online tab. Only a train that was
+        // previously confirmed by the control centre can be offlined remotely.
+        offlinedRef.current = true;
+        setMessage("总控已删除此车，车载实例正在下线");
+        onTrainOfflinedRef.current?.(trainId);
+        return;
+      }
       try {
         const delivered = await getOnboardCommands(trainId);
         setSnapshot({ ...snap, commands: delivered });
@@ -106,13 +123,17 @@ export default function IntegrationPanel({
   };
 
   useEffect(() => {
+    wasRegisteredRef.current = false;
+    offlinedRef.current = false;
     void refresh();
     const id = window.setInterval(refresh, 2000);
     return () => window.clearInterval(id);
   }, [trainId]);
 
   useEffect(() => {
-    if (externalControl || !localState || pageStatus !== "playing" || departureAuthorized) return;
+    // In desk mode the dispatch command authorizes departure, but it must not
+    // move the train. Motion still requires the physical ATO start button.
+    if (!localState || pageStatus !== "playing" || departureAuthorized) return;
     const depart = snapshot?.commands.find(
       (command) =>
         command.commandType === "DEPART" &&
@@ -149,7 +170,7 @@ export default function IntegrationPanel({
     if (externalControl || !localState || !["playing", "finished"].includes(pageStatus)) return;
     const action = snapshot?.commands.find(
       (command) =>
-        ["FORCE_HOLD", "HOLD", "EMERGENCY_RECOVERY", "MANUAL_APPROVED", "MANUAL_REJECTED"].includes(
+        ["FORCE_HOLD", "HOLD", "ATP_EMERGENCY_BRAKE", "EMERGENCY_RECOVERY", "MANUAL_APPROVED", "MANUAL_REJECTED"].includes(
           command.commandType,
         ) && ["PENDING", "CONFIRMED"].includes(command.status),
     );

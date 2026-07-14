@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.closeTo;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -74,17 +75,18 @@ class VehicleSimulationControllerTest {
     /** 显式传 fromStationId=1, toStationId=2，应与默认结果一致。 */
     @Test
     void runWithStation1To2ReturnsCorrectTargetStop() throws Exception {
-        // 郭公庄 km=0.313, 丰台科技园 km=1.661 -> runDistance = (1.661-0.313)*1000 = 1348m
+        // Positive-direction head stops: K0+431.000 -> K1+778.520, so the
+        // vehicle-model relative distance remains 1347.520m.
         mockMvc.perform(post("/api/vehicle/simulation/run")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"fromStationId\":1,\"toStationId\":2}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.summary.lineStartPosition").value(313.0))
-                .andExpect(jsonPath("$.data.summary.lineTargetPosition").value(1661.0))
+                .andExpect(jsonPath("$.data.summary.lineStartPosition").value(431.0))
+                .andExpect(jsonPath("$.data.summary.lineTargetPosition").value(closeTo(1778.52, 0.001)))
                 .andExpect(jsonPath("$.data.summary.fromStationName").value("郭公庄"))
                 .andExpect(jsonPath("$.data.summary.toStationName").value("丰台科技园"))
-                .andExpect(jsonPath("$.data.stopResult.targetStopPosition").value(1348.0));
+                .andExpect(jsonPath("$.data.stopResult.targetStopPosition").value(closeTo(1347.52, 0.001)));
     }
 
     /** 非法站点 id 应返回 success=false，message 包含错误说明。 */
@@ -218,11 +220,11 @@ class VehicleSimulationControllerTest {
 
     private String terminalTurnbackBody(String command) {
         return "{\"fromStationId\":12,\"toStationId\":13,"
-                + "\"currentState\":{\"time\":120.0,\"position\":1095.0,\"velocity\":0.0,"
+                + "\"currentState\":{\"time\":120.0,\"position\":1096.11,\"velocity\":0.0,"
                 + "\"acceleration\":0.0,\"phase\":\"dwell\",\"trainId\":\"T1\","
-                + "\"absolutePosition\":16049.0,\"cars\":[{\"carIndex\":0,"
+                + "\"absolutePosition\":16169.02,\"cars\":[{\"carIndex\":0,"
                 + "\"carType\":\"Tc\",\"motored\":true,\"occupiedMass\":42000.0,"
-                + "\"passengerLoadRatio\":0.5,\"positionMeters\":16049.0,"
+                + "\"passengerLoadRatio\":0.5,\"positionMeters\":16169.02,"
                 + "\"speedKmh\":0.0,\"couplerForceKN\":0.0}]},"
                 + "\"currentMode\":\"ato\",\"controlCommand\":{\"command\":\""
                 + command + "\",\"targetDecel\":0.0,\"levelPercent\":0.0}}";

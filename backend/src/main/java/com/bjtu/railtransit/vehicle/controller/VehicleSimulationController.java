@@ -19,11 +19,13 @@ import com.bjtu.railtransit.vehicle.protocol704.Protocol704VehicleControlBridge;
 import com.bjtu.railtransit.vehicle.protocol704.Protocol704CommandLifecycle;
 import com.bjtu.railtransit.vehicle.protocol704.MappedControlCommand;
 import com.bjtu.railtransit.vehicle.enums.DrivingMode;
+import com.bjtu.railtransit.vehicle.enums.SimulationPhase;
 import com.bjtu.railtransit.dispatch.CommandBus;
 import com.bjtu.railtransit.dispatch.OnboardEventHandler;
 import com.bjtu.railtransit.dispatch.SimulationService;
 import com.bjtu.railtransit.domain.model.OnboardEvent;
 import com.bjtu.railtransit.domain.model.TrainCommand;
+import com.bjtu.railtransit.signal.service.SignalInterlockingService;
 import com.bjtu.railtransit.common.SimulationWebSocketHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -60,13 +62,14 @@ public class VehicleSimulationController {
     private final OnboardEventHandler onboardEventHandler;
     private final SimulationService simulationService;
     private final SimulationWebSocketHandler webSocketHandler;
+    private final SignalInterlockingService signalInterlockingService;
 
     public VehicleSimulationController(VehicleSimulationService vehicleSimulationService,
                                         DemoScenarioProvider demoScenarioProvider,
                                         LineProfileJsonLoader lineProfileJsonLoader,
                                         SidingDispatchService sidingDispatchService) {
         this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, sidingDispatchService,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     public VehicleSimulationController(VehicleSimulationService vehicleSimulationService,
@@ -75,7 +78,7 @@ public class VehicleSimulationController {
                                         SidingDispatchService sidingDispatchService,
                                         Protocol704VehicleControlBridge protocol704VehicleControlBridge) {
         this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, sidingDispatchService,
-                protocol704VehicleControlBridge, null, null, null, null);
+                protocol704VehicleControlBridge, null, null, null, null, null);
     }
 
     @Autowired
@@ -87,7 +90,8 @@ public class VehicleSimulationController {
                                         CommandBus commandBus,
                                         OnboardEventHandler onboardEventHandler,
                                         SimulationService simulationService,
-                                        SimulationWebSocketHandler webSocketHandler) {
+                                        SimulationWebSocketHandler webSocketHandler,
+                                        SignalInterlockingService signalInterlockingService) {
         this.vehicleSimulationService = vehicleSimulationService;
         this.demoScenarioProvider = demoScenarioProvider;
         this.lineProfileJsonLoader = lineProfileJsonLoader;
@@ -97,6 +101,7 @@ public class VehicleSimulationController {
         this.onboardEventHandler = onboardEventHandler;
         this.simulationService = simulationService;
         this.webSocketHandler = webSocketHandler;
+        this.signalInterlockingService = signalInterlockingService;
     }
 
     /**
@@ -121,8 +126,19 @@ public class VehicleSimulationController {
             if (sessionId != null && sessionId.trim().isEmpty()) {
                 throw new IllegalArgumentException("SESSION_ID_MISSING");
             }
+            if (simulationService != null && request != null && request.getTrainId() != null
+                    && !request.getTrainId().isBlank()) {
+                simulationService.restoreTrain(request.getTrainId());
+            }
             // 先验证站点存在
             lineProfileJsonLoader.findStationPair(fromId, toId);
+
+            if (request != null && request.isHardwareControlEnabled()) {
+                if (signalInterlockingService == null) {
+                    throw new IllegalStateException("HARDWARE_INTERLOCKING_UNAVAILABLE");
+                }
+                signalInterlockingService.requireSupportedLaboratoryRun(fromId, toId);
+            }
 
             if (toId > fromId + 1) {
                 // 多站连续仿真
@@ -226,8 +242,26 @@ public class VehicleSimulationController {
         if (protocol704VehicleControlBridge != null && request != null
                 && request.getTrainId() != null && !request.getTrainId().isBlank()) {
             if (request.isHardwareControlEnabled()) {
+                // A driver desk only supplies cab intent. Signal/ATS must still
+                // establish a route and issue departure authorization before the
+                // desk receives the ATO-ready indication or accepts ATO_START.
+                result.getSummary().setCurrentMode(DrivingMode.MANUAL);
+                result.getSummary().setDepartureState("READY_TO_DEPART");
+                if (result.getStates() != null && !result.getStates().isEmpty()) {
+                    TrainState initialState = result.getStates().get(0);
+                    initialState.setVelocity(0.0);
+                    initialState.setAcceleration(0.0);
+                    initialState.setPhase(SimulationPhase.STOPPED);
+                }
                 protocol704VehicleControlBridge.registerSimulation(
-                        request.getTrainId(), fromId, toId, result, mode, false);
+                        request.getTrainId(), fromId, toId, result, DrivingMode.MANUAL,
+                        false, false, request.isLabAutoDepartureEnabled());
+                // The dispatch train enters the signal cycle before this 704
+                // context exists. Re-run safety evaluation now so automatic
+                // laboratory station-leg routing sees the newly registered cab.
+                if (simulationService != null) {
+                    simulationService.refreshSignalSafetyState();
+                }
             } else {
                 protocol704VehicleControlBridge.unregisterSimulation(request.getTrainId());
             }
@@ -338,7 +372,6 @@ public class VehicleSimulationController {
         if (!"EXECUTED".equals(lifecycle.getStatus())) {
             return ApiResponse.error("车载发车确认失败: " + lifecycle.getRejectionReason());
         }
-        protocol704VehicleControlBridge.syncDepartureAuth(trainId, true);
         return ApiResponse.ok("车载已确认发车", lifecycle);
     }
 
@@ -446,9 +479,8 @@ public class VehicleSimulationController {
                     Protocol704VehicleControlBridge.SOURCE_ATO);
         }
 
-        if (request.isDepartureConfirmed()) {
-            protocol704VehicleControlBridge.syncDepartureAuth(request.getTrainId(), true);
-        }
+        // A local trajectory flag is never a signal authorization. It must not
+        // arm a laboratory driver's desk.
     }
 
     /**

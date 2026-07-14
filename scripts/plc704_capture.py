@@ -31,7 +31,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 DEFAULT_HOST = "192.168.100.123"
-DEFAULT_PORT = 8001
+DEFAULT_PORT = 8002
 FRAME_LENGTH = 46
 MAGIC = bytes((0x55, 0xAA, 0x55, 0xAA))
 READ_TIMEOUT_SECONDS = 1.0
@@ -175,6 +175,17 @@ def short_summary(decoded: Dict[str, Any]) -> str:
     )
 
 
+def control_byte_changes(previous: Optional[bytes], current: bytes) -> Dict[str, Dict[str, str]]:
+    """Return all cyclic-control-image changes, excluding the changing PLC clock."""
+    if previous is None:
+        return {}
+    return {
+        f"byte{offset}": {"from": f"0x{previous[offset]:02X}", "to": f"0x{current[offset]:02X}"}
+        for offset in range(24, 46)
+        if previous[offset] != current[offset]
+    }
+
+
 @dataclass
 class CaptureStats:
     source: str
@@ -213,6 +224,7 @@ class CaptureWriter:
         ])
         self.csv.writeheader()
         self.previous: Optional[Dict[str, Any]] = None
+        self.previous_frame: Optional[bytes] = None
         self.previous_frame_monotonic: Optional[float] = None
         self.frame_index = 0
         self.closed = False
@@ -231,6 +243,8 @@ class CaptureWriter:
             self.stats.frame_intervals_ms.append(interval_ms)
         delta = changes(self.previous, decoded)
         self.previous = dict(decoded)
+        raw_delta = control_byte_changes(self.previous_frame, frame)
+        self.previous_frame = frame
         self.stats.frames_valid += 1
         self.stats.first_frame_at = self.stats.first_frame_at or captured_at
         self.stats.last_frame_at = captured_at
@@ -259,8 +273,20 @@ class CaptureWriter:
             self.write_event("field_change", {
                 "frame_index": self.frame_index,
                 "changes": delta,
+                "raw_control_byte_changes": raw_delta,
                 "summary": short_summary(decoded),
             }, captured_at)
+        elif raw_delta:
+            self.write_event("raw_control_byte_change", {
+                "frame_index": self.frame_index,
+                "raw_control_byte_changes": raw_delta,
+                "summary": short_summary(decoded),
+            }, captured_at)
+        if raw_delta:
+            changed = ", ".join(
+                f"{name}:{value['from']}->{value['to']}" for name, value in raw_delta.items()
+            )
+            print(f"[{local_now()}] CONTROL BYTES {changed}", flush=True)
         self.records.flush()
         self.events.flush()
         self.csv_file.flush()

@@ -48,6 +48,9 @@ interface SwitchGeometry {
   root: string;
   point: Point;
   lane?: Lane;
+  direction: number;
+  normalEnd: Point;
+  reverseEnd: Point;
 }
 
 interface StationSchematic {
@@ -166,29 +169,6 @@ function setPoint(
   map.set(root, { x: (current.x + point.x) / 2, y: (current.y + point.y) / 2 });
 }
 
-function shortestAnchor(
-  origin: string,
-  lane: Lane,
-  graph: Map<string, Set<string>>,
-  points: Map<string, Point>,
-  rootsByLane: Map<string, Lane>,
-): { root: string; distance: number } | null {
-  const queue: Array<{ root: string; distance: number }> = [{ root: origin, distance: 0 }];
-  const visited = new Set<string>([origin]);
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
-    if (current.root !== origin && points.has(current.root) && rootsByLane.get(current.root) === lane) {
-      return current;
-    }
-    for (const next of graph.get(current.root) || []) {
-      if (visited.has(next)) continue;
-      visited.add(next);
-      queue.push({ root: next, distance: current.distance + 1 });
-    }
-  }
-  return null;
-}
-
 function buildStationSchematic(lineProfile: LineProfile, topology: StationTopology): StationSchematic {
   const byId = new Map<number, TrackSegment>(
     topology.segments.map((segment) => [Number(segment.id), segment]),
@@ -272,22 +252,6 @@ function buildStationSchematic(lineProfile: LineProfile, topology: StationTopolo
   // Projecting all of them as independent rails produces dangling diagonals at the
   // canvas edge. The station diagram deliberately keeps the two platform mainlines
   // as its rail backbone and renders related turnouts as standard schematic symbols.
-  const visibleSegmentIds = new Set<number>(mainSegmentIds);
-
-  const nodeGraph = new Map<string, Set<string>>();
-  const addNodeEdge = (a: string, b: string) => {
-    if (!nodeGraph.has(a)) nodeGraph.set(a, new Set());
-    if (!nodeGraph.has(b)) nodeGraph.set(b, new Set());
-    nodeGraph.get(a)!.add(b);
-    nodeGraph.get(b)!.add(a);
-  };
-  for (const id of visibleSegmentIds) {
-    addNodeEdge(
-      union.find(endpointKey(id, 'start')),
-      union.find(endpointKey(id, 'end')),
-    );
-  }
-
   const switchGeometry: SwitchGeometry[] = [];
   for (const item of topology.switches) {
     const endpointRoots = [item.mergeSegId, item.normalSegId, item.reverseSegId]
@@ -298,24 +262,29 @@ function buildStationSchematic(lineProfile: LineProfile, topology: StationTopolo
       ]);
     const counts = new Map<string, number>();
     endpointRoots.forEach((root) => counts.set(root, (counts.get(root) || 0) + 1));
-    const relatedMain = [item.mergeSegId, item.normalSegId, item.reverseSegId]
-      .map((id) => segmentGeometry.get(id))
-      .filter((geometry): geometry is SegmentGeometry => Boolean(geometry));
     const root = [...counts.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([candidate]) => candidate)
       .find((candidate) => nodePoints.has(candidate));
     const point = root ? nodePoints.get(root) : undefined;
     if (root && point && counts.get(root)! >= 2) {
-      switchGeometry.push({ item, root, point, lane: rootsByLane.get(root) });
-    } else if (relatedMain.length) {
-      const geometry = relatedMain[0];
-      switchGeometry.push({
-        item,
-        root: `fallback:${item.id}`,
-        point: pointAlong(geometry, 0.5),
-        lane: geometry.lane,
-      });
+      const normal = segmentGeometry.get(item.normalSegId);
+      const reverse = segmentGeometry.get(item.reverseSegId);
+      const merge = segmentGeometry.get(item.mergeSegId);
+      const lane = rootsByLane.get(root) || normal?.lane || reverse?.lane || merge?.lane;
+      const direction = normal && normal.start.x < point.x ? -1 : 1;
+      const branchY = lane === 'UP' ? -40 : 40;
+      const normalFallback = {
+        x: point.x + direction * 48,
+        y: point.y,
+      };
+      const reverseFallback = {
+        x: point.x + direction * 58,
+        y: point.y + branchY,
+      };
+      const normalEnd = normal ? segmentOtherPoint(normal, point, item) ?? normalFallback : normalFallback;
+      const reverseEnd = reverse ? segmentOtherPoint(reverse, point, item) ?? reverseFallback : reverseFallback;
+      switchGeometry.push({ item, root, point, lane, direction, normalEnd, reverseEnd });
     }
   }
 
@@ -508,17 +477,8 @@ export default function StationCoreTopologyCanvas({
             );
           })}
 
-          {schematic.switchGeometry.map(({ item, point, lane }) => {
+          {schematic.switchGeometry.map(({ item, point, lane, direction, normalEnd, reverseEnd }) => {
             const selected = selectedEntity?.type === 'switch' && String(selectedEntity.id) === String(item.id);
-            const normal = schematic.segmentGeometry.get(item.normalSegId);
-            const reverse = schematic.segmentGeometry.get(item.reverseSegId);
-            const normalOther = normal ? segmentOtherPoint(normal, point, item) : null;
-            const reverseOther = reverse ? segmentOtherPoint(reverse, point, item) : null;
-            const anchored = normalOther || reverseOther;
-            const direction = anchored && anchored.x < point.x ? -1 : 1;
-            const branchY = lane === 'UP' ? -34 : 34;
-            const fallback = { x: point.x + direction * 34, y: point.y + branchY };
-            const branchEnd = reverseOther || normalOther || fallback;
             const normalState = item.state !== 'REVERSE';
             return (
               <g key={item.id} className="il-hit" data-switch-id={item.id}
@@ -529,16 +489,12 @@ export default function StationCoreTopologyCanvas({
                   event.stopPropagation();
                   onSelect({ type: 'switch', id: String(item.id) });
                 }}>
-                <line x1={point.x - direction * 18} y1={point.y}
-                  x2={point.x + direction * 18} y2={point.y}
-                  stroke="#53657b" strokeWidth={3} />
+                <line x1={point.x - direction * 22} y1={point.y}
+                  x2={normalEnd.x} y2={normalEnd.y}
+                  stroke={normalState ? C.railBright : '#53657b'} strokeWidth={normalState ? 5 : 3} />
                 <line x1={point.x} y1={point.y}
-                  x2={point.x + direction * 25} y2={point.y + branchY * 0.72}
-                  stroke={normalState ? C.green : '#53657b'} strokeWidth={normalState ? 5 : 3} />
-                <line x1={point.x} y1={point.y}
-                  x2={branchEnd.x} y2={branchEnd.y}
-                  stroke={!normalState ? '#f59e0b' : '#53657b'} strokeWidth={!normalState ? 5 : 3}
-                  strokeDasharray={reverseOther ? undefined : '4 3'} />
+                  x2={reverseEnd.x} y2={reverseEnd.y}
+                  stroke={!normalState ? '#f59e0b' : '#53657b'} strokeWidth={!normalState ? 5 : 3} />
                 <circle cx={point.x} cy={point.y} r={selected ? 8 : 6.5}
                   fill={item.state === 'REVERSE' ? '#f59e0b' : C.green}
                   stroke={selected ? '#ffffff' : '#07111d'} strokeWidth={selected ? 2 : 1.5} />

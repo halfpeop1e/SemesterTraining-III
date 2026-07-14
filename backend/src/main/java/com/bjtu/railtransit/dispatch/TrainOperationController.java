@@ -2,8 +2,11 @@ package com.bjtu.railtransit.dispatch;
 
 import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.domain.model.TrainState;
+import com.bjtu.railtransit.signal.service.SignalInterlockingService;
+import com.bjtu.railtransit.vehicle.protocol704.Protocol704Service;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -11,9 +14,15 @@ import java.util.Map;
 @RequestMapping("/api/dispatch/trains")
 public class TrainOperationController {
     private final SimulationService simulationService;
+    private final Protocol704Service protocol704Service;
+    private final SignalInterlockingService signalInterlockingService;
 
-    public TrainOperationController(SimulationService simulationService) {
+    public TrainOperationController(SimulationService simulationService,
+                                    Protocol704Service protocol704Service,
+                                    SignalInterlockingService signalInterlockingService) {
         this.simulationService = simulationService;
+        this.protocol704Service = protocol704Service;
+        this.signalInterlockingService = signalInterlockingService;
     }
 
     @PostMapping
@@ -33,16 +42,39 @@ public class TrainOperationController {
 
     @DeleteMapping("/{trainId}")
     public ApiResponse<TrainState> remove(@PathVariable String trainId) {
-        try { return ApiResponse.ok("列车已删除", simulationService.removeTrain(trainId)); }
+        try {
+            ensureTrainExists(trainId);
+            cleanupExternalBindings(trainId);
+            return ApiResponse.ok("列车已下线并删除", simulationService.removeTrain(trainId));
+        }
         catch (Exception e) { return ApiResponse.error(e.getMessage()); }
     }
 
     @DeleteMapping
     public ApiResponse<Map<String, Object>> clear() {
-        int count = simulationService.clearTrains();
+        var trainIds = new ArrayList<>(simulationService.getTrainIds());
+        for (String trainId : trainIds) {
+            cleanupExternalBindings(trainId);
+            simulationService.removeTrain(trainId);
+        }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("removed", count);
+        result.put("removed", trainIds.size());
         return ApiResponse.ok("已清空全部列车", result);
+    }
+
+    private void ensureTrainExists(String trainId) {
+        if (simulationService.findTrain(trainId) == null) {
+            throw new IllegalArgumentException("列车不存在: " + trainId);
+        }
+    }
+
+    /**
+     * A line-diagram delete is a full operational offlining action.  Do this before
+     * removing dispatch state so an active PLC client cannot retain a stale target.
+     */
+    private void cleanupExternalBindings(String trainId) {
+        protocol704Service.reset(trainId);
+        signalInterlockingService.unassignRoute(trainId);
     }
 
     @PostMapping("/{trainId}/route-pattern")

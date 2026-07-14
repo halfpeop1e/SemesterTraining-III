@@ -1,0 +1,6 @@
+target
+.git
+.idea
+*.log
+*.jar
+Dockerfile

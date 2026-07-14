@@ -59,41 +59,9 @@ public final class Protocol704OutputEncoder {
         // 22-23: _uVerifyCode
         bb.putShort(22, (short) 0);
 
-        // ── data area byte 24 (bit fields) per Table 20 ──
-        int b24 = 0;
-        // bit0: reserved
-        // bit1: 高断合指示灯 1=亮 (assume normal operation → lit)
-        b24 |= (1 << 1);
-        // bit2: 制动缓解不良指示灯 0=灭 (assume normal → off)
-        // bit3: reserved
-        // bit4: 开门灯状态 1=亮 when doors are NOT closed
-        if (!s.isDoorsClosed()) {
-            b24 |= (1 << 4);
-        }
-        // bit5: 门关好指示灯 1=亮
-        if (s.isDoorsClosed()) {
-            b24 |= (1 << 5);
-        }
-        // bit6: 网络故障指示灯 1=亮
-        if (s.isNetworkFault()) {
-            b24 |= (1 << 6);
-        }
-        // bit7: 具备自动折返模式标志 (local-v1: not implemented → 0)
-        frame[24] = (byte) b24;
-
-        // ── data area byte 25 (bit fields) per Table 20 ──
-        int b25 = 0;
-        // bit0: 具备ATO模式标志 1=具备 (local-v1: always report capable)
-        b25 |= (1 << 0);
-        // bit1: 进入洗车模式标志 (local-v1: not implemented → 0)
-        // bit2: 激活ATO模式标志 1=激活
-        String mode = s.getMode();
-        if (mode != null && mode.equalsIgnoreCase("ATO")) {
-            b25 |= (1 << 2);
-        }
-        // bit3: 激活自动折返模式标志 (local-v1: not implemented → 0)
-        // bit4-7: reserved
-        frame[25] = (byte) b25;
+        PlcLampEncoder.LampInputs lamps = PlcLampEncoder.LampInputs.fromVehicleState(s);
+        frame[24] = (byte) PlcLampEncoder.encodeByte24(lamps);
+        frame[25] = (byte) PlcLampEncoder.encodeByte25(lamps);
 
         return frame;
     }

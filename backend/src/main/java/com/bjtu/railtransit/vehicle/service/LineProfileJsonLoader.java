@@ -14,7 +14,9 @@ import java.util.List;
  * 从 configs/line-profile.json 读取北京地铁9号线站点公里标数据，
  * 并按选定起止站构造 {@link LineProfile}（相对坐标）。
  *
- * <p><b>读取字段：</b> stations[].id / name / km</p>
+ * <p><b>读取字段：</b> stations[].id / name / km / stopLeftKm / stopRightKm。
+ * {@code km} 是 Track 0 站台中心；当前仅支持的 1→13 正向运行以
+ * {@code stopRightKm} 作为车头停车点。</p>
  *
  * <p><b>未读取字段（JSON 中不存在）：</b>
  * <ul>
@@ -27,7 +29,6 @@ import java.util.List;
  *
  * <p><b>约束：</b>
  * <ul>
- *   <li>不修改 configs/line-profile.json。</li>
  *   <li>不伪造限速或坡度数据——当前不存在于 JSON 中的字段继续使用默认假设值，
  *       且在注释和进度账本中明确标注为"假设值"。</li>
  * </ul>
@@ -52,13 +53,25 @@ public class LineProfileJsonLoader {
     public static class StationEntry {
         public final int id;
         public final String name;
-        /** 公里标，单位 km，来自 JSON line-profile.stations[].km。 */
+        /**
+         * 正向（站 1 -> 站 13）车头停车公里标，单位 km。
+         * 保留字段名供现有车辆仿真调用方兼容；来源是 stopRightKm。
+         */
         public final double km;
+        /** Track 0 站台中心公里标。 */
+        public final double centerKm;
+        /** Track 0 停车区域左边界。 */
+        public final double stopLeftKm;
+        /** Track 0 停车区域右边界，也是正向运行的车头停车点。 */
+        public final double stopRightKm;
 
-        StationEntry(int id, String name, double km) {
+        StationEntry(int id, String name, double centerKm, double stopLeftKm, double stopRightKm) {
             this.id = id;
             this.name = name;
-            this.km = km;
+            this.km = stopRightKm;
+            this.centerKm = centerKm;
+            this.stopLeftKm = stopLeftKm;
+            this.stopRightKm = stopRightKm;
         }
     }
 
@@ -77,12 +90,16 @@ public class LineProfileJsonLoader {
         for (JsonNode s : stationsNode) {
             int id = s.path("id").asInt(-1);
             String name = s.path("name").asText("");
-            double km = s.path("km").asDouble(Double.NaN);
-            if (id < 0 || name.isEmpty() || Double.isNaN(km)) {
+            double centerKm = s.path("km").asDouble(Double.NaN);
+            double stopLeftKm = s.path("stopLeftKm").asDouble(centerKm);
+            double stopRightKm = s.path("stopRightKm").asDouble(centerKm);
+            if (id < 0 || name.isEmpty() || Double.isNaN(centerKm)
+                    || Double.isNaN(stopLeftKm) || Double.isNaN(stopRightKm)
+                    || stopLeftKm > centerKm || centerKm > stopRightKm) {
                 throw new IllegalStateException(
                         "line-profile.json stations 中存在字段缺失的条目，无法解析: " + s);
             }
-            result.add(new StationEntry(id, name, km));
+            result.add(new StationEntry(id, name, centerKm, stopLeftKm, stopRightKm));
         }
         result.sort((a, b) -> Integer.compare(a.id, b.id));
         return result;
@@ -93,8 +110,8 @@ public class LineProfileJsonLoader {
      *
      * <p>坐标换算：
      * <pre>
-     *   startAbsM     = fromStation.km * 1000
-     *   targetAbsM    = toStation.km * 1000
+     *   startAbsM     = fromStation.stopRightKm * 1000
+     *   targetAbsM    = toStation.stopRightKm * 1000
      *   runDistanceM  = targetAbsM - startAbsM
      *   startPosition = 0.0          （相对）
      *   targetStop    = runDistanceM  （相对）
@@ -130,7 +147,8 @@ public class LineProfileJsonLoader {
 
         if (runDistanceM <= 0) {
             throw new IllegalArgumentException(
-                    "起站 km=" + fromStation.km + " 不小于终站 km=" + toStation.km
+                    "起站 stopRightKm=" + fromStation.stopRightKm
+                            + " 不小于终站 stopRightKm=" + toStation.stopRightKm
                             + "，无法构造正向区间。");
         }
 

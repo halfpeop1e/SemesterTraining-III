@@ -10,9 +10,13 @@ public class RealtimeVehicleState {
     private String mode;
     private String lastCommand;
     private String note;
+    private String phase;
+    private String departureState;
     private boolean doorsClosed;
     private boolean networkFault;
     private boolean emergencyLatched;
+    /** byte25 bit0: 信号授权发车后上位机写 1，司机台 ATO 按钮闪烁。 */
+    private boolean atoReady;
 
     private boolean[] tractionCutMask = new boolean[6];
     private long lastTractionCutTime;
@@ -30,6 +34,8 @@ public class RealtimeVehicleState {
         this.mode = "MANUAL";
         this.lastCommand = "none";
         this.note = "initialized";
+        this.phase = "STOPPED";
+        this.departureState = "READY_TO_DEPART";
         this.doorsClosed = true;
         this.networkFault = false;
         this.emergencyLatched = false;
@@ -55,12 +61,18 @@ public class RealtimeVehicleState {
     public void setLastCommand(String lastCommand) { this.lastCommand = lastCommand; }
     public String getNote() { return note; }
     public void setNote(String note) { this.note = note; }
+    public String getPhase() { return phase; }
+    public void setPhase(String phase) { this.phase = phase; }
+    public String getDepartureState() { return departureState; }
+    public void setDepartureState(String departureState) { this.departureState = departureState; }
     public boolean isDoorsClosed() { return doorsClosed; }
     public void setDoorsClosed(boolean doorsClosed) { this.doorsClosed = doorsClosed; }
     public boolean isNetworkFault() { return networkFault; }
     public void setNetworkFault(boolean networkFault) { this.networkFault = networkFault; }
     public boolean isEmergencyLatched() { return emergencyLatched; }
     public void setEmergencyLatched(boolean emergencyLatched) { this.emergencyLatched = emergencyLatched; }
+    public boolean isAtoReady() { return atoReady; }
+    public void setAtoReady(boolean atoReady) { this.atoReady = atoReady; }
 
     public boolean[] getTractionCutMask() { return tractionCutMask; }
     public void setTractionCutMask(boolean[] tractionCutMask) {

@@ -60,5 +60,11 @@ backend/**/body.json
 .fake
 frontend-control-center/test-results/
 
+# 网络抓包文件（体积大，不提交）
+*.pcapng
+
+# PDF 文档（仓外管理）
+*.pdf
+
 # 仓外辅助目录（保持在仓外即可，不纳入 git）
 # .docs/ .docx/ .harness/ .history/ verify/ 均位于 git 仓库根之外

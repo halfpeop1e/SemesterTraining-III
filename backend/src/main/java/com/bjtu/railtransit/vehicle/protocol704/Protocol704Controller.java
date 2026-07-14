@@ -2,6 +2,7 @@ package com.bjtu.railtransit.vehicle.protocol704;
 
 import com.bjtu.railtransit.vehicle.dto.SimulationControlRequest;
 import com.bjtu.railtransit.vehicle.enums.DrivingMode;
+import com.bjtu.railtransit.signal.service.SignalPlcDepartureService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,11 +20,26 @@ public class Protocol704Controller {
     @Autowired
     private Protocol704VehicleControlBridge protocol704VehicleControlBridge;
 
+    @Autowired
+    private SignalPlcDepartureService signalPlcDepartureService;
+
     @GetMapping("/status")
     public ResponseEntity<Protocol704Status> getStatus(
             @RequestParam(defaultValue = "T1") String trainId) {
         Protocol704Status status = protocol704Service.getStatus(trainId);
         return ResponseEntity.ok(status);
+    }
+
+    @GetMapping("/ato-workflow")
+    public ResponseEntity<Map<String, Object>> atoWorkflow(
+            @RequestParam(defaultValue = "T1") String trainId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("trainId", trainId);
+        result.put("state", signalPlcDepartureService.atoWorkflowState(trainId));
+        result.put("atoReady", signalPlcDepartureService.isAtoReady(trainId));
+        result.put("atoReadinessBlockingReason", signalPlcDepartureService.atoReadinessBlockingReason(trainId));
+        result.put("control", protocol704VehicleControlBridge.snapshot(trainId));
+        return ResponseEntity.ok(result);
     }
 
     @PostMapping("/connect")
@@ -88,7 +104,7 @@ public class Protocol704Controller {
                 requestedMode,
                 request.getFromStationId() > 0 ? request.getFromStationId() : null,
                 request.getToStationId() > 0 ? request.getToStationId() : null,
-                request.isDepartureConfirmed() ? true : null
+                null
         );
         DrivingMode mode = protocol704VehicleControlBridge.getMode(request.getTrainId());
         if (mode == null) mode = DrivingMode.MANUAL;

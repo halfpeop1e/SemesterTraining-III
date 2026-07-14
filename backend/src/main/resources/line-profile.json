@@ -148,208 +148,208 @@
  ],
  "platforms": [
   {
-   "id": 1,
-   "chainage": "K0+313.000",
+  "id": 1,
+  "chainage": "K0+372.000",
    "segId": 13,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 2,
-   "chainage": "K0+313.000",
+  "id": 2,
+  "chainage": "K0+372.000",
    "segId": 39,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 3,
-   "chainage": "K1+660.520",
+  "id": 3,
+  "chainage": "K1+724.140",
    "segId": 24,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 4,
-   "chainage": "K1+660.520",
+  "id": 4,
+  "chainage": "K1+719.520",
    "segId": 51,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 5,
-   "chainage": "k2+448.610",
+  "id": 5,
+  "chainage": "K2+512.677",
    "segId": 55,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 6,
-   "chainage": "k2+448.610",
+  "id": 6,
+  "chainage": "K2+507.610",
    "segId": 69,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 7,
-   "chainage": "k3+429.320",
+  "id": 7,
+  "chainage": "K3+491.832",
    "segId": 58,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 8,
-   "chainage": "k3+429.320",
+  "id": 8,
+  "chainage": "K3+488.320",
    "segId": 72,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 9,
-   "chainage": "k5+014.460",
+  "id": 9,
+  "chainage": "K5+079.5146",
    "segId": 62,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 10,
-   "chainage": "k5+014.460",
+  "id": 10,
+  "chainage": "K5+074.834",
    "segId": 77,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 11,
-   "chainage": "k6+339.900",
+  "id": 11,
+  "chainage": "K6+405.270",
    "segId": 84,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 12,
-   "chainage": "k6+339.900",
+  "id": 12,
+  "chainage": "K6+400.274",
    "segId": 98,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 13,
-   "chainage": "K8+118.830",
+  "id": 13,
+  "chainage": "K8+179.204",
    "segId": 88,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 14,
-   "chainage": "K8+118.830",
+  "id": 14,
+  "chainage": "K8+199.103",
    "segId": 103,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 15,
-   "chainage": "K9+429.160",
+  "id": 15,
+  "chainage": "K9+508.30248",
    "segId": 126,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 16,
-   "chainage": "K9+429.160",
+  "id": 16,
+  "chainage": "K9+488.344",
    "segId": 136,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 17,
-   "chainage": "K10+598.740",
+  "id": 17,
+  "chainage": "K10+656.17848",
    "segId": 129,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 18,
-   "chainage": "K10+598.740",
+  "id": 18,
+  "chainage": "K10+659.11378",
    "segId": 139,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 19,
-   "chainage": "K11+996.970",
+  "id": 19,
+  "chainage": "K12+057.87933",
    "segId": 170,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 20,
-   "chainage": "K11+996.970",
+  "id": 20,
+  "chainage": "K12+058.070",
    "segId": 180,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 21,
-   "chainage": "K13+906.770",
+  "id": 21,
+  "chainage": "K13+967.68649",
    "segId": 174,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 22,
-   "chainage": "K13+906.770",
+  "id": 22,
+  "chainage": "K13+970.28014",
    "segId": 185,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 23,
-   "chainage": "K14+954.010",
+  "id": 23,
+  "chainage": "K15+012.51349",
    "segId": 204,
    "dir": 170,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 24,
-   "chainage": "K14+954.010",
+  "id": 24,
+  "chainage": "K15+013.910",
    "segId": 217,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 25,
-   "chainage": "K16+048.920",
+  "id": 25,
+  "chainage": "K16+110.01966",
    "segId": 207,
    "dir": 85,
    "triggerAxleSectionIds": [],
    "clearPass": true
   },
   {
-   "id": 26,
-   "chainage": "K16+048.920",
+  "id": 26,
+  "chainage": "K16+105.57149",
    "segId": 220,
    "dir": 170,
    "triggerAxleSectionIds": [],

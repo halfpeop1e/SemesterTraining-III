@@ -1,0 +1,14 @@
+{"record_type": "event", "captured_at": "2026-07-13T08:15:53.170+00:00", "event_type": "capture_started", "label": null, "source": "live"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:53.201+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:53.202+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:55.234+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:55.234+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:57.256+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:57.256+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:59.284+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:15:59.284+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:01.318+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:01.319+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:03.342+00:00", "event_type": "connected", "peer": "192.168.100.123:8002"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:03.342+00:00", "event_type": "connection_error", "message": "ConnectionError: remote closed TCP connection"}
+{"record_type": "event", "captured_at": "2026-07-13T08:16:04.535+00:00", "event_type": "capture_stopped", "error": "operator interrupted capture"}

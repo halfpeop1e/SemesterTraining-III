@@ -7,7 +7,8 @@ import java.util.Map;
 
 public class Protocol704FrameParser {
 
-    // local-v1 project convention only; formal PLC protocol semantics remain to be confirmed.
+    // The mode-select mappings below remain local conventions. ATO start itself
+    // is defined by the teacher PLC table: byte34 bit7.
     private static final int BYTE34_MODE_MANUAL = 0x08; // mode_downgrade_confirm
     private static final int BYTE34_MODE_ATO = 0x04;    // mode_upgrade_confirm
     private static final int BYTE34_DEPART = 0x10;      // confirm_btn
@@ -210,14 +211,17 @@ public class Protocol704FrameParser {
         fields.put("direction_semantic", direction);
 
         // Mode/departure commands have priority over the ordinary master handle.
-        // These bit meanings are local-v1 project conventions, not a claim about the formal PLC protocol.
         if ((byte34 & BYTE34_MODE_MANUAL) != 0) {
             cmd.setCommand("SET_MANUAL");
             cmd.setNote("LOCAL_V1_UNCONFIRMED: byte34 bit3 -> SET_MANUAL");
             fields.put("control_mode_request", "MANUAL");
-        } else if ((byte34 & (BYTE34_MODE_ATO | BYTE34_ATO_START)) != 0) {
+        } else if ((byte34 & BYTE34_ATO_START) != 0) {
+            cmd.setCommand("ATO_START");
+            cmd.setNote("DOC_DEFINED: byte34 bit7 -> ATO_START; the two green buttons are interlocked by the desk hardware before this boolean is sent");
+            fields.put("control_mode_request", "ATO_START");
+        } else if ((byte34 & BYTE34_MODE_ATO) != 0) {
             cmd.setCommand("RESUME_ATO");
-            cmd.setNote("LOCAL_V1_UNCONFIRMED: byte34 bit2/bit7 -> RESUME_ATO");
+            cmd.setNote("LOCAL_V1_UNCONFIRMED: byte34 bit2 -> RESUME_ATO");
             fields.put("control_mode_request", "ATO");
         } else if ((byte34 & BYTE34_DEPART) != 0) {
             cmd.setCommand("DEPART_CONFIRM");
@@ -230,7 +234,8 @@ public class Protocol704FrameParser {
         }
 
         if ("UNSUPPORTED".equals(cmd.getCommand()) || "SET_MANUAL".equals(cmd.getCommand())
-                || "RESUME_ATO".equals(cmd.getCommand()) || "DEPART_CONFIRM".equals(cmd.getCommand())) {
+                || "RESUME_ATO".equals(cmd.getCommand()) || "ATO_START".equals(cmd.getCommand())
+                || "DEPART_CONFIRM".equals(cmd.getCommand())) {
             // already mapped above
         } else if (ebButtonLocked || masterHandle == 0x0004) {
             cmd.setCommand("emergency_brake");
@@ -251,12 +256,14 @@ public class Protocol704FrameParser {
             note.append("TRACTION detected; level=").append(level).append("; ");
         } else if (masterHandle == 0x0002) {
             cmd.setCommand("brake");
-            int level = Math.max(0, Math.min(100, brakeLevel));
+            int level = normalizeBrakeLevel(brakeLevel);
             cmd.setLevelPercent(level);
             cmd.setTargetDecel(mapBrakeLevelToDecel(level));
             cmd.setTriggerByteOffset(38);
             cmd.setTriggerByteValue(masterHandle);
-            cmd.setNote("DOC_DEFINED: brake from master_handle=0x0002; brake_level raw=" + brakeLevel + " mapped to 0-100% with targetDecel; FIELD POSITIONS from 704 PLC protocol doc, value ranges require on-site verification");
+            cmd.setNote("DOC_DEFINED: brake from master_handle=0x0002; brake_level raw=" + brakeLevel
+                    + " normalized to " + level + "% with targetDecel; field position is documented,"
+                    + " while the 0x9Cxx/0x9Dxx laboratory encoding is derived from the 2026-07-13 capture");
             note.append("BRAKE detected; level=").append(level).append("; ");
         } else if (masterHandle == 0x0000) {
             cmd.setCommand("coast");
@@ -282,6 +289,22 @@ public class Protocol704FrameParser {
     private static double mapBrakeLevelToDecel(int levelPercent) {
         double maxServiceDecel = 1.2;
         return maxServiceDecel * (levelPercent / 100.0);
+    }
+
+    /**
+     * The teacher document calls this a 0-100 percent WORD, but the live desk
+     * emits a signed 16-bit value around -25,345 (wire 0x9Cxx/0x9Dxx) for
+     * service brake.  Its low byte follows the handle setting, so preserve the
+     * documented 0-100 form and use the observed low-byte form only for that
+     * known range.  Any other out-of-range value stays invalid and is rejected
+     * by the control bridge.
+     */
+    private static int normalizeBrakeLevel(int raw) {
+        if (raw >= 0 && raw <= 100) return raw;
+        if (raw >= 0x9C00 && raw <= 0x9DFF) {
+            return Math.min(100, raw & 0xFF);
+        }
+        return raw;
     }
 
     private static int readUInt16LE(byte[] data, int offset) {

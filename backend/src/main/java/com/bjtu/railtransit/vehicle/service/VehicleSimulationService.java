@@ -340,7 +340,7 @@ public class VehicleSimulationService {
             // 采样帧起始状态（与原实现一致：记录采样起点而非终点）
             double sampleT = t;
             double samplePos = pos;
-            double sampleV = v;
+            double sampleV = multiParticleService.consistSpeedMps(cars);
             List<CarSnapshot> sampleCars = mapCarSnapshots(cars);
             SimulationPhase samplePhase = null;
             double sampleAcceleration = 0.0;
@@ -956,8 +956,13 @@ public class VehicleSimulationService {
 
             // 启发自单质点净阻力的"能否向前移动"判定（多质点步进真实力学由 stepConsist 处理）
             double dragAtZero = computeNetDrag(localPos, 0.0, train, line);
-            boolean canMoveForward = fMode == DrivingMode.MANUAL && fManualTractionActive
-                    && fManualTractionAccel > dragAtZero;
+            // ATO is responsible for its own traction policy below. It must be
+            // allowed to pull away from a zero-speed station stop when a valid
+            // next-station target remains; previously this guard only admitted
+            // manual traction and made a PLC ATO start immediately stop.
+            boolean canMoveForward = (fMode == DrivingMode.MANUAL && fManualTractionActive
+                    && fManualTractionAccel > dragAtZero)
+                    || (fMode == DrivingMode.ATO && localTarget > localPos + VELOCITY_EPSILON);
 
             if (brakingTriggered && v <= VELOCITY_EPSILON) {
                 states.add(makeGlobal(t, localPos, 0.0, 0.0,
@@ -976,7 +981,7 @@ public class VehicleSimulationService {
 
             double sampleT = t;
             double sampleLocalPos = localPos;
-            double sampleV = v;
+            double sampleV = multiParticleService.consistSpeedMps(cars);
             List<CarSnapshot> sampleCars = mapCarSnapshots(cars);
             SimulationPhase samplePhase = SimulationPhase.COAST;
             double sampleAccel = 0.0;
@@ -1166,7 +1171,7 @@ public class VehicleSimulationService {
     private com.bjtu.railtransit.vehicle.dto.TrainState buildSampleState(
             double t, List<TrainCar> cars, double reportedAccel, SimulationPhase phase) {
         TrainCar head = cars.get(0);
-        return buildSampleState(t, head.getPositionMeters(), head.getSpeedMps(), reportedAccel, phase,
+        return buildSampleState(t, head.getPositionMeters(), multiParticleService.consistSpeedMps(cars), reportedAccel, phase,
                 mapCarSnapshots(cars));
     }
 

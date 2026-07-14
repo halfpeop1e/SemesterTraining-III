@@ -24,12 +24,15 @@ public record HilVehicleSnapshot(
         double lineCurrentA,
         double tractionForceKn,
         double nextStationDistanceM,
-        int nextSignalState
+        int nextSignalState,
+        int visionEdgeId,
+        int visionDirection
 ) {
     public static HilVehicleSnapshot idle(String trainId) {
         return new HilVehicleSnapshot(trainId, 0, 0, 0, 0, 0,
                 0, 0, 13, 0, "RM", "COAST", 0,
-                false, true, false, false, true, 1500, 0, 0, 0, 0x01);
+                false, true, false, false, true, 1500, 0, 0, 0, 0x01,
+                1, 1);
     }
 }
 

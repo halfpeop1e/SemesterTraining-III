@@ -306,8 +306,8 @@ export async function operateSwitch(req: SwitchOperateRequest): Promise<ControlR
     }
     return { success: true, message: `道岔 ${req.switchId} → ${state}` };
   } catch (e) {
-    console.warn('[signal] operateSwitch 后端失败，走 mock', e);
-    return mockOperateSwitch(req);
+    console.warn('[signal] operateSwitch 后端失败', e);
+    return { success: false, message: `道岔操作失败: ${(e as Error).message}` };
   }
 }
 
@@ -316,6 +316,61 @@ export interface RouteBuildResult extends ControlResult {
   bound?: boolean;       // 是否成功绑定列车
   trainId?: string;      // 绑定的列车（仅 build+assign 快捷路径时返回）
   routeId?: number;      // 进路 ID
+}
+
+export interface LaboratoryStationLegResult extends ControlResult {
+  trainId?: string;
+  fromStationId?: number;
+  toStationId?: number;
+  routeIds?: number[];
+}
+
+export interface LaboratoryStationLegCapability {
+  fromStationId: number;
+  toStationId: number;
+  supported: boolean;
+  routeIds: number[];
+  reason: string;
+}
+
+export async function getLaboratoryStationLegCapabilities(): Promise<LaboratoryStationLegCapability[]> {
+  return request<LaboratoryStationLegCapability[]>('/signal/laboratory/station-leg/capabilities');
+}
+
+/** Builds every CBI route in one topology-verified laboratory station leg. */
+export async function buildLaboratoryStationLeg(
+  trainId: string,
+  fromStationId: number,
+  toStationId: number,
+): Promise<LaboratoryStationLegResult> {
+  try {
+    const query = new URLSearchParams({
+      trainId,
+      fromStationId: String(fromStationId),
+      toStationId: String(toStationId),
+    });
+    const result = await request<{
+      trainId?: string;
+      fromStationId?: number;
+      toStationId?: number;
+      routeIds?: number[];
+    }>(`/signal/laboratory/station-leg/build?${query.toString()}`, { method: 'POST' });
+    return { success: true, message: 'Station leg established', ...result };
+  } catch (e) {
+    return { success: false, message: `Station leg establishment failed: ${(e as Error).message}` };
+  }
+}
+
+export async function cancelLaboratoryStationLeg(trainId: string): Promise<LaboratoryStationLegResult> {
+  try {
+    const result = await request<{ trainId?: string; routeIds?: number[] }>(
+      `/signal/laboratory/station-leg/cancel?trainId=${encodeURIComponent(trainId)}`,
+      { method: 'POST' },
+    );
+    return { success: true, message: 'Station leg cancelled', ...result };
+  } catch (e) {
+    return { success: false, message: `Station leg cancellation failed: ${(e as Error).message}` };
+  }
 }
 
 export async function buildRoute(req: RouteBuildRequest, trainId?: string): Promise<RouteBuildResult> {
@@ -349,8 +404,13 @@ export async function buildRoute(req: RouteBuildRequest, trainId?: string): Prom
     }
     return { success: true, message: msg, bound, trainId: boundTrain, routeId: req.routeId };
   } catch (e) {
-    console.warn('[signal] buildRoute 后端失败，走 mock', e);
-    return mockBuildRoute(req);
+    console.warn('[signal] buildRoute 后端失败', e);
+    return {
+      success: false,
+      message: `进路办理失败: ${(e as Error).message}`,
+      bound: false,
+      routeId: req.routeId,
+    };
   }
 }
 
@@ -412,8 +472,8 @@ export async function cancelRoute(routeId: string | number): Promise<ControlResu
     }
     return { success: true, message: `进路 ${routeId} 已取消` };
   } catch (e) {
-    console.warn('[signal] cancelRoute 后端失败，走 mock', e);
-    return mockCancelRoute(String(routeId));
+    console.warn('[signal] cancelRoute 后端失败', e);
+    return { success: false, message: `进路取消失败: ${(e as Error).message}` };
   }
 }
 
@@ -433,30 +493,13 @@ export async function openSignal(req: SignalOpenRequest): Promise<ControlResult>
       String(req.signalId);
     return { success: true, message: `信号机 ${name} 已设置 ${aspect}` };
   } catch (e) {
-    console.warn('[signal] openSignal 后端失败，走 mock', e);
-    return mockOpenSignal(req);
+    console.warn('[signal] openSignal 后端失败', e);
+    return { success: false, message: `信号机设置失败: ${(e as Error).message}` };
   }
 }
 
 export async function getBuiltRoutes(): Promise<Route[]> {
-  try {
-    const remote = await request<Route[]>('/signal/route/built');
-    // 后端空列表时并入本地 fallback 已建（mock 办理或乐观状态）
-    const localBuilt = (fallbackLineProfile?.routes || []).filter((r) => r.built && !r.cancelled);
-    if ((!remote || remote.length === 0) && localBuilt.length > 0) {
-      return localBuilt.map((r) => deepCopy(r));
-    }
-    // 合并：远程 ∪ 本地 built（远程取消后本地也会被 patch 掉）
-    const byId = new Map<number, Route>();
-    for (const r of remote || []) byId.set(Number(r.id), r);
-    for (const r of localBuilt) {
-      if (!byId.has(Number(r.id))) byId.set(Number(r.id), deepCopy(r));
-    }
-    return Array.from(byId.values());
-  } catch {
-    if (!fallbackLineProfile) return [];
-    return (fallbackLineProfile.routes || []).filter((r) => r.built && !r.cancelled);
-  }
+  return await request<Route[]>('/signal/route/built');
 }
 
 export async function getAllSwitches(): Promise<Switch[]> {

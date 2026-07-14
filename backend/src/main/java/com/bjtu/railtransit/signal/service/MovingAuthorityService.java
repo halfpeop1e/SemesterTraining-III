@@ -153,7 +153,11 @@ public class MovingAuthorityService {
             if (Double.isFinite(eRt)) {
                 AuthorityBasis b = (route.getOverlapIds() != null && !route.getOverlapIds().isEmpty())
                         ? AuthorityBasis.OVERLAP_END : AuthorityBasis.ROUTE_END;
-                cands.add(new Cand(eRt, b, SignalEvent.ROUTE_BLOCKED, null, route.getId()));
+                // A bound, established route ends at a normal authority
+                // boundary. ROUTE_BLOCKED is reserved for the cycle's explicit
+                // no-route fallback; using it here would reject every valid
+                // driver-desk departure before it could reach the route end.
+                cands.add(new Cand(eRt, b, SignalEvent.NONE, null, route.getId()));
             }
         }
 

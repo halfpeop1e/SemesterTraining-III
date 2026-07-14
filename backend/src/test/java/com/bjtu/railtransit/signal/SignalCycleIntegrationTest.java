@@ -3,17 +3,23 @@ package com.bjtu.railtransit.signal;
 import com.bjtu.railtransit.domain.model.TrainState;
 import com.bjtu.railtransit.signal.domain.AuthorityBasis;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
-import com.bjtu.railtransit.signal.service.*;
+import com.bjtu.railtransit.signal.service.LineProfileLoader;
+import com.bjtu.railtransit.signal.service.MaConfig;
+import com.bjtu.railtransit.signal.service.MovementAuthorityRegistry;
+import com.bjtu.railtransit.signal.service.MovingAuthorityService;
+import com.bjtu.railtransit.signal.service.SignalCycleService;
+import com.bjtu.railtransit.signal.service.SignalEventLog;
+import com.bjtu.railtransit.signal.service.SignalInterlockingService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class SignalCycleIntegrationTest {
     @Test
-    void fullTeacherLineMaIsAppliedBackToRuntimeTrain() throws Exception {
+    void unboundTrainIsHeldAtItsCurrentPosition() throws Exception {
         MaConfig config = MaConfig.exampleConfig();
         MovementAuthorityRegistry registry = new MovementAuthorityRegistry();
         LineProfileLoader loader = new LineProfileLoader();
@@ -26,15 +32,12 @@ class SignalCycleIntegrationTest {
         Map<String, MovingAuthority> values = cycle.runCycle(List.of(following, leading), 10);
 
         assertEquals(2, values.size());
-        // G2 后计轴占用生效：前车所在区段 occupied → 计轴约束可能比前车约束更严格
-        // basis 可能是 PRECEDING_TRAIN 或 AXLE_OCCUPIED，取决于区段起点与前车尾部的相对位置
-        AuthorityBasis basis = values.get("T2").getBasis();
-        assertTrue(basis == AuthorityBasis.PRECEDING_TRAIN
-                        || basis == AuthorityBasis.AXLE_OCCUPIED
-                        || basis == AuthorityBasis.SIGNAL,
-                "basis 应为 PRECEDING_TRAIN、AXLE_OCCUPIED 或 SIGNAL，实际=" + basis);
-        assertEquals(values.get("T2").getEndOfAuthorityM(), following.getMovementAuthority(), 0.001);
-        assertTrue(following.getMovementAuthority() < leading.getPositionMeters());
+        MovingAuthority ma = values.get("T2");
+        assertEquals(AuthorityBasis.ROUTE_END, ma.getBasis());
+        assertEquals(1_000, ma.getEndOfAuthorityM(), 0.001);
+        assertEquals(0, ma.getMaxSpeedKmh(), 0.001);
+        assertEquals(ma.getEndOfAuthorityM(), following.getMovementAuthority(), 0.001);
+        assertEquals(0, following.getMaxSpeedLimit(), 0.001);
         assertEquals("SIMULATED_INTERLOCKING", registry.getSource());
         assertEquals(1, registry.getGeneration());
     }
@@ -51,8 +54,9 @@ class SignalCycleIntegrationTest {
 
         MovingAuthority ma = cycle.runCycle(List.of(train), 1).get("T1");
 
-        assertEquals(AuthorityBasis.SIGNAL, ma.getBasis());
-        assertTrue(ma.getEndOfAuthorityM() < cycle.getLineProfile().getTotalLengthM());
+        assertEquals(AuthorityBasis.ROUTE_END, ma.getBasis());
+        assertEquals(train.getPositionMeters(), ma.getEndOfAuthorityM(), 0.001);
+        assertEquals(0, ma.getMaxSpeedKmh(), 0.001);
         assertEquals("LAB_INTERLOCKING", registry.getSource());
     }
 

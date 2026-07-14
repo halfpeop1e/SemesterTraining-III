@@ -5707,132 +5707,132 @@
   "platforms": [
     {
       "id": 1,
-      "km": 313.0,
+      "km": 372.0,
       "direction": "up"
     },
     {
       "id": 2,
-      "km": 313.0,
+      "km": 372.0,
       "direction": "down"
     },
     {
       "id": 3,
-      "km": 1660.52,
+      "km": 1724.14,
       "direction": "down"
     },
     {
       "id": 4,
-      "km": 1660.52,
+      "km": 1719.52,
       "direction": "up"
     },
     {
       "id": 5,
-      "km": 2448.61,
+      "km": 2512.677,
       "direction": "down"
     },
     {
       "id": 6,
-      "km": 2448.61,
+      "km": 2507.61,
       "direction": "up"
     },
     {
       "id": 7,
-      "km": 3429.32,
+      "km": 3491.832,
       "direction": "down"
     },
     {
       "id": 8,
-      "km": 3429.32,
+      "km": 3488.32,
       "direction": "up"
     },
     {
       "id": 9,
-      "km": 5014.46,
+      "km": 5079.5146,
       "direction": "down"
     },
     {
       "id": 10,
-      "km": 5014.46,
+      "km": 5074.834,
       "direction": "up"
     },
     {
       "id": 11,
-      "km": 6339.9,
+      "km": 6405.27,
       "direction": "down"
     },
     {
       "id": 12,
-      "km": 6339.9,
+      "km": 6400.274,
       "direction": "up"
     },
     {
       "id": 13,
-      "km": 8118.83,
+      "km": 8179.204,
       "direction": "up"
     },
     {
       "id": 14,
-      "km": 8118.83,
+      "km": 8199.103,
       "direction": "down"
     },
     {
       "id": 15,
-      "km": 9429.16,
+      "km": 9508.30248,
       "direction": "down"
     },
     {
       "id": 16,
-      "km": 9429.16,
+      "km": 9488.344,
       "direction": "up"
     },
     {
       "id": 17,
-      "km": 10598.74,
+      "km": 10656.17848,
       "direction": "down"
     },
     {
       "id": 18,
-      "km": 10598.74,
+      "km": 10659.11378,
       "direction": "up"
     },
     {
       "id": 19,
-      "km": 11996.97,
+      "km": 12057.87933,
       "direction": "down"
     },
     {
       "id": 20,
-      "km": 11996.97,
+      "km": 12058.07,
       "direction": "up"
     },
     {
       "id": 21,
-      "km": 13906.77,
+      "km": 13967.68649,
       "direction": "down"
     },
     {
       "id": 22,
-      "km": 13906.77,
+      "km": 13970.28014,
       "direction": "up"
     },
     {
       "id": 23,
-      "km": 14954.01,
+      "km": 15012.51349,
       "direction": "down"
     },
     {
       "id": 24,
-      "km": 14954.01,
+      "km": 15013.91,
       "direction": "up"
     },
     {
       "id": 25,
-      "km": 16048.92,
+      "km": 16110.01966,
       "direction": "up"
     },
     {
       "id": 26,
-      "km": 16048.92,
+      "km": 16105.57149,
       "direction": "down"
     }
   ]

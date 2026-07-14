@@ -90,11 +90,12 @@ public class TrainState {
         if (status == null) return false;
         switch (status) {
             case "DEPOT_WAITING":
-            case "READY_TO_DEPART":
             case "FINISHED":
                 return false;
             default:
-                return true; // DWELLING/TERMINAL_DWELL/TURNING_BACK/EMERGENCY_STOPPED/HOLDING等全部占用
+                // A train added at an LK/platform occupies track even while waiting
+                // for its first route and departure authorization.
+                return true;
         }
     }
 

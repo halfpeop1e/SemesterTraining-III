@@ -181,7 +181,7 @@ public class TrackConstraintService {
         double limit = INF;
         boolean found = false;
         for (AxleCounterSection a : line.getAxleSections()) {
-            if (!a.isOccupied())
+            if (!a.isOccupiedByOtherThan(t.getTrainId()))
                 continue;
             double m = axleSectionStartM(line, a);
             boolean ahead = down ? (m < t.getPositionM()) : (m > t.getPositionM());

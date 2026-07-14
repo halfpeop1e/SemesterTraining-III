@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>阶段4B 新增测试覆盖：
  * <ul>
- *   <li>默认请求（1→2）仍能跑通，targetStopPosition ≈ 1348m。</li>
+ *   <li>默认请求（1→2）仍能跑通，targetStopPosition = 1347.520m。</li>
  *   <li>LineProfileJsonLoader 验证：listStations 站点数量、buildLineProfile 正确计算。</li>
  *   <li>非法站点 id 报错清晰。</li>
  *   <li>toStationId &le; fromStationId 报错清晰。</li>
@@ -318,24 +318,46 @@ class VehicleSimulationServiceTest {
         assertEquals(13, stations.size(), "configs/line-profile.json 应包含 13 个站点");
         // 首站应为郭公庄
         assertEquals("郭公庄", stations.get(0).name, "第一个站应为郭公庄");
+        assertEquals(0.372, stations.get(0).centerKm, 1.0e-9);
+        assertEquals(0.431, stations.get(0).stopRightKm, 1.0e-9);
+        assertEquals(1.77852, stations.get(1).stopRightKm, 1.0e-9);
+        assertEquals(2.56661, stations.get(2).stopRightKm, 1.0e-9);
         // 末站应为国家图书馆
         assertEquals("国家图书馆", stations.get(12).name, "最后一个站应为国家图书馆");
     }
 
+    @Test
+    void lineProfileUsesLatestTrack0CentersAndPositiveHeadStops() {
+        double[] centers = {372.0, 1_719.520, 2_507.610, 3_488.320, 5_074.834,
+                6_400.274, 8_179.204, 9_488.344, 10_659.11378, 12_058.070,
+                13_970.28014, 15_013.910, 16_110.01966};
+        double[] positiveHeadStops = {431.0, 1_778.520, 2_566.610, 3_547.320, 5_133.834,
+                6_459.274, 8_238.204, 9_547.344, 10_718.11378, 12_117.070,
+                14_029.28014, 15_072.910, 16_169.01966};
+        List<LineProfileJsonLoader.StationEntry> stations = loader.listStations();
+
+        for (int index = 0; index < stations.size(); index++) {
+            assertEquals(centers[index] / 1000.0, stations.get(index).centerKm, 1.0e-9);
+            assertEquals(positiveHeadStops[index] / 1000.0,
+                    stations.get(index).stopRightKm, 1.0e-9);
+            assertEquals(positiveHeadStops[index] / 1000.0, stations.get(index).km, 1.0e-9);
+        }
+    }
+
     /**
      * 阶段4B：默认区间 1→2（郭公庄→丰台科技园）的 targetStopPosition 应约等于
-     * (1.661 - 0.313) * 1000 = 1348m。
+     * (1.778520 - 0.431000) * 1000 = 1347.520m。
      */
     @Test
-    void defaultStation1To2TargetStopPositionApprox1348m() {
+    void defaultStation1To2TargetStopPositionUsesPositiveHeadStops() {
         LineProfile lineProfile = loader.buildLineProfile(1, 2);
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(lineProfile);
         SimulationResult result = service.run(scenario);
 
         double target = result.getStopResult().getTargetStopPosition();
-        // (1.661 - 0.313) * 1000 = 1348.0m
-        assertEquals(1348.0, target, 1.0,
-                "1→2 区间 targetStopPosition 应约等于 1348m，实际=" + target);
+        // (1.778520 - 0.431000) * 1000 = 1347.520m
+        assertEquals(1347.52, target, 0.001,
+                "1→2 区间 targetStopPosition 必须来自正向车头停车点，实际=" + target);
     }
 
     /**
@@ -542,7 +564,7 @@ class VehicleSimulationServiceTest {
         SimulationResult full = service.run(scenario);
         TrainState midState = full.getStates().get(full.getStates().size() / 3);
         // 给 midState 设置 absolutePosition 以匹配新约定
-        midState.setAbsolutePosition(313.0 + midState.getPosition());
+        midState.setAbsolutePosition(431.0 + midState.getPosition());
 
         // ATO→MANUAL 切换：coast 指令，不触发制动
         com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
@@ -552,7 +574,7 @@ class VehicleSimulationServiceTest {
         req.setCurrentState(midState);
         req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
         req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("coast", 0));
-        req.setTotalTargetPosition(line.getTargetStopPosition()); // 1348m
+        req.setTotalTargetPosition(line.getTargetStopPosition()); // 1347.520m
 
         SimulationResult result = service.runContinuation(req, scenario);
         // 续算结果应末态为 STOPPED，模式为 ATO（coast 不切换模式）
@@ -567,7 +589,7 @@ class VehicleSimulationServiceTest {
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
         SimulationResult full = service.run(scenario);
         TrainState midState = full.getStates().get(full.getStates().size() / 3);
-        midState.setAbsolutePosition(313.0 + midState.getPosition());
+        midState.setAbsolutePosition(431.0 + midState.getPosition());
 
         com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
                 new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
@@ -594,7 +616,7 @@ class VehicleSimulationServiceTest {
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
         SimulationResult full = service.run(scenario);
         TrainState midState = full.getStates().get(full.getStates().size() / 2);
-        midState.setAbsolutePosition(313.0 + midState.getPosition());
+        midState.setAbsolutePosition(431.0 + midState.getPosition());
 
         // 假设多站仿真的总目标为 5000m（远超 1→2 区间），EB 应在远未到达时停车
         com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
@@ -629,7 +651,7 @@ class VehicleSimulationServiceTest {
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
         SimulationResult full = service.run(scenario);
         TrainState midState = full.getStates().get(full.getStates().size() / 3);
-        midState.setAbsolutePosition(313.0 + midState.getPosition());
+        midState.setAbsolutePosition(431.0 + midState.getPosition());
 
         com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
                 new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
@@ -655,7 +677,7 @@ class VehicleSimulationServiceTest {
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
         SimulationResult full = service.run(scenario);
         TrainState midState = full.getStates().get(full.getStates().size() / 3);
-        midState.setAbsolutePosition(313.0 + midState.getPosition());
+        midState.setAbsolutePosition(431.0 + midState.getPosition());
 
         com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
                 new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
@@ -687,7 +709,7 @@ class VehicleSimulationServiceTest {
         // 构造一个已达 18 m/s 的 midState（远超 1 m/s 限速）
         TrainState overspeedState = new TrainState(40.0, 300.0, 18.0, 0.0,
                 SimulationPhase.COAST, "T1");
-        overspeedState.setAbsolutePosition(313.0 + 300.0);
+        overspeedState.setAbsolutePosition(431.0 + 300.0);
 
         com.bjtu.railtransit.vehicle.dto.SimulationControlRequest req =
                 new com.bjtu.railtransit.vehicle.dto.SimulationControlRequest();
@@ -738,7 +760,7 @@ class VehicleSimulationServiceTest {
     private TrainState makeMovingState(double time, double position, double velocity, String phase) {
         TrainState s = new TrainState(time, position, velocity, 0.0,
                 SimulationPhase.valueOf(phase.toUpperCase()), "T1");
-        s.setAbsolutePosition(313.0 + position);
+        s.setAbsolutePosition(431.0 + position);
         return s;
     }
 
@@ -875,7 +897,7 @@ class VehicleSimulationServiceTest {
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
         SimulationResult full = service.run(scenario);
         TrainState midState = full.getStates().get(full.getStates().size() / 3);
-        midState.setAbsolutePosition(313.0 + midState.getPosition());
+        midState.setAbsolutePosition(431.0 + midState.getPosition());
 
         SimulationControlRequest req = new SimulationControlRequest();
         req.setFromStationId(1);
@@ -977,7 +999,7 @@ class VehicleSimulationServiceTest {
         // 构造已停在终点处的 state（localTarget = totalTarget - position = 0 <= 0）
         TrainState stoppedAtTarget = new TrainState(100.0, totalTarget, 0.0, 0.0,
                 SimulationPhase.STOPPED, "T1");
-        stoppedAtTarget.setAbsolutePosition(313.0 + totalTarget);
+        stoppedAtTarget.setAbsolutePosition(431.0 + totalTarget);
 
         SimulationControlRequest req = buildManualControlRequest(
                 stoppedAtTarget, "traction", 0.0, 5.0 / 7.0 * 100.0, totalTarget);
@@ -1002,7 +1024,7 @@ class VehicleSimulationServiceTest {
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
         SimulationResult full = service.run(scenario);
         TrainState midState = full.getStates().get(full.getStates().size() / 3);
-        midState.setAbsolutePosition(313.0 + midState.getPosition());
+        midState.setAbsolutePosition(431.0 + midState.getPosition());
 
         SimulationControlRequest req = new SimulationControlRequest();
         req.setFromStationId(1);
@@ -1057,7 +1079,7 @@ class VehicleSimulationServiceTest {
 
         TrainState stoppedState = new TrainState(50.0, 400.0, 0.0, 0.0,
                 SimulationPhase.STOPPED, "T1");
-        stoppedState.setAbsolutePosition(313.0 + 400.0);
+        stoppedState.setAbsolutePosition(431.0 + 400.0);
 
         SimulationControlRequest req = new SimulationControlRequest();
         req.setFromStationId(1);
@@ -1095,7 +1117,7 @@ class VehicleSimulationServiceTest {
 
         TrainState movingState = new TrainState(40.0, 300.0, 2.0, -1.2,
                 SimulationPhase.BRAKING, "T1");
-        movingState.setAbsolutePosition(313.0 + 300.0);
+        movingState.setAbsolutePosition(431.0 + 300.0);
 
         SimulationControlRequest req = new SimulationControlRequest();
         req.setFromStationId(1);
@@ -1137,7 +1159,7 @@ class VehicleSimulationServiceTest {
         LineProfile line = loader.buildLineProfile(1, 2);
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(line);
         TrainState moving = makeMovingState(30.0, 300.0, 12.0, "coast");
-        moving.setAbsolutePosition(313.0 + moving.getPosition());
+        moving.setAbsolutePosition(431.0 + moving.getPosition());
 
         SimulationControlRequest request = buildManualControlRequest(
                 moving, "brake", 1.0, 100.0, line.getTargetStopPosition());
@@ -1460,11 +1482,11 @@ class VehicleSimulationServiceTest {
     }
 
     private TrainState makeTerminalDwellState() {
-        TrainState state = new TrainState(120.0, 1095.0, 0.0, 0.0,
+        TrainState state = new TrainState(120.0, 1096.11, 0.0, 0.0,
                 SimulationPhase.DWELL, "T1");
-        state.setAbsolutePosition(16049.0);
+        state.setAbsolutePosition(16169.02);
         state.setCars(java.util.Collections.singletonList(new TrainState.CarSnapshot(
-                0, "Tc", true, 42000.0, 0.5, 16049.0, 0.0, 0.0)));
+                0, "Tc", true, 42000.0, 0.5, 16169.02, 0.0, 0.0)));
         return state;
     }
 
@@ -1492,8 +1514,8 @@ class VehicleSimulationServiceTest {
         assertEquals("READY_REVERSE", response.get("turnbackState"));
         assertEquals("r06-service-session", response.get("sessionId"));
         assertEquals(1L, response.get("acceptedFrameId"));
-        assertEquals(1095.0, response.get("position"));
-        assertEquals(16049.0, response.get("absolutePosition"));
+        assertEquals(1096.11, response.get("position"));
+        assertEquals(16169.02, response.get("absolutePosition"));
         assertEquals(120.0, response.get("time"));
         assertEquals("LOCAL_SIMULATION_HINT", response.get("doorsSafetySource"));
         assertEquals("LOCAL_SIMULATION_HINT", response.get("authoritySource"));
@@ -1590,7 +1612,7 @@ class VehicleSimulationServiceTest {
         assertTrue(negativeFrame.getMessage().contains("FRAME_ID_INVALID"));
 
         TrainState wrongPosition = makeTerminalDwellState();
-        wrongPosition.setPosition(1094.0);
+        wrongPosition.setPosition(1095.0);
         IllegalArgumentException wrongTerminal = assertThrows(IllegalArgumentException.class,
                 () -> service.prepareLocalTurnback("r06-boundary-session", 0L, true, true,
                         makeTurnbackRequest(wrongPosition, "turnback_request")));

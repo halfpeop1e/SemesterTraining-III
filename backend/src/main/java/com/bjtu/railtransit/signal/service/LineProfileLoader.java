@@ -75,16 +75,21 @@ public class LineProfileLoader {
         for (StaticSpeedRestriction s : lp.getStaticSpeedRestrictions()) {
             s.setSpeedLimitKmh(Units.cmpsToKmh(s.getSpeedLimitCmps()));
         }
-        // 3) 车站：中心里程 = 其站台中心里程最小值
-        Map<Integer, Double> pfCenter = new HashMap<>();
-        for (Platform p : lp.getPlatforms()) pfCenter.put(p.getId(), p.getCenterM());
+        // 3) 车站：线路信号页以当前实验室 1 -> 13 主线（0x55 / Track 0）
+        // 的站台中心为准；缺少该方向时才回退到任一站台中心。
+        Map<Integer, Platform> platformsById = new HashMap<>();
+        for (Platform p : lp.getPlatforms()) platformsById.put(p.getId(), p);
         for (Station st : lp.getStations()) {
             double min = Double.MAX_VALUE;
+            Double track0Center = null;
             for (Integer pid : st.getPlatformIds()) {
-                Double c = pfCenter.get(pid);
-                if (c != null) min = Math.min(min, c);
+                Platform platform = platformsById.get(pid);
+                if (platform == null) continue;
+                min = Math.min(min, platform.getCenterM());
+                if (platform.getDir() == 0x55) track0Center = platform.getCenterM();
             }
-            if (min != Double.MAX_VALUE) st.setPositionM(min);
+            if (track0Center != null) st.setPositionM(track0Center);
+            else if (min != Double.MAX_VALUE) st.setPositionM(min);
         }
         // 4) 里程索引（(Seg,偏移cm) ↔ m）
         lp.buildMileageIndex();

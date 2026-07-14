@@ -7,6 +7,7 @@ import com.bjtu.railtransit.energy.TractionPowerSupplyService;
 import com.bjtu.railtransit.energy.TrainNetworkService;
 import com.bjtu.railtransit.signal.service.MovementAuthorityRegistry;
 import com.bjtu.railtransit.signal.service.SignalCycleService;
+import com.bjtu.railtransit.signal.service.SignalPlcDepartureService;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -51,10 +52,22 @@ public class SimulationService {
     private final SimulationWebSocketHandler webSocketHandler;
     private final TractionPowerSupplyService powerSupply;
     private final TrainNetworkService networkService;
+    private final SignalPlcDepartureService signalPlcDepartureService;
 
     private boolean simulationRunning = false;
     private double simulationTimeSeconds = 0;
     private final Map<String, TrainState> trains = new LinkedHashMap<>();
+    /**
+     * Train IDs deliberately taken offline from the signal page.  Without this
+     * guard a still-open onboard browser could recreate a deleted train through
+     * its next status report.
+     */
+    private final Set<String> offlinedTrainIds = new LinkedHashSet<>();
+    /**
+     * Physical 704 driver-desk sessions own train motion. ATS and CBI still
+     * supervise them, but must not synthesize a DEPART command or trajectory.
+     */
+    private final Set<String> driverDeskControlledTrainIds = new LinkedHashSet<>();
     /** Last StatusFusion revision consumed for each onboard-driven train. */
     private final Map<String, Long> fusedOnboardReportRevisions = new LinkedHashMap<>();
     /**
@@ -122,7 +135,8 @@ public class SimulationService {
             BlendingBrakeService blendingBrakeService,
             SimulationWebSocketHandler webSocketHandler,
             TractionPowerSupplyService powerSupply,
-            TrainNetworkService networkService) {
+            TrainNetworkService networkService,
+            SignalPlcDepartureService signalPlcDepartureService) {
         this.lineDataService = lineDataService;
         this.dispatchEngine = dispatchEngine;
         this.energyOptimizer = energyOptimizer;
@@ -138,6 +152,7 @@ public class SimulationService {
         this.webSocketHandler = webSocketHandler;
         this.powerSupply = powerSupply;
         this.networkService = networkService;
+        this.signalPlcDepartureService = signalPlcDepartureService;
     }
 
     // ================================================================
@@ -154,6 +169,8 @@ public class SimulationService {
         simulationTimeSeconds = 0;
         simulationRunning = true;
         trains.clear();
+        offlinedTrainIds.clear();
+        driverDeskControlledTrainIds.clear();
         activeCommands.clear();
         commandLog.clear();
         delayEventLog.clear();
@@ -205,11 +222,12 @@ public class SimulationService {
 
             // Step 1: 总控读取全线状态，并融合独立车载系统的最新可信报告
             fuseOnboardReports();
-            // Step 2: ATS / Dispatch 生成运行计划或调度建议
-            atsCheckDepartures(stations);
-
-            // Step 3: Signal / ATP 生成移动授权、限速和区段占用约束
+            // Step 2: project occupation, advance interlocking and compute MA/ATP.
             signalCycleService.runCycle(trains.values(), simulationTimeSeconds);
+            publishAtpInterventions();
+
+            // Step 3: ATS may authorize departure only after CBI and ATP permit it.
+            atsCheckDepartures(stations);
 
             // Step 3.5: ATP 安全间隔强制 —— 软性限速（间距不足时主动降速，避免只等紧急制动）
             atpSafetyEnforce(stations);
@@ -218,6 +236,11 @@ public class SimulationService {
             for (TrainState train : trains.values()) {
                 atoTrainStep(train, stations, stationCount);
             }
+
+            // Re-project after vehicle movement so route occupation/release and the
+            // published snapshot describe the same completed frame.
+            signalCycleService.runCycle(trains.values(), simulationTimeSeconds);
+            publishAtpInterventions();
 
             // Step 4.5: ATC (Automatic Traction Control) —— 牵引/制动能力约束 + 电空状态同步
             atcConstraintCheck();
@@ -272,10 +295,43 @@ public class SimulationService {
         return trains.get(trainId);
     }
 
+    /** Snapshot of active train IDs for coordinated operational offlining. */
+    public synchronized List<String> getTrainIds() {
+        return new ArrayList<>(trains.keySet());
+    }
+
+    /** Explicit user action starts a new lifecycle for a previously offlined train ID. */
+    public synchronized void restoreTrain(String trainId) {
+        if (trainId != null && !trainId.isBlank()) {
+            offlinedTrainIds.remove(trainId);
+        }
+    }
+
+    /** Transfers motion execution to the physical-driver-desk bridge for one train. */
+    public synchronized void claimDriverDeskControl(String trainId) {
+        if (trainId != null && !trainId.isBlank()) {
+            driverDeskControlledTrainIds.add(trainId);
+            activeCommands.remove(trainId);
+            integrationCommandBus.supersedeOpenCommands(trainId, "DEPART");
+        }
+    }
+
+    /** Releases driver-desk motion ownership after the bridge is reset. */
+    public synchronized void releaseDriverDeskControl(String trainId) {
+        if (trainId != null && !trainId.isBlank()) {
+            driverDeskControlledTrainIds.remove(trainId);
+        }
+    }
+
+    public synchronized boolean isDriverDeskControlled(String trainId) {
+        return trainId != null && driverDeskControlledTrainIds.contains(trainId);
+    }
+
     public synchronized TrainState addTrain(String trainId, int headLinkId, String direction,
                                             int stationId, String routePattern) {
         if (trainId == null || trainId.isBlank()) throw new IllegalArgumentException("trainId 不能为空");
         if (trains.containsKey(trainId)) throw new IllegalStateException("列车已存在: " + trainId);
+        offlinedTrainIds.remove(trainId);
         if (lineProfile == null) lineProfile = lineDataService.getLineProfile();
         List<LineProfile.Station> stations = lineProfile.getStations();
         int stationIndex = Math.max(0, Math.min(stations.size() - 1, stationId - 1));
@@ -325,13 +381,19 @@ public class SimulationService {
     public synchronized TrainState removeTrain(String trainId) {
         TrainState removed = trains.remove(trainId);
         if (removed == null) throw new NoSuchElementException("列车不存在: " + trainId);
+        offlinedTrainIds.add(trainId);
+        driverDeskControlledTrainIds.remove(trainId);
         consistMap.remove(trainId);
         tractionStates.remove(trainId);
         brakeStates.remove(trainId);
         activeCommands.remove(trainId);
         fusedOnboardReportRevisions.remove(trainId);
         movementAuthorityRegistry.remove(trainId);
+        signalCycleService.removeTrain(trainId);
         statusFusion.remove(trainId);
+        if (dispatchEngine.getTimetable() != null) {
+            dispatchEngine.getTimetable().remove(trainId);
+        }
         broadcastCurrentSnapshot();
         return removed;
     }
@@ -358,12 +420,33 @@ public class SimulationService {
      * so the signal topology and onboard page display the same train state.
      */
     public synchronized void acceptOnboardReport(StatusReport report) {
+        if (report == null || report.getTrainId() == null || report.getTrainId().isBlank()) {
+            throw new IllegalArgumentException("trainId is required");
+        }
+        if (offlinedTrainIds.contains(report.getTrainId())) {
+            return;
+        }
         statusFusion.accept(report);
         if (lineProfile == null) {
             lineProfile = lineDataService.getLineProfile();
         }
         fuseOnboardReports();
         signalCycleService.runCycle(trains.values(), simulationTimeSeconds);
+        broadcastCurrentSnapshot();
+    }
+
+    /**
+     * Re-evaluates occupation, MA and lab desk authorization without advancing
+     * the timetable or creating motion. Route operations use this so a valid
+     * build-and-bind becomes observable immediately.
+     */
+    public synchronized void refreshSignalSafetyState() {
+        if (lineProfile == null) {
+            lineProfile = lineDataService.getLineProfile();
+        }
+        fuseOnboardReports();
+        signalCycleService.runCycle(trains.values(), simulationTimeSeconds);
+        publishAtpInterventions();
         broadcastCurrentSnapshot();
     }
 
@@ -387,6 +470,9 @@ public class SimulationService {
         // ── 先处理 statusFusion 中的新上报，动态创建未注册的列车 ──
         for (StatusReport report : statusFusion.reports()) {
             String tid = report.getTrainId();
+            if (offlinedTrainIds.contains(tid)) {
+                continue;
+            }
             if (trains.containsKey(tid))
                 continue; // 已有列车，走下方更新逻辑
 
@@ -473,8 +559,14 @@ public class SimulationService {
             // control-centre clock, so do not use it as a cross-system freshness gate.
             // The server-assigned revision above is the ordering authority.
 
-            // 车载上报的位置/速度覆盖后端仿真值（仅HMI驱动列车）
-            if ("ONBOARD_REPORTED".equals(train.getStateSource())) {
+            // An explicitly authoritative report transfers runtime ownership to
+            // the onboard/driver-desk bridge. This lets a lab train created by
+            // the control centre keep the same authoritative position for ATS,
+            // CBI, ATP and every HIL display.
+            boolean reportOwnsState = "ONBOARD_REPORTED".equals(train.getStateSource())
+                    || Boolean.TRUE.equals(report.getAuthoritative());
+            if (reportOwnsState) {
+                train.setStateSource("ONBOARD_REPORTED");
                 train.setPositionMeters(report.getPositionMeters());
                 train.setSpeed(Math.max(0, report.getSpeedKmh()));
                 train.setAcceleration(report.getAccelerationMps2() * 3.6);
@@ -578,6 +670,15 @@ public class SimulationService {
         for (TrainState train : trains.values()) {
             String tid = train.getTrainId();
             String status = train.getStatus();
+            if (driverDeskControlledTrainIds.contains(tid)) {
+                // Route/MA are still evaluated in the signal cycle. Only a new
+                // physical ATO_START edge may make this train leave the platform.
+                activeCommands.remove(tid);
+                if ("READY_TO_DEPART".equals(status) || "DWELLING".equals(status)) {
+                    train.setActiveCommand("WAITING_DRIVER_DESK_START");
+                }
+                continue;
+            }
 
             // HOLD 指令覆盖
             SimulationSnapshot.TrainCommand holdCmd = activeCommands.get(tid);
@@ -589,33 +690,11 @@ public class SimulationService {
             // ── DEPOT_WAITING: 原有自动发车 ──
             if ("DEPOT_WAITING".equals(status)) {
                 if (simulationTimeSeconds >= train.getPlannedDepartureFromDepot()) {
-                    train.setStatus("DEPARTING");
-                    train.setDirection("UP");
-                    RoutePattern rp = getRoutePattern(train);
-                    train.setCurrentStationIndex(rp.getUpStartStationIndex());
-                    if (train.getNextStationIndex() < stations.size()) {
-                        train.setNextStationKm(stations.get(train.getNextStationIndex()).getKm());
-                    }
-                    int nextIdx = train.getNextStationIndex();
-                    if (nextIdx > 0 && nextIdx < stations.size()) {
-                        double distMeters = Math.abs((stations.get(nextIdx).getKm()
-                                - stations.get(rp.getUpStartStationIndex()).getKm()) * 1000.0);
-                        train.setSectionDistance(distMeters);
-                        train.setSectionProgress(0);
-                    }
-                    activeCommands.remove(tid);
-                    commandLog.add(buildDepartLog(tid));
-                    // 通过CommandBus下发DEPART指令，HMI通过 /api/onboard/{trainId}/snapshot 获取
-                    integrationCommandBus.issue(tid, "DEPART", 0, "调度授权发车",
-                            100, "ATS", simulationTimeSeconds);
-                    train.setDelaySeconds(Math.max(0, simulationTimeSeconds - train.getPlannedDepartureFromDepot()));
+                    train.setStatus("READY_TO_DEPART");
+                    train.setActiveCommand("WAITING_ROUTE");
                 }
                 continue;
             }
-
-            // ── ONBOARD_REPORTED 列车: 时刻表驱动的发车控制 ──
-            if (!"ONBOARD_REPORTED".equals(train.getStateSource()))
-                continue;
 
             DispatchEngine.TimetableEntry tEntry = dispatchEngine.getTimetableEntry(tid,
                     train.getCurrentStationIndex());
@@ -635,11 +714,18 @@ public class SimulationService {
                     commandLog.add(buildDepartLog(tid));
                     issueDepartIfNeeded(tid, "ATS 发车授权：满足计划时刻、追踪间隔与前车净距");
                     train.setActiveCommand("DEPART");
+                    if (!"ONBOARD_REPORTED".equals(train.getStateSource())) {
+                        departFromStation(train, stations, train.getCurrentStationIndex());
+                    }
                 } else if (timeToDepart || hasDepartCmd) {
-                    train.setActiveCommand("WAITING_DEPARTURE_HEADWAY");
+                    train.setActiveCommand(departureBlockingReason(train));
                 }
                 continue;
             }
+
+            // Onboard reports own their dwell timeline. Backend-owned trains are
+            // handled by atoTrainStep and must not have dwell time incremented twice.
+            if (!"ONBOARD_REPORTED".equals(train.getStateSource())) continue;
 
             // DWELLING / TERMINAL_DWELL: 停站管理
             if ("DWELLING".equals(status) || "TERMINAL_DWELL".equals(status)) {
@@ -662,7 +748,7 @@ public class SimulationService {
                         issueDepartIfNeeded(tid, "ATS 站台发车授权：满足停站、追踪间隔与前车净距");
                         train.setActiveCommand("DEPART");
                     } else {
-                        train.setActiveCommand("WAITING_DEPARTURE_HEADWAY");
+                        train.setActiveCommand(departureBlockingReason(train));
                     }
                 }
                 continue;
@@ -680,6 +766,13 @@ public class SimulationService {
      * independent safety backstop after the train enters the line.
      */
     private boolean canAuthorizeOnboardDeparture(TrainState candidate) {
+        if (!signalCycleService.isDeparturePermitted(candidate.getTrainId())) return false;
+        com.bjtu.railtransit.signal.domain.MovingAuthority ma = movementAuthorityRegistry.get(candidate.getTrainId());
+        if (ma == null || ma.getMaxSpeedKmh() <= 0) return false;
+        double remaining = (ma.getEndOfAuthorityM() - candidate.getPositionMeters())
+                * candidate.getDirectionSign();
+        if (remaining <= 5.0) return false;
+
         String direction = "DOWN".equals(candidate.getDirection()) ? "DOWN" : "UP";
         double last = lastDepartureAuthorizationByDirection.getOrDefault(direction, Double.NEGATIVE_INFINITY);
         if (simulationTimeSeconds - last < MIN_DEPARTURE_HEADWAY_SECONDS)
@@ -703,11 +796,22 @@ public class SimulationService {
         return true;
     }
 
+    private String departureBlockingReason(TrainState train) {
+        String signalReason = signalCycleService.departureBlockingReason(train.getTrainId());
+        if (!"NONE".equals(signalReason)) return "WAITING_" + signalReason;
+        com.bjtu.railtransit.signal.domain.MovingAuthority ma = movementAuthorityRegistry.get(train.getTrainId());
+        if (ma == null) return "WAITING_MA_UNAVAILABLE";
+        if (ma.getMaxSpeedKmh() <= 0) return "WAITING_ATP_SPEED_ZERO";
+        return "WAITING_DEPARTURE_HEADWAY";
+    }
+
     private void issueDepartIfNeeded(String trainId, String reason) {
         if (!integrationCommandBus.hasOpenCommand(trainId, "DEPART")) {
             integrationCommandBus.issue(trainId, "DEPART", 0, reason,
                     100, "ATS", simulationTimeSeconds);
         }
+        // A dispatch DEPART is intent. Only the signal cycle may arm a desk
+        // after independently verifying route state and movement authority.
     }
 
     private void removeDepartCommand(String trainId) {
@@ -724,6 +828,18 @@ public class SimulationService {
         cmd.setReason("调度授权发车");
         cmd.setIssuedTime(simulationTimeSeconds);
         return cmd;
+    }
+
+    private void publishAtpInterventions() {
+        for (TrainState train : trains.values()) {
+            if (!train.isEmergencyBraking()
+                    || !"ATP_EMERGENCY_BRAKE".equals(train.getActiveCommand())) continue;
+            if (!integrationCommandBus.hasOpenCommand(train.getTrainId(), "ATP_EMERGENCY_BRAKE")) {
+                integrationCommandBus.issue(train.getTrainId(), "ATP_EMERGENCY_BRAKE", 0,
+                        "ATP: 移动授权不足或安全状态丢失", 1000, "ATP", simulationTimeSeconds);
+            }
+            signalPlcDepartureService.onAtpEmergencyBrake(train.getTrainId());
+        }
     }
 
     // ================================================================
@@ -1004,7 +1120,7 @@ public class SimulationService {
             return;
 
         // ── DEPOT_WAITING: 等待 ATS 发车指令 ──
-        if ("DEPOT_WAITING".equals(status)) {
+        if ("DEPOT_WAITING".equals(status) || "READY_TO_DEPART".equals(status)) {
             return; // atsCheckDepartures 处理
         }
 
@@ -1104,8 +1220,11 @@ public class SimulationService {
                 return;
             }
 
-            // ── 非终端站发车 ──
-            departFromStation(train, stations, currentStationIdx);
+            // Dwell completion only makes the train ready. ATS must obtain a
+            // fresh route/MA before it may issue the next departure.
+            train.setStatus("READY_TO_DEPART");
+            train.setActiveCommand("WAITING_ROUTE");
+            signalPlcDepartureService.onDepartureRevoked(tid);
         } else if (held) {
             train.setDelaySeconds(train.getDelaySeconds() + 1);
         }
@@ -1166,10 +1285,7 @@ public class SimulationService {
         // 应用限速
         SimulationSnapshot.TrainCommand slowCmd = activeCommands.get(tid);
         if (slowCmd != null && "SLOW".equals(slowCmd.getCommandType())) {
-            train.setMaxSpeedLimit(slowCmd.getTargetValue());
-        } else {
-            train.setMaxSpeedLimit(CRUISE_SPEED);
-            activeCommands.remove(tid);
+            train.setMaxSpeedLimit(Math.min(train.getMaxSpeedLimit(), slowCmd.getTargetValue()));
         }
 
         // 发车日志
@@ -1220,19 +1336,21 @@ public class SimulationService {
             double nextKm = stations.get(nextIdx).getKm();
             train.setSectionDistance(Math.abs((nextKm - curKm) * 1000.0));
             train.setSectionProgress(0);
-            train.setMaxSpeedLimit(CRUISE_SPEED);
-            train.setStatus("DEPARTING");
+            train.setMaxSpeedLimit(0);
+            train.setStatus("READY_TO_DEPART");
+            train.setActiveCommand("WAITING_ROUTE");
 
             // 清除旧指令
             activeCommands.remove(tid);
 
             SimulationSnapshot.TrainCommand tbDoneCmd = new SimulationSnapshot.TrainCommand();
             tbDoneCmd.setTrainId(tid);
-            tbDoneCmd.setCommandType("DEPART");
-            tbDoneCmd.setReason(String.format("折返完成 → %s方向, 发车至 %s",
+            tbDoneCmd.setCommandType("TURNBACK_COMPLETED");
+            tbDoneCmd.setReason(String.format("折返完成 → %s方向, 等待进路至 %s",
                     train.isUpDirection() ? "上行(郭公庄→国图)" : "下行(国图→郭公庄)",
                     stations.get(nextIdx).getName()));
             commandLog.add(tbDoneCmd);
+            signalPlcDepartureService.onDepartureRevoked(tid);
         }
     }
 
@@ -2649,6 +2767,8 @@ public class SimulationService {
         simulationRunning = false;
         simulationTimeSeconds = 0;
         trains.clear();
+        offlinedTrainIds.clear();
+        driverDeskControlledTrainIds.clear();
         fusedOnboardReportRevisions.clear();
         lastDepartureAuthorizationByDirection.clear();
         activeCommands.clear();

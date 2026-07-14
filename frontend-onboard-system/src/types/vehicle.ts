@@ -139,6 +139,8 @@ export interface SimulationRunRequest {
   dwellTimeSeconds?: number;
   /** Enable only when this instance is deliberately bound to the laboratory PLC desk. */
   hardwareControlEnabled?: boolean;
+  /** Deprecated and ignored by the backend. Signal/MA authorization is always required. */
+  labAutoDepartureEnabled?: boolean;
 }
 
 /** 驾驶模式（本轮新增）。 */

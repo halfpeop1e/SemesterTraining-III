@@ -1,6 +1,7 @@
 package com.bjtu.railtransit.vehicle.protocol704;
 
 import com.bjtu.railtransit.dispatch.MultiParticleSimulationService;
+import com.bjtu.railtransit.dispatch.SimulationService;
 import com.bjtu.railtransit.vehicle.dto.SimulationResult;
 import com.bjtu.railtransit.vehicle.dto.TrainState;
 import com.bjtu.railtransit.vehicle.enums.DrivingMode;
@@ -12,8 +13,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 class Protocol704VehicleControlBridgeTest {
     private DemoScenarioProvider provider;
@@ -266,11 +276,251 @@ class Protocol704VehicleControlBridgeTest {
     }
 
     @Test
-    void atoModeRejectsOrdinaryPlcCommands() {
+    void atoModeRejectsTractionAndCoastButAllowsServiceBrakeTakeover() {
         register("ATO1", DrivingMode.ATO);
         assertEquals("MODE_NOT_MANUAL", bridge.execute("ATO1", command("traction", 50)).getRejectionReason());
         assertEquals("MODE_NOT_MANUAL", bridge.execute("ATO1", command("coast", 0)).getRejectionReason());
-        assertEquals("MODE_NOT_MANUAL", bridge.execute("ATO1", command("brake", 60)).getRejectionReason());
+        Protocol704CommandLifecycle brake = bridge.execute("ATO1", command("brake", 60));
+        assertEquals("EXECUTED", brake.getStatus());
+        assertEquals("MANUAL", brake.getResultMode());
+    }
+
+    @Test
+    void atoStartRequiresCabInterlocksThenRunsAutomatically() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("ATO_START", 1, 2, result, DrivingMode.ATO, false);
+        MappedControlCommand start = command("ATO_START", 0);
+        start.setMasterHandle(0);
+        bridge.updateCabInputs("ATO_START", java.util.Map.of("key_switch_on", true));
+
+        assertEquals("SIGNAL_DEPARTURE_NOT_AUTHORIZED",
+                bridge.execute("ATO_START", start).getRejectionReason());
+
+        bridge.syncDepartureAuth("ATO_START", true);
+        Protocol704CommandLifecycle lifecycle = bridge.execute("ATO_START", start);
+        assertEquals("EXECUTED", lifecycle.getStatus(), lifecycle.getExecutionError());
+        assertEquals("ATO", lifecycle.getResultMode());
+        assertEquals("RUNNING", lifecycle.getDepartureState());
+
+        double initialPosition = bridge.snapshot("ATO_START").state().getPosition();
+        bridge.advanceAtoSessions();
+        bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("ATO_START").state().getPosition() > initialPosition);
+    }
+
+    @Test
+    void physicalAtoStartMustBeANewButtonPressAfterSignalAuthorization() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("ATO_EDGE", 1, 2, result, DrivingMode.MANUAL, false);
+        MappedControlCommand start = command("ATO_START", 0);
+        start.setMasterHandle(0);
+
+        // A press made before authorization is rejected and consumed. Keeping
+        // the PLC bit high must not turn into an implicit later departure.
+        bridge.updateCabInputs("ATO_EDGE", java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0,
+                "ato_start_btn", false));
+        bridge.updateCabInputs("ATO_EDGE", java.util.Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0,
+                "ato_start_btn", false));
+        bridge.updateCabInputs("ATO_EDGE", java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 1, "master_handle", 0,
+                "ato_start_btn", true));
+        assertEquals("SIGNAL_DEPARTURE_NOT_AUTHORIZED", bridge.execute(
+                "ATO_EDGE", start, Protocol704VehicleControlBridge.SOURCE_PLC, "desk-8001", 8001)
+                .getRejectionReason());
+
+        bridge.syncDepartureAuth("ATO_EDGE", true);
+        bridge.updateCabInputs("ATO_EDGE", java.util.Map.of(
+                "key_switch_on", true, "ato_start_btn", true));
+        assertEquals("ATO_START_NOT_NEW_EDGE", bridge.execute(
+                "ATO_EDGE", start, Protocol704VehicleControlBridge.SOURCE_PLC, "desk-8001", 8001)
+                .getRejectionReason());
+
+        bridge.updateCabInputs("ATO_EDGE", java.util.Map.of(
+                "key_switch_on", true, "ato_start_btn", false));
+        bridge.updateCabInputs("ATO_EDGE", java.util.Map.of(
+                "key_switch_on", true, "ato_start_btn", true));
+        assertEquals("EXECUTED", bridge.execute(
+                "ATO_EDGE", start, Protocol704VehicleControlBridge.SOURCE_PLC, "desk-8001", 8001)
+                .getStatus());
+    }
+
+    @Test
+    void snapshotNormalizesAbsolutePositionWhenTheVehicleStateOnlyHasRelativeMileage() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(2, 3)));
+        result.getStates().get(0).setAbsolutePosition(null);
+        bridge.registerSimulation("MIDLINE", 2, 3, result, DrivingMode.MANUAL, false);
+
+        Protocol704VehicleControlBridge.ControlStateSnapshot snapshot = bridge.snapshot("MIDLINE");
+
+        assertEquals(0.0, snapshot.state().getPosition(), 0.001);
+        assertEquals(1778.52, snapshot.absolutePositionM(), 0.001);
+        assertEquals(snapshot.absolutePositionM(), snapshot.state().getAbsolutePosition(), 0.001);
+    }
+
+    @Test
+    void neutralHandleFramesAreAcceptedWhileAtoIsRunning() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("ATO_NEUTRAL", 1, 2, result, DrivingMode.ATO, true);
+        MappedControlCommand start = command("ATO_START", 0);
+        start.setMasterHandle(0);
+        bridge.updateCabInputs("ATO_NEUTRAL", java.util.Map.of("key_switch_on", true));
+        assertEquals("EXECUTED", bridge.execute("ATO_NEUTRAL", start).getStatus());
+
+        Protocol704CommandLifecycle coast = bridge.execute("ATO_NEUTRAL", command("coast", 0));
+        assertEquals("EXECUTED", coast.getStatus());
+        assertEquals("ATO", coast.getResultMode());
+        assertEquals("RUNNING", coast.getDepartureState());
+    }
+
+    @Test
+    void atoPlaybackDefersDispatchPublicationUntilNoVehicleLockIsHeld() {
+        SimulationService dispatch = mock(SimulationService.class);
+        doAnswer(invocation -> {
+            synchronized (dispatch) {
+                return null;
+            }
+        }).when(dispatch).acceptOnboardReport(org.mockito.ArgumentMatchers.any());
+        Protocol704VehicleControlBridge wired = new Protocol704VehicleControlBridge(
+                vehicleService, provider, loader, dispatch);
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        wired.registerSimulation("ATO_ASYNC", 1, 2, result, DrivingMode.ATO, true);
+        wired.updateCabInputs("ATO_ASYNC", java.util.Map.of("key_switch_on", true));
+
+        MappedControlCommand start = command("ATO_START", 0);
+        start.setMasterHandle(0);
+        assertEquals("EXECUTED", wired.execute("ATO_ASYNC", start).getStatus());
+        wired.flushDispatchReports();
+        clearInvocations(dispatch);
+
+        double before = wired.snapshot("ATO_ASYNC").state().getPosition();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            synchronized (dispatch) {
+                Future<?> advance = executor.submit(wired::advanceAtoSessions);
+                assertDoesNotThrow(() -> advance.get(1, TimeUnit.SECONDS),
+                        "ATO must not wait for the dispatch monitor while holding its vehicle context");
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertTrue(wired.snapshot("ATO_ASYNC").state().getPosition() > before);
+        verify(dispatch, never()).acceptOnboardReport(org.mockito.ArgumentMatchers.any());
+
+        wired.flushDispatchReports();
+        verify(dispatch).acceptOnboardReport(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void neutralFramesDoNotCreateDepartureAuthorizationWhileWaitingForAtoStart() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("LAB_STANDBY", 1, 2, result, DrivingMode.ATO, false, false);
+
+        MappedControlCommand neutral = command("coast", 0);
+        neutral.setMasterHandle(0);
+        Protocol704CommandLifecycle lifecycle = bridge.execute("LAB_STANDBY", neutral,
+                "PLC_704_LOCAL_V1", "desk-8001", 8001);
+
+        assertEquals("REJECTED", lifecycle.getStatus());
+        assertEquals("NOT_READY_TO_DEPART", lifecycle.getRejectionReason());
+        assertFalse(bridge.snapshot("LAB_STANDBY").state().getVelocity() > 0.0);
+    }
+
+    @Test
+    void stationDoorCycleIsRequiredBeforeTheNextAtoStart() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 3)));
+        bridge.registerSimulation("DOOR_CYCLE", 1, 3, result, DrivingMode.MANUAL, true);
+        TrainState stoppedAtStationTwo = new TrainState(200.0, 1348.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "DOOR_CYCLE");
+        bridge.syncCurrentState("DOOR_CYCLE", stoppedAtStationTwo, DrivingMode.MANUAL, 1, 3, true);
+        bridge.execute("DOOR_CYCLE", command("coast", 0));
+
+        MappedControlCommand start = command("ATO_START", 0);
+        start.setMasterHandle(0);
+        bridge.updateCabInputs("DOOR_CYCLE", java.util.Map.of("key_switch_on", true));
+        bridge.syncDepartureAuth("DOOR_CYCLE", true);
+        assertEquals("DOOR_CYCLE_INCOMPLETE",
+                bridge.execute("DOOR_CYCLE", start).getRejectionReason());
+
+        bridge.updateCabInputs("DOOR_CYCLE", java.util.Map.of("key_switch_on", true, "door_open_right", true));
+        bridge.updateCabInputs("DOOR_CYCLE", java.util.Map.of("key_switch_on", true, "door_open_right", false));
+        bridge.updateCabInputs("DOOR_CYCLE", java.util.Map.of("key_switch_on", true, "door_close_right", true));
+        bridge.updateCabInputs("DOOR_CYCLE", java.util.Map.of("key_switch_on", true, "door_close_right", false));
+        bridge.syncDepartureAuth("DOOR_CYCLE", true);
+
+        assertEquals("EXECUTED", bridge.execute("DOOR_CYCLE", start).getStatus());
+    }
+
+    @Test
+    void closingDoorsRequiresASecondSignalAuthorizationBeforeAtoRestart() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 3)));
+        bridge.registerSimulation("LAB_AUTO", 1, 3, result, DrivingMode.MANUAL, true, false);
+        TrainState stoppedAtStationTwo = new TrainState(200.0, 1348.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "LAB_AUTO");
+        bridge.syncCurrentState("LAB_AUTO", stoppedAtStationTwo, DrivingMode.MANUAL, 1, 3, true);
+        bridge.execute("LAB_AUTO", command("coast", 0));
+
+        MappedControlCommand start = command("ATO_START", 0);
+        start.setMasterHandle(0);
+        start.setDirection("FORWARD");
+        bridge.updateCabInputs("LAB_AUTO", java.util.Map.of("key_switch_on", true));
+        assertEquals("SIGNAL_DEPARTURE_NOT_AUTHORIZED", bridge.execute("LAB_AUTO", start).getRejectionReason());
+
+        bridge.updateCabInputs("LAB_AUTO", java.util.Map.of("key_switch_on", true, "door_open_right", true));
+        bridge.updateCabInputs("LAB_AUTO", java.util.Map.of("key_switch_on", true, "door_open_right", false));
+        bridge.updateCabInputs("LAB_AUTO", java.util.Map.of("key_switch_on", true, "door_close_right", true));
+        bridge.updateCabInputs("LAB_AUTO", java.util.Map.of("key_switch_on", true, "door_close_right", false));
+
+        assertFalse(bridge.snapshot("LAB_AUTO").departureAuthorized());
+        assertEquals("SIGNAL_DEPARTURE_NOT_AUTHORIZED", bridge.execute("LAB_AUTO", start).getRejectionReason());
+        bridge.syncDepartureAuth("LAB_AUTO", true);
+        assertEquals("EXECUTED", bridge.execute("LAB_AUTO", start).getStatus());
+    }
+
+    @Test
+    void laboratoryAutoModeCyclesDoorsAndRestartsOnlyAfterNewSignalAuthorization() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 3)));
+        bridge.registerSimulation("AUTO_NEXT", 1, 3, result, DrivingMode.MANUAL,
+                true, false, true);
+        preparePhysicalDesk("AUTO_NEXT");
+
+        TrainState stoppedAtStationTwo = new TrainState(200.0, 1348.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "AUTO_NEXT");
+        bridge.syncCurrentState("AUTO_NEXT", stoppedAtStationTwo, DrivingMode.MANUAL, 1, 3, true);
+        bridge.execute("AUTO_NEXT", command("coast", 0));
+
+        assertFalse(bridge.snapshot("AUTO_NEXT").doorsClosed());
+        assertEquals("RIGHT_OPEN", bridge.snapshot("AUTO_NEXT").doorState());
+        for (int i = 0; i <= 10; i++) bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("AUTO_NEXT").doorsClosed());
+        assertFalse(bridge.snapshot("AUTO_NEXT").departureAuthorized());
+        assertFalse(bridge.snapshot("AUTO_NEXT").atoRunning());
+
+        bridge.syncDepartureAuth("AUTO_NEXT", true);
+        bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("AUTO_NEXT").atoRunning());
+        assertEquals("ATO_RUNNING", bridge.atoWorkflowState("AUTO_NEXT"));
+    }
+
+    @Test
+    void laboratoryAutoModeNeverDepartsAgainFromTerminal() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("AUTO_END", 1, 2, result, DrivingMode.MANUAL,
+                true, false, true);
+        preparePhysicalDesk("AUTO_END");
+
+        TrainState stoppedAtTerminal = new TrainState(200.0, 1348.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "AUTO_END");
+        bridge.syncCurrentState("AUTO_END", stoppedAtTerminal, DrivingMode.MANUAL, 1, 2, true);
+        bridge.execute("AUTO_END", command("coast", 0));
+        for (int i = 0; i <= 10; i++) bridge.advanceAtoSessions();
+
+        bridge.syncDepartureAuth("AUTO_END", true);
+        bridge.advanceAtoSessions();
+        assertFalse(bridge.snapshot("AUTO_END").atoRunning());
+        assertEquals(2, bridge.snapshot("AUTO_END").currentStationId());
     }
 
     @Test
@@ -281,14 +531,69 @@ class Protocol704VehicleControlBridgeTest {
         assertEquals("MANUAL", bridge.execute("READY", command("SET_MANUAL", 0)).getResultMode());
         assertEquals("EXECUTED", bridge.execute("READY", command("RESUME_ATO", 0)).getStatus());
         Protocol704CommandLifecycle depart = bridge.execute("READY", command("DEPART_CONFIRM", 0));
-        assertEquals("EXECUTED", depart.getStatus());
-        assertEquals("ATO", depart.getResultMode());
+        assertEquals("SIGNAL_DEPARTURE_NOT_AUTHORIZED", depart.getRejectionReason());
+        bridge.syncDepartureAuth("READY", true);
+        Protocol704CommandLifecycle authorized = bridge.execute("READY", command("DEPART_CONFIRM", 0));
+        assertEquals("EXECUTED", authorized.getStatus());
+        assertEquals("ATO", authorized.getResultMode());
+    }
+
+    @Test
+    void explicitlyArmedDeskSessionAcceptsLeverTractionWithoutSyntheticButtons() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        // The caller explicitly selected laboratory desk mode before creating
+        // this new session. The physical desk has no verified mode/depart keys.
+        bridge.registerSimulation("DESK_DIRECT", 1, 2, result, DrivingMode.MANUAL, true);
+
+        Protocol704CommandLifecycle traction = bridge.execute(
+                "DESK_DIRECT", command("traction", 20), "PLC_704_LOCAL_V1", "desk-8001", 8001);
+
+        assertEquals("EXECUTED", traction.getStatus());
+        assertEquals("MANUAL", traction.getResultMode());
+        assertEquals("RUNNING", traction.getDepartureState());
+        assertTrue(traction.getExecutedState().getVelocity() > 0.0);
+    }
+
+    @Test
+    void directHandleSessionRequiresCoastResetBeforeDepartingAnIntermediateStation() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 3)));
+        bridge.registerSimulation("DESK_MULTI", 1, 3, result, DrivingMode.MANUAL, true, true);
+
+        TrainState stoppedAtStationTwo = new TrainState(200.0, 1348.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "DESK_MULTI");
+        bridge.syncCurrentState("DESK_MULTI", stoppedAtStationTwo, DrivingMode.MANUAL, 1, 3, true);
+        bridge.execute("DESK_MULTI", command("traction", 20));
+
+        // The arrival supervisor accepts the stop and puts the direct desk into
+        // its one-frame neutral-reset state for the next section.
+        Protocol704CommandLifecycle heldTraction = bridge.execute("DESK_MULTI", command("traction", 20));
+        assertEquals("NOT_READY_TO_DEPART", heldTraction.getRejectionReason());
+
+        Protocol704CommandLifecycle coast = bridge.execute("DESK_MULTI", command("coast", 0));
+        assertEquals("EXECUTED", coast.getStatus());
+        assertEquals("READY_TO_DEPART", coast.getDepartureState());
+
+        assertEquals("NOT_READY_TO_DEPART", bridge.execute("DESK_MULTI", command("traction", 20)).getRejectionReason());
+        bridge.syncDepartureAuth("DESK_MULTI", true);
+        Protocol704CommandLifecycle nextTraction = bridge.execute("DESK_MULTI", command("traction", 20));
+        assertEquals("EXECUTED", nextTraction.getStatus());
     }
 
     @Test
     void invalidLevelIsRejected() {
         register("LEVEL", DrivingMode.MANUAL);
         assertEquals("INVALID_LEVEL", bridge.execute("LEVEL", command("traction", 101)).getRejectionReason());
+    }
+
+    @Test
+    void normalizedLaboratoryBrakeWordIsAccepted() {
+        register("BRAKE_WORD", DrivingMode.MANUAL);
+        MappedControlCommand brake = command("brake", 7);
+        // The live desk encodes the service-brake position as 0x9Cxx/0x9Dxx.
+        // The parser has already normalized this to the 7% semantic level.
+        brake.setBrakeLevelRaw(0x9D07);
+
+        assertEquals("EXECUTED", bridge.execute("BRAKE_WORD", brake).getStatus());
     }
 
     @Test
@@ -342,6 +647,88 @@ class Protocol704VehicleControlBridgeTest {
         bridge.syncMode("SYNC_EB", DrivingMode.EMERGENCY, Protocol704VehicleControlBridge.SOURCE_EMERGENCY);
         assertTrue(bridge.isEmergencyLatched("SYNC_EB"));
         assertEquals(DrivingMode.EMERGENCY, bridge.getMode("SYNC_EB"));
+    }
+
+    @Test
+    void atpEmergencyBrakePublishesARealTrajectoryUntilStopped() {
+        register("ATP_EB", DrivingMode.MANUAL);
+        TrainState moving = new TrainState(10.0, 500.0, 15.0, 0.0,
+                SimulationPhase.TRACTION, "ATP_EB");
+        moving.setAbsolutePosition(813.0);
+        bridge.syncCurrentState("ATP_EB", moving, DrivingMode.MANUAL, 1, 2, true);
+
+        bridge.applyAtpEmergencyBrake("ATP_EB");
+        assertTrue(bridge.isEmergencyLatched("ATP_EB"));
+        assertEquals(DrivingMode.EMERGENCY, bridge.getMode("ATP_EB"));
+        assertTrue(bridge.snapshot("ATP_EB").state().getVelocity() > 0.0);
+
+        for (int i = 0; i < 80; i++) bridge.advanceAtoSessions();
+
+        TrainState stopped = bridge.snapshot("ATP_EB").state();
+        assertEquals(0.0, stopped.getVelocity(), 0.001);
+        assertEquals(SimulationPhase.STOPPED, stopped.getPhase());
+        assertTrue(bridge.isEmergencyLatched("ATP_EB"));
+    }
+
+    @Test
+    void staleEmergencyInsidePlatformToleranceRegistersArrivalAndWaitsForSafeKeyReset() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 3)));
+        bridge.registerSimulation("STALE_AT_PLATFORM", 1, 3, result,
+                DrivingMode.MANUAL, true, false, true);
+        preparePhysicalDesk("STALE_AT_PLATFORM");
+
+        double origin = loader.listStations().stream()
+                .filter(station -> station.id == 1).findFirst().orElseThrow().km * 1000.0;
+        double stationTwo = loader.listStations().stream()
+                .filter(station -> station.id == 2).findFirst().orElseThrow().km * 1000.0;
+        TrainState approaching = new TrainState(80.0, stationTwo - origin - 8.0,
+                2.0, 0.0, SimulationPhase.BRAKING, "STALE_AT_PLATFORM");
+        approaching.setAbsolutePosition(stationTwo - 8.0);
+        bridge.syncCurrentState("STALE_AT_PLATFORM", approaching, DrivingMode.ATO, 1, 3, true);
+
+        bridge.applyAtpEmergencyBrake("STALE_AT_PLATFORM");
+
+        // Reconnection or an early key operation cannot clear a moving EB.
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+        assertTrue(bridge.isEmergencyLatched("STALE_AT_PLATFORM"));
+
+        for (int i = 0; i < 40; i++) bridge.advanceAtoSessions();
+
+        Protocol704VehicleControlBridge.ControlStateSnapshot stopped = bridge.snapshot("STALE_AT_PLATFORM");
+        assertEquals(2, stopped.currentStationId());
+        assertEquals(3, stopped.nextTargetStationId());
+        assertEquals(stationTwo, stopped.absolutePositionM(), 0.001);
+        assertEquals(0.0, stopped.state().getVelocity(), 0.001);
+        assertTrue(stopped.emergencyLatched());
+        assertTrue(stopped.doorsClosed());
+        assertEquals("WAITING_EMERGENCY_RESET", stopped.doorState());
+
+        for (int i = 0; i < 12; i++) bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("STALE_AT_PLATFORM").doorsClosed(),
+                "automatic doors must remain closed while the emergency latch is active");
+
+        // A software reset alone still cannot advance the station workflow;
+        // the bridge waits for a fresh physical key acknowledgement.
+        bridge.resetEmergencyLatch("STALE_AT_PLATFORM");
+        assertFalse(bridge.isEmergencyLatched("STALE_AT_PLATFORM"));
+        assertTrue(bridge.snapshot("STALE_AT_PLATFORM").doorsClosed());
+        assertEquals("WAITING_EMERGENCY_RESET", bridge.snapshot("STALE_AT_PLATFORM").doorState());
+
+        // A fresh 8001 key cycle with both handles neutral is the explicit reset.
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+
+        Protocol704VehicleControlBridge.ControlStateSnapshot recovered = bridge.snapshot("STALE_AT_PLATFORM");
+        assertFalse(recovered.emergencyLatched());
+        assertEquals("MANUAL", recovered.mode());
+        assertFalse(recovered.doorsClosed());
+        assertEquals("RIGHT_OPEN", recovered.doorState());
+        assertFalse(recovered.atoRunning());
     }
 
     @Test
@@ -493,6 +880,15 @@ class Protocol704VehicleControlBridgeTest {
     private void register(String trainId, DrivingMode mode) {
         SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
         bridge.registerSimulation(trainId, 1, 2, result, mode);
+    }
+
+    private void preparePhysicalDesk(String trainId) {
+        bridge.updateCabInputs(trainId, java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs(trainId, java.util.Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs(trainId, java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 1, "master_handle", 0));
     }
 
     private static MappedControlCommand command(String command, double level) {

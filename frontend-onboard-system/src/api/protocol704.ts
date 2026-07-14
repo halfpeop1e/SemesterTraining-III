@@ -1,4 +1,4 @@
-import type { Protocol704Status } from '../types/protocol704';
+import type { HilGatewayStatus, Protocol704Status } from '../types/protocol704';
 import type { SimulationControlRequest } from '../types/vehicle';
 
 const API_BASE = '/api';
@@ -7,6 +7,15 @@ export async function getProtocol704Status(trainId = 'T1'): Promise<Protocol704S
   const res = await fetch(`${API_BASE}/vehicle/protocol704/status?trainId=${encodeURIComponent(trainId)}`);
   if (!res.ok) throw new Error(`704状态接口调用失败: ${res.status}`);
   return res.json();
+}
+
+/** Current HIL binding lets the onboard page adopt a train created from the signal page. */
+export async function getHilGatewayStatus(): Promise<HilGatewayStatus> {
+  const res = await fetch(`${API_BASE}/hil/status`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HIL status request failed: ${res.status}`);
+  const body = await res.json();
+  if (!body.success) throw new Error(body.message || 'HIL status request failed');
+  return body.data as HilGatewayStatus;
 }
 
 export async function connectProtocol704(trainId = 'T1'): Promise<string> {

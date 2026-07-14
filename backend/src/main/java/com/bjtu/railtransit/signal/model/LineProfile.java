@@ -104,7 +104,12 @@ public class LineProfile {
             if (!referenced.contains(toInt(s.getId()))) roots.add(s);
         }
         if (roots.isEmpty() && !byId.isEmpty()) {
-            roots.add(byId.values().iterator().next());
+            // The supplied CBI Seg graph is cyclic, so it has no natural root.
+            // Never let HashMap iteration choose a different artificial origin
+            // on another JVM; that would make calculated MA endpoints vary.
+            roots.add(byId.values().stream()
+                    .min(Comparator.comparingInt(s -> toInt(s.getId())))
+                    .orElseThrow());
         }
         roots.sort(Comparator.comparingInt(s -> toInt(s.getId())));
 
@@ -114,7 +119,9 @@ public class LineProfile {
             walkMileage(r, byId, visited, cursor[0], cursor);
         }
         // 孤立 Seg 补链
-        for (TrackSegment s : byId.values()) {
+        List<TrackSegment> remaining = new ArrayList<>(byId.values());
+        remaining.sort(Comparator.comparingInt(s -> toInt(s.getId())));
+        for (TrackSegment s : remaining) {
             if (!visited.contains(s.getId())) {
                 walkMileage(s, byId, visited, cursor[0], cursor);
             }

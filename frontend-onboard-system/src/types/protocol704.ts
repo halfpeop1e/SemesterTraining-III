@@ -55,6 +55,7 @@ export interface MappedControlCommand704 {
   masterHandle?: number;
   tractionLevelRaw?: number;
   brakeLevelRaw?: number;
+  direction?: string;
 }
 
 export interface RealtimeVehicleState704 {
@@ -66,6 +67,9 @@ export interface RealtimeVehicleState704 {
   mode: string;
   lastCommand: string;
   note: string;
+  doorsClosed?: boolean;
+  phase?: string;
+  departureState?: string;
   emergencyLatched?: boolean;
 }
 
@@ -154,4 +158,20 @@ export interface Protocol704Status {
   simulationReady?: boolean;
   simulationReadiness?: string;
   simulationContextUpdatedAt?: number;
+}
+
+export interface HilChannelStatus {
+  enabled: boolean;
+  connected: boolean;
+  framesSent: number;
+  bytesSent: number;
+  lastError?: string | null;
+}
+
+export interface HilGatewayStatus {
+  enabled: boolean;
+  trainId: string;
+  signalScreen?: HilChannelStatus;
+  networkScreen?: HilChannelStatus;
+  vision?: HilChannelStatus;
 }

@@ -37,8 +37,8 @@ public class Task2Verification {
         close(Math.round(Units.cmpsToKmh(972)), 35, 0.5, "972 cm/s -> 35 km/h");
         close(Units.cmToM(75800), 758.0, 1e-9, "75800 cm -> 758 m");
         close(Units.cmpsToKmh(Units.kmhToCmps(100)), 100.0, 1e-9, "km/h<->cm/s 互逆");
-        close(Units.parseChainage("K0+313.000"), 313.0, 1e-9, "K0+313.000 -> 313.0 m");
-        close(Units.parseChainage("k2+448.610"), 2448.61, 1e-9, "k2+448.610 -> 2448.61 m");
+        close(Units.parseChainage("K0+372.000"), 372.0, 1e-9, "K0+372.000 -> 372.0 m");
+        close(Units.parseChainage("K2+507.610"), 2507.61, 1e-9, "K2+507.610 -> 2507.61 m");
     }
 
     // ---------- UT-LOC-01：里程索引导航（确定性合成场景） ----------
@@ -106,8 +106,8 @@ public class Task2Verification {
         Platform pf1 = lp.getPlatforms().stream()
                 .filter(p -> p.getId() == 1).findFirst().orElse(null);
         check(pf1 != null, "站台1 存在");
-        check("K0+313.000".equals(pf1.getChainage()), "站台1 中心公里标 = K0+313.000");
-        close(pf1.getCenterM(), 313.0, 1e-9, "站台1 中心里程 = 313.0 m (K0+313.000)");
+        check("K0+372.000".equals(pf1.getChainage()), "Track 0 站台1中心公里标 = K0+372.000");
+        close(pf1.getCenterM(), 372.0, 1e-9, "Track 0 站台1中心里程 = 372.0 m");
         check(pf1.getSegId() == 13, "站台1 关联Seg = 13");
         check(pf1.getDir() == 0x55, "站台1 方向 = 0x55 (85)");
 

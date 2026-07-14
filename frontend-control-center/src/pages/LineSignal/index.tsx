@@ -28,6 +28,7 @@ import {
   patchSwitchState,
   patchRouteBuilt,
 } from '../../api/signal';
+import { removeDispatchTrain } from '../../api/dispatch';
 import { useSimulation } from '../../context/SimulationContext';
 import type {
   LineProfile,
@@ -47,6 +48,7 @@ import StationTopologyDetail from './components/StationTopologyDetail';
 import OperationsDock from './components/OperationsDock';
 import MaPanel from './components/MaPanel';
 import EventLog from './components/EventLog';
+import LabTrainQuickStart from './components/LabTrainQuickStart';
 import { pickDefaultStationId, sortedStations, nearestStationId } from './data/mileage';
 import { topologyStationIdForRoute, topologyStationIdForSignal } from './data/realTopology';
 import { STATION_NAMES } from './data/teacherDiagramLayout';
@@ -73,6 +75,7 @@ function LineSignal() {
   const [selected, setSelected] = useState<SelectedEntity | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [deletingTrainId, setDeletingTrainId] = useState<string | null>(null);
   const [stationId, setStationId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'overview' | 'station'>('overview');
   const [leftMenu, setLeftMenu] = useState<'route' | 'switch' | 'signal' | 'tsr' | 'status'>('route');
@@ -109,13 +112,7 @@ function LineSignal() {
   const loadBuilt = useCallback(async () => {
     try {
       const list = await getBuiltRoutes();
-      setBuiltRouteIds((prev) => {
-        if (list.length > 0) {
-          return new Set(list.map((r) => Number(r.id)));
-        }
-        // 远程空：保留本地已建（乐观/mock），避免闪回 0
-        return prev.size > 0 ? prev : new Set();
-      });
+      setBuiltRouteIds(new Set(list.map((r) => Number(r.id))));
     } catch {
       /* keep */
     }
@@ -163,7 +160,11 @@ function LineSignal() {
     })();
   }, [loadLine, loadBuilt, loadBindings, loadTsrs, loadEvents]);
 
-  const { snapshot, isRunning, step: refreshSimulation } = useSimulation();
+  const {
+    snapshot,
+    isRunning,
+    step: refreshSimulation,
+  } = useSimulation();
   const [simTime, setSimTime] = useState(0);
   const [simNotStarted, setSimNotStarted] = useState(false);
   const maInflight = useRef(false);
@@ -284,6 +285,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await buildRoute({ routeId }, trainId);
+        if (!res.success) {
+          throw new Error(res.message || '办理失败');
+        }
         message.success(res.message || `进路 ${routeId} 已办理`);
         pushLocalEvent(res.message || `进路 #${routeId} 办理`, 'INFO');
         setLineProfile((lp) => {
@@ -403,6 +407,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await cancelRoute(routeId);
+        if (!res.success) {
+          throw new Error(res.message || '取消失败');
+        }
         message.success(res.message || `进路 ${routeId} 已取消`);
         pushLocalEvent(res.message || `进路 #${routeId} 取消`, 'INFO');
         setLineProfile((lp) => (lp ? patchRouteBuilt(lp, routeId, false) : lp));
@@ -428,6 +435,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await operateSwitch({ switchId, position });
+        if (!res.success) {
+          throw new Error(res.message || '道岔操作失败');
+        }
         message.success(res.message || `道岔 ${switchId} → ${position}`);
         pushLocalEvent(res.message || `道岔 ${switchId} → ${position}`, 'INFO');
         setLineProfile((lp) => (lp ? patchSwitchState(lp, switchId, position) : lp));
@@ -446,6 +456,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await openSignal({ signalId, aspect });
+        if (!res.success) {
+          throw new Error(res.message || '信号机设置失败');
+        }
         message.success(res.message || `信号 ${signalId} → ${aspect}`);
         pushLocalEvent(res.message || `信号 #${signalId} → ${aspect}`, 'INFO');
         setLineProfile((lp) => {
@@ -473,6 +486,35 @@ function LineSignal() {
     else if (entity.type === 'signal') setLeftMenu('signal');
     else if (entity.type === 'train') setLeftMenu('status');
   }, []);
+
+  const handleDeleteTrain = useCallback(async (trainId: string) => {
+    setDeletingTrainId(trainId);
+    try {
+      await removeDispatchTrain(trainId);
+      setTrains((previous) => previous.filter((train) => train.trainId !== trainId));
+      setMaMap((previous) => {
+        const next = { ...previous };
+        delete next[trainId];
+        return next;
+      });
+      setRouteBindings((previous) => {
+        const next = { ...previous };
+        delete next[trainId];
+        return next;
+      });
+      setSelected(null);
+      message.success(`${trainId} 已下线，线路占用和司机台绑定已清除`);
+      pushLocalEvent(`列车 ${trainId} 已下线并清除线路占用`, 'INFO');
+      await refreshSimulation();
+      await loadBindings();
+      await loadEvents();
+    } catch (error: any) {
+      message.error(error?.message || `删除 ${trainId} 失败`);
+      pushLocalEvent(error?.message || `删除列车 ${trainId} 失败`, 'ERROR');
+    } finally {
+      setDeletingTrainId(null);
+    }
+  }, [loadBindings, loadEvents, pushLocalEvent, refreshSimulation]);
 
   const stationOptions = useMemo(() => {
     if (!lineProfile) return [];
@@ -584,6 +626,16 @@ function LineSignal() {
       </div>
 
       {/* 顶部 Tab 控制台（可折叠，不占左侧） */}
+      <LabTrainQuickStart
+        lineProfile={lineProfile}
+        trains={trains}
+        initialStationId={activeStationId || String(lineProfile.stations[0]?.id || '1')}
+        onCreated={() => {
+          void refreshSimulation();
+          void refreshAll();
+        }}
+      />
+
       {opsOpen && (
         <div className="signal-ops-top shrink-0 border-b border-amber-500/20 px-3 py-2">
           <OperationsDock
@@ -626,7 +678,7 @@ function LineSignal() {
           banner
           showIcon
           message="仿真未启动"
-          description="请到「调度控制」点启动。启动后本页自动跟车、刷新 MA 与占用。"
+          description="请在上方“实验列车”栏创建列车，系统会自动启动仿真并连接司机台。"
         />
       )}
       {simLive && (
@@ -681,6 +733,8 @@ function LineSignal() {
         lineProfile={lineProfile}
         maMap={maMap}
         trains={trains}
+        deletingTrainId={deletingTrainId}
+        onDeleteTrain={(trainId) => void handleDeleteTrain(trainId)}
         onClose={() => setSelected(null)}
       />
     </div>
