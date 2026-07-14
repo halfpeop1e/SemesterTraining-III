@@ -1,23 +1,22 @@
-// 郭逸晨车载模块（成员三）—— Vehicle 页面
-// 本轮改造：
-// 1. 单页面多车载实例管理，无需打开多个浏览器 tab
-// 2. 顶部训练号标签可切换不同实例，点击"＋"添加新车载
-// 3. 每实例独立运行仿真、独立与总控通信
+// 车载模块 —— Vehicle 页面
+// 重构：WebSocket 流式仿真（20Hz），替代 setInterval + 帧管理 + rAF 插值
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   callVehicleControl,
-  getAllSidingStatuses,
   reportOnboardEvent,
   resetVehicleSimulation,
   runVehicleSimulation,
+  streamVehicleSimulation,
 } from "../../api/vehicle";
-import { disconnectProtocol704, getHilGatewayStatus, resetProtocol704 } from "../../api/protocol704";
+import {
+  disconnectProtocol704,
+  getHilGatewayStatus,
+  resetProtocol704,
+} from "../../api/protocol704";
 import type {
   DrivingMode,
   SafetyEvent,
-  SidingStatus,
-  SimulationResult,
   StationStop,
   TrainState,
 } from "../../types/vehicle";
@@ -31,468 +30,444 @@ import Protocol704Panel from "./components/Protocol704Panel";
 import "./vehicle.css";
 
 const DEMO_SPEED_LIMIT_FALLBACK_MS = 20;
-const SPEED_MULTIPLIER_OPTIONS = [0.5, 1, 2, 4, 8] as const;
-type SpeedMultiplier = (typeof SPEED_MULTIPLIER_OPTIONS)[number];
 type PageStatus = "idle" | "loading" | "playing" | "finished" | "error";
 type ControlSourceMode = "SIMULATION" | "LAB_DRIVER_DESK";
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
+// ── WS 消息类型 ──
+interface OnboardWsFrame {
+  type: "frame" | "finished" | "error";
+  time: number;
+  position: number;
+  velocity: number;
+  acceleration: number;
+  phase?: string;
+  trainId: string;
+  absolutePosition?: number;
+  tractionForce?: number;
+  brakeForce?: number;
+  availableMotors?: number;
+  resistanceDecel?: number;
+  // finished 帧
+  speedLimit?: number;
+  targetStopPosition?: number;
+  departureState?: string;
+  fromStationName?: string;
+  toStationName?: string;
+  lineStartPosition?: number;
+  totalStations?: number;
+  completedStops?: number;
+  dtPerFrame?: number;
+  stationStops?: StationStop[];
+  safetyEvents?: SafetyEvent[];
+  trainMass?: number;
 }
 
-/** 单个车载实例的全部状态 */
 interface InstanceState {
   trainId: string;
   status: PageStatus;
   errorMessage: string | null;
-  result: SimulationResult | null;
-  /** Increments whenever a continuation replaces the remaining trajectory. */
-  trajectoryVersion: number;
-  frameIndex: number;
-  timerId: number | null; // setInterval ID
-  isPaused: boolean;
-  /** A dispatch HOLD is braking the train; pause only after its speed reaches zero. */
-  holdAfterBraking: boolean;
-  departureAuthorized: boolean;
-  speedMultiplier: SpeedMultiplier;
   fromStationId: number;
   toStationId: number;
   drivingMode: DrivingMode;
   controlSourceMode: ControlSourceMode;
   allSafetyEvents: SafetyEvent[];
   handleResetToken: number;
-  /** useRef 等效保持引用 (不触发重渲染) */
-  stateRef: TrainState | null;
-  frameIndexRef: number;
-  fromStationIdRef: number;
-  toStationIdRef: number;
-  resultRef: SimulationResult | null;
-  drivingModeRef: DrivingMode;
-}
-
-interface InstanceApi {
-  state: InstanceState;
-  setState: React.Dispatch<React.SetStateAction<InstanceState>>;
+  departureAuthorized: boolean;
+  // from finished WS frame
+  speedLimit: number;
+  targetStopPosition: number;
+  lineStartPosition: number;
+  fromStationName: string | null;
+  toStationName: string | null;
+  totalStations: number;
+  completedStops: number;
+  stationStops: StationStop[] | undefined;
+  trainMass: number;
 }
 
 let nextAutoId = 1;
+function parseTrainIdSuffix(s: string): number | null {
+  const m = s.match(/^OB(\d+)$/);
+  return m ? parseInt(m[1], 10) : null;
+}
 
-/** 从训练号解析数字后缀，如 "OB3" → 3；失败返回 null */
-function parseTrainIdSuffix(trainId: string): number | null {
-  const match = trainId.match(/^OB(\d+)$/);
-  return match ? parseInt(match[1], 10) : null;
+/** 从线路数据计算起止站间的相对目标距离和绝对起点位置 */
+function getStationDistance(
+  fromStationId: number,
+  toStationId: number,
+): {
+  targetStopPosition: number;
+  lineStartPosition: number;
+} {
+  const from = STATIONS.find((s) => s.stationId === fromStationId);
+  const to = STATIONS.find((s) => s.stationId === toStationId);
+  if (from && to && to.km > from.km) {
+    return {
+      targetStopPosition: Math.round((to.km - from.km) * 1000),
+      lineStartPosition: Math.round(from.km * 1000),
+    };
+  }
+  // 回退：默认 郭公庄(1) → 丰台科技园(2)
+  return { targetStopPosition: 1348, lineStartPosition: 313 };
 }
 
 function createInstance(trainId: string): InstanceState {
+  const dist = getStationDistance(1, 2);
   return {
     trainId,
     status: "idle",
     errorMessage: null,
-    result: null,
-    trajectoryVersion: 0,
-    frameIndex: 0,
-    timerId: null,
-    isPaused: false,
-    holdAfterBraking: false,
-    departureAuthorized: false,
-    speedMultiplier: 1,
     fromStationId: 1,
     toStationId: 2,
     drivingMode: "ato",
     controlSourceMode: "SIMULATION",
     allSafetyEvents: [],
     handleResetToken: 0,
-    stateRef: null,
-    frameIndexRef: 0,
-    fromStationIdRef: 1,
-    toStationIdRef: 2,
-    resultRef: null,
-    drivingModeRef: "ato",
+    departureAuthorized: false,
+    speedLimit: DEMO_SPEED_LIMIT_FALLBACK_MS,
+    targetStopPosition: dist.targetStopPosition,
+    lineStartPosition: dist.lineStartPosition,
+    fromStationName: null,
+    toStationName: null,
+    totalStations: 0,
+    completedStops: 0,
+    stationStops: undefined,
+    trainMass: 225_000,
   };
 }
-
-/** 获取唯一 ID，确保不与已有实例冲突 */
-function getTrainId(existingTrainIds: string[]): string {
+function getTrainId(existing: string[]): string {
   while (true) {
-    const candidate = `OB${nextAutoId++}`;
-    if (!existingTrainIds.includes(candidate)) return candidate;
+    const c = `OB${nextAutoId++}`;
+    if (!existing.includes(c)) return c;
   }
 }
 
 function Vehicle() {
-  // URL 参数作为初始 trainId
   const urlParam = new URLSearchParams(window.location.search).get("trainId");
   const urlTrainId = urlParam || getTrainId([]);
-
-  // 若 URL 提供了 trainId，同步计数器避免后续冲突
   if (urlParam) {
-    const suffix = parseTrainIdSuffix(urlParam);
-    if (suffix !== null && suffix >= nextAutoId) {
-      nextAutoId = suffix + 1;
-    }
+    const s = parseTrainIdSuffix(urlParam);
+    if (s !== null && s >= nextAutoId) nextAutoId = s + 1;
   }
 
-  // 多实例存储
   const [instances, setInstances] = useState<Map<string, InstanceState>>(() => {
     const m = new Map<string, InstanceState>();
     m.set(urlTrainId, createInstance(urlTrainId));
     return m;
   });
-  const [activeTrainId, setActiveTrainId] = useState<string>(urlTrainId);
-  const [displayState, setDisplayState] = useState<TrainState | null>(null);
+  const [activeTrainId, setActiveTrainId] = useState(urlTrainId);
   const [rightPanelTab, setRightPanelTab] = useState<
     "lineRun" | "tractionCurve" | "timetable"
   >("lineRun");
-  const [sidingStatuses, setSidingStatuses] = useState<SidingStatus[]>([]);
 
-  // 父组件统一轮询，保证 2D/3D 视图消费同一份侧线快照。
-  // 请求失败时保留上次已知数据；递归 setTimeout 避免慢请求重叠。
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | null = null;
+  // WebSocket 驱动的显示帧（20Hz，后端推送）
+  const [displayFrame, setDisplayFrame] = useState<TrainState | null>(null);
 
-    const tick = async () => {
+  // 帧间插值 refs（WS 20Hz → Canvas 60fps）
+  const interpRef = useRef<{
+    prev: TrainState | null;
+    next: TrainState | null;
+    arrivedAt: number;
+  }>({
+    prev: null,
+    next: null,
+    arrivedAt: 0,
+  });
+
+  // ── WebSocket ──
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsReconnectTimerRef = useRef<number | null>(null);
+
+  const connectWs = useCallback((trainId: string) => {
+    // 断开旧连接
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (wsReconnectTimerRef.current !== null) {
+      clearTimeout(wsReconnectTimerRef.current);
+      wsReconnectTimerRef.current = null;
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws/simulation`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "subscribe", trainId }));
+    };
+
+    ws.onmessage = (event) => {
       try {
-        const data = await getAllSidingStatuses();
-        if (!cancelled && data.length > 0) {
-          setSidingStatuses(data);
+        const f: OnboardWsFrame = JSON.parse(event.data as string);
+        if (f.type === "frame") {
+          const state: TrainState = {
+            time: f.time,
+            position: f.position,
+            velocity: f.velocity,
+            acceleration: f.acceleration,
+            phase: f.phase ?? "",
+            trainId: f.trainId,
+            absolutePosition: f.absolutePosition,
+            tractionForce: f.tractionForce,
+            brakeForce: f.brakeForce,
+            availableMotors: f.availableMotors,
+            resistanceDecel: f.resistanceDecel,
+          };
+          // 推入插值缓冲（60fps rAF 消费，WS 20Hz 生产）
+          interpRef.current.prev = interpRef.current.next;
+          interpRef.current.next = state;
+          interpRef.current.arrivedAt = performance.now();
+          setInstances((prev) => {
+            const next = new Map(prev);
+            const cur = next.get(trainId);
+            if (cur && cur.status === "loading")
+              next.set(trainId, { ...cur, status: "playing" });
+            return next;
+          });
+        } else if (f.type === "finished") {
+          setDisplayFrame(null);
+          setInstances((prev) => {
+            const next = new Map(prev);
+            const cur = next.get(trainId);
+            if (cur) {
+              next.set(trainId, {
+                ...cur,
+                status: "finished",
+                speedLimit: f.speedLimit ?? cur.speedLimit,
+                targetStopPosition:
+                  f.targetStopPosition ?? cur.targetStopPosition,
+                lineStartPosition: f.lineStartPosition ?? cur.lineStartPosition,
+                fromStationName: f.fromStationName ?? cur.fromStationName,
+                toStationName: f.toStationName ?? cur.toStationName,
+                totalStations: f.totalStations ?? cur.totalStations,
+                completedStops: f.completedStops ?? cur.completedStops,
+                stationStops: f.stationStops ?? cur.stationStops,
+                trainMass: f.trainMass ?? cur.trainMass,
+                allSafetyEvents: (f.safetyEvents ?? []).filter(
+                  (ev) => ev.reason !== "SPEED_WARNING",
+                ),
+              });
+            }
+            return next;
+          });
+        } else if (f.type === "error") {
+          setInstances((prev) => {
+            const next = new Map(prev);
+            const cur = next.get(trainId);
+            if (cur)
+              next.set(trainId, {
+                ...cur,
+                status: "error",
+                errorMessage: f.phase ?? "WS error",
+              });
+            return next;
+          });
         }
       } catch {
-        // 降级策略：保留上次成功快照，不清空视图状态。
-      } finally {
-        if (!cancelled) {
-          timer = window.setTimeout(tick, 4000);
-        }
+        /* ignore malformed */
       }
     };
 
-    void tick();
-    return () => {
-      cancelled = true;
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
+    ws.onclose = () => {
+      // 自动重连
+      wsReconnectTimerRef.current = window.setTimeout(
+        () => connectWs(trainId),
+        2000,
+      );
     };
+
+    ws.onerror = () => {
+      ws.close();
+    };
+    wsRef.current = ws;
   }, []);
 
-  // 用 ref 跟踪最新 instances，供 unmount cleanup 使用
+  const disconnectWs = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (wsReconnectTimerRef.current !== null) {
+      clearTimeout(wsReconnectTimerRef.current);
+      wsReconnectTimerRef.current = null;
+    }
+  }, []);
+
+  // 帧间微插值：WS 20Hz → setDisplayFrame 60fps，消除离散跳跃
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const { prev, next, arrivedAt } = interpRef.current;
+      if (prev && next) {
+        const span = next.time - prev.time;
+        const elapsed = (performance.now() - arrivedAt) / 1000;
+        const t = span > 0 ? Math.min(elapsed / Math.max(span, 0.05), 1) : 1;
+        setDisplayFrame({
+          time: prev.time + (next.time - prev.time) * t,
+          position: prev.position + (next.position - prev.position) * t,
+          velocity: prev.velocity + (next.velocity - prev.velocity) * t,
+          acceleration:
+            prev.acceleration + (next.acceleration - prev.acceleration) * t,
+          phase: next.phase,
+          trainId: next.trainId,
+          absolutePosition:
+            prev.absolutePosition !== undefined &&
+            next.absolutePosition !== undefined
+              ? prev.absolutePosition +
+                (next.absolutePosition - prev.absolutePosition) * t
+              : next.absolutePosition,
+          tractionForce:
+            (prev.tractionForce ?? 0) +
+            ((next.tractionForce ?? 0) - (prev.tractionForce ?? 0)) * t,
+          brakeForce:
+            (prev.brakeForce ?? 0) +
+            ((next.brakeForce ?? 0) - (prev.brakeForce ?? 0)) * t,
+          availableMotors: next.availableMotors,
+          resistanceDecel: next.resistanceDecel,
+        });
+      } else if (next) {
+        setDisplayFrame(next);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   const instancesRef = useRef(instances);
   instancesRef.current = instances;
   const adoptedLaboratoryTrainRef = useRef<string | null>(null);
 
-  // A laboratory train may be created from the signal page first. Adopt the
-  // same backend-bound ID here instead of making the user create a second OB
-  // instance that is unrelated to the physical driver desk.
+  // 实验室司机台实例采纳
   useEffect(() => {
     let cancelled = false;
-    const adoptLaboratoryTrain = async () => {
+    const f = async () => {
       try {
-        const hil = await getHilGatewayStatus();
-        const trainId = hil.enabled ? hil.trainId?.trim() : '';
-        if (!trainId || cancelled) return;
-        setInstances((previous) => {
-          const next = new Map(previous);
-          const existing = next.get(trainId);
-          if (existing) {
-            next.set(trainId, {
-              ...existing,
+        const h = await getHilGatewayStatus();
+        const tid = h.enabled ? h.trainId?.trim() : "";
+        if (!tid || cancelled) return;
+        setInstances((p) => {
+          const n = new Map(p);
+          const e = n.get(tid);
+          if (e)
+            n.set(tid, {
+              ...e,
               controlSourceMode: "LAB_DRIVER_DESK",
-              status: existing.status === "idle" ? "playing" : existing.status,
-              isPaused: true,
+              status: e.status === "idle" ? "playing" : e.status,
             });
-          } else {
-            next.set(trainId, {
-              ...createInstance(trainId),
+          else
+            n.set(tid, {
+              ...createInstance(tid),
               status: "playing",
-              isPaused: true,
               controlSourceMode: "LAB_DRIVER_DESK",
               fromStationId: 1,
               toStationId: 13,
-              fromStationIdRef: 1,
-              toStationIdRef: 13,
             });
-          }
-          return next;
+          return n;
         });
-        if (adoptedLaboratoryTrainRef.current !== trainId) {
-          adoptedLaboratoryTrainRef.current = trainId;
-          setActiveTrainId(trainId);
+        if (adoptedLaboratoryTrainRef.current !== tid) {
+          adoptedLaboratoryTrainRef.current = tid;
+          setActiveTrainId(tid);
         }
-      } catch {
-        // The standard software-simulation page remains usable without HIL.
-      }
+      } catch {}
     };
-    void adoptLaboratoryTrain();
-    const timer = window.setInterval(() => void adoptLaboratoryTrain(), 1500);
+    void f();
+    const t = window.setInterval(() => void f(), 1500);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      clearInterval(t);
     };
   }, []);
 
-  // ── 每实例可变引用（render 时同步，handler 中通过此 ref 获取最新值）──
-  const instanceRefs = useRef<
-    Map<
-      string,
-      {
-        stateRef: TrainState | null;
-        frameIndexRef: number;
-        fromStationIdRef: number;
-        toStationIdRef: number;
-        resultRef: SimulationResult | null;
-        drivingModeRef: DrivingMode;
-      }
-    >
-  >(new Map());
-
-  // 在 render 阶段同步所有实例的最新 ref 值
-  {
-    const nextRefs = new Map<
-      string,
-      typeof instanceRefs.current extends Map<any, infer V> ? V : never
-    >();
-    instances.forEach((inst, tid) => {
-      const cs: TrainState | null =
-        inst.result && inst.result.states.length > 0
-          ? inst.result.states[inst.frameIndex]
-          : null;
-      nextRefs.set(tid, {
-        stateRef: cs,
-        frameIndexRef: inst.frameIndex,
-        fromStationIdRef: inst.fromStationId,
-        toStationIdRef: inst.toStationId,
-        resultRef: inst.result,
-        drivingModeRef: inst.drivingMode,
-      });
-    });
-    instanceRefs.current = nextRefs;
-  }
-
-  // 获取当前活跃实例
   const activeInstance = instances.get(activeTrainId);
 
-  // ── 实例状态更新辅助 ──
   const updateInstance = useCallback(
     (trainId: string, updater: (prev: InstanceState) => InstanceState) => {
-      setInstances((prev) => {
-        const next = new Map(prev);
-        const current = next.get(trainId);
-        if (current) next.set(trainId, updater(current));
-        return next;
+      setInstances((p) => {
+        const n = new Map(p);
+        const c = n.get(trainId);
+        if (c) n.set(trainId, updater(c));
+        return n;
       });
     },
     [],
   );
 
-  // ── 停止活跃实例的定时器 ──
-  const stopTimer = useCallback((inst: InstanceState) => {
-    if (inst.timerId !== null) {
-      window.clearInterval(inst.timerId);
-    }
-  }, []);
-
-  // ── 启动活跃实例的定时器 ──
-  const startTimer = useCallback(
-    (trainId: string, inst: InstanceState) => {
-      stopTimer(inst);
-      const dtPerFrame = inst.result?.summary.dtPerFrame ?? 0.5;
-      const intervalMs = (dtPerFrame * 1000) / inst.speedMultiplier;
-      const totalFrames = inst.result?.states.length ?? 0;
-
-      const timerId = window.setInterval(() => {
-        setInstances((prev) => {
-          const next = new Map(prev);
-          const cur = next.get(trainId);
-          if (!cur) return prev;
-
-          const nextIdx = cur.frameIndex + 1;
-          if (nextIdx >= totalFrames - 1) {
-            window.clearInterval(timerId);
-            // A safety HOLD first plays the ATP braking trajectory.  It becomes a
-            // held train only after the simulated speed has reached zero.
-            if (cur.holdAfterBraking) {
-              next.set(trainId, {
-                ...cur,
-                frameIndex: totalFrames - 1,
-                isPaused: true,
-                holdAfterBraking: false,
-                timerId: null,
-              });
-            } else {
-              next.set(trainId, {
-                ...cur,
-                frameIndex: totalFrames - 1,
-                status: "finished",
-                timerId: null,
-              });
-            }
-            return next;
-          }
-          next.set(trainId, {
-            ...cur,
-            frameIndex: nextIdx,
-            timerId: timerId as unknown as number,
-          });
-          return next;
-        });
-      }, intervalMs);
-
-      updateInstance(trainId, (cur) => ({
-        ...cur,
-        timerId: timerId as unknown as number,
-      }));
-    },
-    [stopTimer, updateInstance],
-  );
-
-  // ── 切换活跃车载：仅切换视图，不干涉其他实例的定时器 ──
-  const switchToTrain = useCallback((newId: string) => {
-    setActiveTrainId(newId);
-  }, []);
-
-  // ── 添加新实例 ──
+  const switchToTrain = useCallback((id: string) => setActiveTrainId(id), []);
   const addInstance = useCallback(() => {
-    setInstances((prev) => {
-      const existingIds = Array.from(prev.keys());
-      const newId = getTrainId(existingIds);
-      const next = new Map(prev);
-      next.set(newId, createInstance(newId));
-      // 需要在 setState 外设置 activeTrainId，用 setTimeout 保证在渲染后切换
+    setInstances((p) => {
+      const ids = Array.from(p.keys());
+      const newId = getTrainId(ids);
+      const n = new Map(p);
+      n.set(newId, createInstance(newId));
       setTimeout(() => setActiveTrainId(newId), 0);
-      return next;
+      return n;
     });
   }, []);
 
-  // ── 删除实例。总控下线可删除最后一个实例，保留空页面供重新加车。 ──
   const removeInstance = useCallback(
     (trainId: string, allowEmpty = false) => {
       if (instances.size <= 1 && !allowEmpty) return;
-      const inst = instances.get(trainId);
-      if (inst) stopTimer(inst);
       void disconnectProtocol704(trainId).catch(() => undefined);
-      setInstances((prev) => {
-        const next = new Map(prev);
-        next.delete(trainId);
-        return next;
+      setInstances((p) => {
+        const n = new Map(p);
+        n.delete(trainId);
+        return n;
       });
-      setDisplayState((state) => (state?.trainId === trainId ? null : state));
       if (activeTrainId === trainId) {
-        const remaining = Array.from(instances.keys()).filter(
-          (id) => id !== trainId,
-        );
-        setActiveTrainId(remaining[0] || activeTrainId);
+        const rem = Array.from(instances.keys()).filter((id) => id !== trainId);
+        setActiveTrainId(rem[0] || activeTrainId);
       }
     },
-    [instances, activeTrainId, stopTimer],
+    [instances, activeTrainId],
   );
 
   const handleTrainOfflined = useCallback(
-    (trainId: string) => {
-      removeInstance(trainId, true);
-    },
+    (tid: string) => removeInstance(tid, true),
     [removeInstance],
   );
 
-  // ── 组件卸载清理所有定时器 ──
-  useEffect(() => {
-    return () => {
-      instancesRef.current.forEach((inst) => {
-        if (inst.timerId !== null) window.clearInterval(inst.timerId);
-      });
-    };
-  }, []);
-
-  // ── 定时器管理：检查所有实例，确保该跑的跑、该停的停 ──
-  // 序列化与定时器相关的字段（不含 timerId 本身），避免 restart loop
-  const timerDigest = Array.from(instances.entries())
-    .map(
-      ([id, inst]) =>
-        `${id}:${inst.status}:${inst.isPaused}:${inst.speedMultiplier}:${inst.trajectoryVersion}`,
-    )
-    .join("|");
-
-  useEffect(() => {
-    instances.forEach((inst, trainId) => {
-      const shouldRun =
-        inst.status === "playing" &&
-        inst.controlSourceMode === "SIMULATION" &&
-        !inst.isPaused &&
-        inst.result &&
-        inst.result.states.length > 0;
-
-      if (inst.timerId !== null && !shouldRun) {
-        // 该停：timer 还在跑但实例已暂停/结束
-        window.clearInterval(inst.timerId);
-        updateInstance(trainId, (cur) => ({ ...cur, timerId: null }));
-      } else if (inst.timerId === null && shouldRun) {
-        // 该启：timer 未跑但实例应该播放
-        startTimer(trainId, inst);
-      } else if (inst.timerId !== null && shouldRun) {
-        // 该跑但倍速可能变了 → 重启以应用新 interval
-        window.clearInterval(inst.timerId);
-        startTimer(trainId, { ...inst, timerId: null });
-      }
-    });
-    // timerDigest 变化时重新评估所有实例
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timerDigest]);
-
-  // ═══════════════════════════════════════════
-  // 实例操作（handleStart / handleReset / 等）
-  // 通过 trainId 操作指定实例
-  // ═══════════════════════════════════════════
+  // ── 实例操作 ──
 
   const handleStart = useCallback(
     async (trainId: string) => {
       const inst = instances.get(trainId);
       if (!inst) return;
-
+      const isLab = inst.controlSourceMode === "LAB_DRIVER_DESK";
       updateInstance(trainId, (cur) => ({
         ...cur,
         status: "loading",
         errorMessage: null,
-        result: null,
-        trajectoryVersion: 0,
-        frameIndex: 0,
-        isPaused: true,
-        holdAfterBraking: false,
-        departureAuthorized: false,
-        speedMultiplier: 1,
-        drivingMode: "ato",
         allSafetyEvents: [],
         handleResetToken: cur.handleResetToken + 1,
       }));
+      setDisplayFrame(null);
+      interpRef.current = { prev: null, next: null, arrivedAt: 0 };
 
       try {
-        const simulationResult = await runVehicleSimulation({
-          trainId,
-          fromStationId: inst.fromStationId,
-          toStationId: inst.toStationId,
-          hardwareControlEnabled: inst.controlSourceMode === "LAB_DRIVER_DESK",
-          labAutoDepartureEnabled: inst.controlSourceMode === "LAB_DRIVER_DESK",
-        });
-        if (!simulationResult.states || simulationResult.states.length === 0) {
-          throw new Error("后端返回的仿真结果不包含任何 states 数据");
+        if (isLab) {
+          await runVehicleSimulation({
+            trainId,
+            fromStationId: inst.fromStationId,
+            toStationId: inst.toStationId,
+            hardwareControlEnabled: true,
+            labAutoDepartureEnabled: true,
+          });
+        } else {
+          const resp = await streamVehicleSimulation({
+            trainId,
+            fromStationId: inst.fromStationId,
+            toStationId: inst.toStationId,
+          });
+          if (!resp.success) throw new Error(resp.message || "启动失败");
         }
+        // 统一通过 WS 接收数据（SIM 模式：预计算流式推送 / LAB 模式：PLC 实时推送）
+        connectWs(trainId);
         updateInstance(trainId, (cur) => ({
           ...cur,
-          result: {
-            ...simulationResult,
-            states: simulationResult.states.map((state) => ({
-              ...state,
-              trainId,
-            })),
-          },
-          allSafetyEvents: simulationResult.safetyEvents ?? [],
-          // A physical desk owns the clock. Keep the prepared train at its
-          // start state until a valid PLC frame advances it.
           status: "playing",
-          frameIndex: 0,
-          isPaused: cur.controlSourceMode === "LAB_DRIVER_DESK",
-          // Desk mode: physical ATO-start bit is the only departure action.
-          drivingMode:
-            "ato",
-          departureAuthorized: cur.controlSourceMode === "LAB_DRIVER_DESK",
+          departureAuthorized: isLab,
         }));
       } catch (err) {
         updateInstance(trainId, (cur) => ({
@@ -502,7 +477,7 @@ function Vehicle() {
         }));
       }
     },
-    [instances, updateInstance],
+    [instances, updateInstance, connectWs],
   );
 
   const handleControl = useCallback(
@@ -513,27 +488,22 @@ function Vehicle() {
       mode: DrivingMode,
       levelPercent = 0,
     ) => {
-      const refs = instanceRefs.current.get(trainId);
-      if (!refs) return;
-      const {
-        stateRef: cs,
-        frameIndexRef: fi,
-        fromStationIdRef: fromId,
-        toStationIdRef: toId,
-        resultRef: res,
-      } = refs;
-      if (!cs || !res) return;
+      const curInst = instancesRef.current.get(trainId);
+      if (!curInst) return;
+      const cs = displayFrame;
+      const fromId = curInst.fromStationId;
+      const toId = curInst.toStationId;
 
-      let totalTarget = res.stopResult?.targetStopPosition ?? 0;
+      let totalTarget = curInst.targetStopPosition;
       let nextStationId: number | undefined;
       let nextStationName: string | undefined;
-      const stationStops = res.stationStops;
-      if (stationStops && stationStops.length > 0) {
-        const nextStation = stationStops.find((s) => s.targetPosition > cs.position + 0.5);
-        if (nextStation) {
-          totalTarget = nextStation.targetPosition;
-          nextStationId = nextStation.stationId;
-          nextStationName = nextStation.stationName;
+      const stops = curInst.stationStops;
+      if (cs && stops?.length) {
+        const ns = stops.find((s) => s.targetPosition > cs.position + 0.5);
+        if (ns) {
+          totalTarget = ns.targetPosition;
+          nextStationId = ns.stationId;
+          nextStationName = ns.stationName;
         }
       }
 
@@ -542,22 +512,31 @@ function Vehicle() {
           trainId,
           fromStationId: fromId,
           toStationId: toId,
-          currentState: cs,
+          currentState: cs || {
+            trainId,
+            time: 0,
+            position: 0,
+            velocity: 0,
+            acceleration: 0,
+            phase: "",
+          },
           currentMode: mode,
           controlCommand: { command, targetDecel, levelPercent },
           totalTargetPosition: totalTarget,
           nextStationId,
           nextStationName,
         });
-
-        if (controlResult && "status" in controlResult && controlResult.status === "PENDING_APPROVAL") {
+        if (
+          controlResult &&
+          "status" in controlResult &&
+          controlResult.status === "PENDING_APPROVAL"
+        ) {
           updateInstance(trainId, (cur) => ({
             ...cur,
             errorMessage: controlResult.message || "已向中控发送人工接管请求",
           }));
           return;
         }
-
         if (
           !controlResult ||
           !("states" in controlResult) ||
@@ -565,68 +544,22 @@ function Vehicle() {
           controlResult.states.length === 0 ||
           !controlResult.summary
         ) {
-          throw new Error("控制接口返回的仿真结果不完整，未切换驾驶模式");
+          throw new Error("控制接口返回的仿真结果不完整");
         }
-
-        updateInstance(trainId, (cur) => {
-          if (!cur.result) return cur;
-          const before = cur.result.states.slice(0, fi + 1);
-          const prevStops = Array.isArray(cur.result.stationStops)
-            ? cur.result.stationStops
-            : [];
-          const incomingStops = Array.isArray(controlResult.stationStops)
-            ? controlResult.stationStops
-            : [];
-          const incomingSafetyEvents = Array.isArray(controlResult.safetyEvents)
-            ? controlResult.safetyEvents
-            : [];
-          const mergedStopsMap = new Map<number, StationStop>();
-          prevStops.forEach((stop) => mergedStopsMap.set(stop.stationId, stop));
-          incomingStops.forEach((stop) => mergedStopsMap.set(stop.stationId, stop));
-          const mergedStops = Array.from(mergedStopsMap.values()).sort(
-            (left, right) => left.targetPosition - right.targetPosition,
-          );
-          return {
-            ...cur,
-            result: {
-              ...cur.result,
-              states: [
-                ...before,
-                ...controlResult.states.map((s) => ({ ...s, trainId })),
-              ],
-              stopResult: controlResult.stopResult,
-              safetyEvents: [
-                ...(cur.result.safetyEvents ?? []),
-                ...incomingSafetyEvents,
-              ],
-              stationStops: mergedStops,
-              summary: {
-                ...cur.result.summary,
-                currentMode:
-                  controlResult.summary.currentMode ??
-                  cur.result.summary.currentMode,
-                nextMode:
-                  controlResult.summary.nextMode ?? cur.result.summary.nextMode,
-              },
-            },
-            allSafetyEvents: [
-              ...cur.allSafetyEvents,
-              ...incomingSafetyEvents,
-            ],
-            trajectoryVersion: cur.trajectoryVersion + 1,
-            drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
-            handleResetToken:
-              command === "resume_ato" || command === "reset_emergency"
-                ? cur.handleResetToken + 1
-                : cur.handleResetToken,
-            status: "playing",
-            isPaused:
-              controlResult.summary.currentMode === "emergency"
-                ? true
-                : cur.isPaused,
-            errorMessage: null,
-          };
-        });
+        // 控制后切换到 WS 流式推送
+        const dist = getStationDistance(fromId, toId);
+        updateInstance(trainId, (cur) => ({
+          ...cur,
+          status: "playing",
+          errorMessage: null,
+          drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
+          targetStopPosition: dist.targetStopPosition,
+          lineStartPosition: dist.lineStartPosition,
+          handleResetToken:
+            command === "resume_ato" || command === "reset_emergency"
+              ? cur.handleResetToken + 1
+              : cur.handleResetToken,
+        }));
       } catch (err) {
         updateInstance(trainId, (cur) => ({
           ...cur,
@@ -634,340 +567,183 @@ function Vehicle() {
         }));
       }
     },
-    [updateInstance],
+    [updateInstance, displayFrame],
   );
 
   const handleReset = useCallback(
     (trainId: string) => {
       void resetProtocol704(trainId).catch(() => undefined);
-      const refs = instanceRefs.current.get(trainId);
-      const lineStart = refs?.resultRef?.summary?.lineStartPosition ?? 0;
-      const positionMeters = refs?.stateRef
-        ? refs.stateRef.absolutePosition ?? lineStart + refs.stateRef.position
-        : lineStart;
-      updateInstance(trainId, (cur) => {
-        if (cur.timerId !== null) window.clearInterval(cur.timerId);
-        return {
-          ...cur,
-          status: "idle",
-          errorMessage: null,
-          result: null,
-          trajectoryVersion: 0,
-          frameIndex: 0,
-          timerId: null,
-          isPaused: false,
-          holdAfterBraking: false,
-          departureAuthorized: false,
-          speedMultiplier: 1,
-          drivingMode: "ato",
-          controlSourceMode: "SIMULATION",
-          allSafetyEvents: [],
-          handleResetToken: cur.handleResetToken + 1,
-        };
-      });
-      void resetVehicleSimulation(trainId, positionMeters).catch(() => undefined);
-      void reportOnboardEvent({
-        trainId,
-        eventType: "SIMULATION_RESET",
-        timestampSeconds: 0,
-        positionMeters,
-        speedKmh: 0,
-        severity: "INFO",
-        details: `车载复位 position=${positionMeters.toFixed(1)}m`,
-      }).catch(() => undefined);
+      disconnectWs();
+      setDisplayFrame(null);
+      interpRef.current = { prev: null, next: null, arrivedAt: 0 };
+      const positionMeters = displayFrame?.position ?? 0;
+      const curInst = instancesRef.current.get(trainId);
+      const dist = getStationDistance(
+        curInst?.fromStationId ?? 1,
+        curInst?.toStationId ?? 2,
+      );
+      updateInstance(trainId, (cur) => ({
+        ...cur,
+        status: "idle",
+        errorMessage: null,
+        allSafetyEvents: [],
+        handleResetToken: cur.handleResetToken + 1,
+        drivingMode: "ato",
+        departureAuthorized: false,
+        speedLimit: DEMO_SPEED_LIMIT_FALLBACK_MS,
+        targetStopPosition: dist.targetStopPosition,
+        lineStartPosition: dist.lineStartPosition,
+        stationStops: undefined,
+        fromStationName: null,
+        toStationName: null,
+      }));
+      void resetVehicleSimulation(trainId, positionMeters).catch(
+        () => undefined,
+      );
     },
-    [updateInstance],
+    [instances, updateInstance, disconnectWs, displayFrame],
   );
 
   const setControlSourceMode = useCallback(
     (trainId: string, mode: ControlSourceMode) => {
-      const current = instances.get(trainId);
-      if (!current || current.controlSourceMode === mode) return;
-      if (mode === "SIMULATION") {
-        // Stop sockets and erase the server-side PLC context before web controls
-        // become available again.
+      const cur = instances.get(trainId);
+      if (!cur || cur.controlSourceMode === mode) return;
+      if (mode === "SIMULATION")
         void resetProtocol704(trainId).catch(() => undefined);
-      }
-      updateInstance(trainId, (cur) => ({
-        ...cur,
+      updateInstance(trainId, (c) => ({
+        ...c,
         controlSourceMode: mode,
-        isPaused: mode === "LAB_DRIVER_DESK" ? true : cur.isPaused,
-        departureAuthorized: mode === "LAB_DRIVER_DESK" ? false : cur.departureAuthorized,
-        handleResetToken: cur.handleResetToken + 1,
+        departureAuthorized:
+          mode === "LAB_DRIVER_DESK" ? false : c.departureAuthorized,
+        handleResetToken: c.handleResetToken + 1,
       }));
-      setDisplayState((state) => state?.trainId === trainId ? null : state);
     },
     [instances, updateInstance],
   );
 
-  const handleTogglePause = useCallback(
-    (trainId: string) => {
-      updateInstance(trainId, (cur) => {
-        if (cur.controlSourceMode === "LAB_DRIVER_DESK") return cur;
-        if (cur.status !== "playing" || !cur.departureAuthorized) return cur;
-        return { ...cur, isPaused: !cur.isPaused };
-      });
-    },
-    [updateInstance],
-  );
-
   const handleDepartAuthorized = useCallback(
-    (trainId: string, departureState = "RUNNING") => {
-      updateInstance(trainId, (cur) => ({
-        ...cur,
-        departureAuthorized: true,
-        isPaused: false,
-        result: cur.result
-          ? {
-              ...cur.result,
-              summary: {
-                ...cur.result.summary,
-                departureState: departureState as "RUNNING",
-              },
-            }
-          : cur.result,
-      }));
+    (trainId: string) => {
+      updateInstance(trainId, (cur) => ({ ...cur, departureAuthorized: true }));
     },
     [updateInstance],
   );
 
   const handleDispatchHold = useCallback(
     (trainId: string) => {
-      const refs = instanceRefs.current.get(trainId);
-      if (!refs?.stateRef || refs.stateRef.velocity <= 0.05) {
-        updateInstance(trainId, (cur) => ({
-          ...cur,
-          isPaused: true,
-          holdAfterBraking: false,
-        }));
-        return;
-      }
-
-      // Do not freeze a moving train.  The safety command replaces the remaining
-      // local trajectory with an ATP emergency-brake curve, then holds at zero.
-      updateInstance(trainId, (cur) => ({
-        ...cur,
-        holdAfterBraking: true,
-        isPaused: false,
-      }));
-      handleControl(trainId, "atp_emergency_brake", 0, refs.drivingModeRef);
+      updateInstance(trainId, (cur) => ({ ...cur, status: "playing" }));
+      handleControl(trainId, "atp_emergency_brake", 0, "ato");
     },
     [updateInstance, handleControl],
   );
-
   const handleDispatchRecovery = useCallback(
     (trainId: string) => {
       updateInstance(trainId, (cur) => ({
         ...cur,
         drivingMode: "ato",
-        isPaused: false,
-        holdAfterBraking: false,
         status: "playing",
       }));
       handleControl(trainId, "traction", 0, "ato");
     },
     [updateInstance, handleControl],
   );
-
   const handleRequestManual = useCallback(
-    (trainId: string) => {
-      void handleControl(trainId, "set_manual", 0, "ato");
+    (tid: string) => {
+      void handleControl(tid, "set_manual", 0, "ato");
     },
     [handleControl],
   );
-
   const handleTractionLevel = useCallback(
-    (trainId: string, _level: number, levelPercent: number) => {
-      const refs = instanceRefs.current.get(trainId);
+    (tid: string, _l: number, pct: number) => {
       handleControl(
-        trainId,
+        tid,
         "traction",
         0,
-        refs?.drivingModeRef ?? "manual",
-        levelPercent,
+        instancesRef.current.get(tid)?.drivingMode ?? "manual",
+        pct,
       );
     },
     [handleControl],
   );
-
   const handleBrakeLevel = useCallback(
-    (
-      trainId: string,
-      _level: number,
-      targetDecel: number,
-      levelPercent: number,
-    ) => {
-      const refs = instanceRefs.current.get(trainId);
+    (tid: string, _l: number, decel: number, pct: number) => {
       handleControl(
-        trainId,
+        tid,
         "brake",
-        targetDecel,
-        refs?.drivingModeRef ?? "manual",
-        levelPercent,
+        decel,
+        instancesRef.current.get(tid)?.drivingMode ?? "manual",
+        pct,
       );
     },
     [handleControl],
   );
-
   const handleCoast = useCallback(
-    (trainId: string) => {
-      const refs = instanceRefs.current.get(trainId);
-      handleControl(trainId, "coast", 0, refs?.drivingModeRef ?? "manual");
+    (tid: string) => {
+      handleControl(
+        tid,
+        "coast",
+        0,
+        instancesRef.current.get(tid)?.drivingMode ?? "manual",
+      );
     },
     [handleControl],
   );
-
   const handleRequestAto = useCallback(
-    (trainId: string) => {
-      handleControl(trainId, "resume_ato", 0, "manual");
+    (tid: string) => {
+      handleControl(tid, "resume_ato", 0, "manual");
     },
     [handleControl],
   );
-
   const handleResetEmergency = useCallback(
-    (trainId: string) => {
-      handleControl(trainId, "reset_emergency", 0, "emergency");
+    (tid: string) => {
+      handleControl(tid, "reset_emergency", 0, "emergency");
     },
     [handleControl],
   );
-
   const handleEmergencyBrake = useCallback(
-    (trainId: string) => {
-      const refs = instanceRefs.current.get(trainId);
-      if (!refs) return;
-      const {
-        drivingModeRef: prevMode,
-        stateRef: state,
-        resultRef: res,
-      } = refs;
-      updateInstance(trainId, (cur) => ({ ...cur, drivingMode: "emergency" }));
-      handleControl(trainId, "emergency_brake", 0, prevMode);
-      if (state) {
-        const lineStart = res?.summary.lineStartPosition ?? 0;
+    (tid: string) => {
+      const cur = instancesRef.current.get(tid);
+      if (!cur) return;
+      updateInstance(tid, (inst) => ({ ...inst, drivingMode: "emergency" }));
+      handleControl(tid, "emergency_brake", 0, cur.drivingMode);
+      if (displayFrame) {
         void reportOnboardEvent({
-          trainId,
+          trainId: tid,
           eventType: "ATP_EB_TRIGGERED",
-          timestampSeconds: state.time,
-          positionMeters: state.absolutePosition ?? lineStart + state.position,
-          speedKmh: state.velocity * 3.6,
+          timestampSeconds: displayFrame.time,
+          positionMeters:
+            displayFrame.absolutePosition ?? displayFrame.position,
+          speedKmh: displayFrame.velocity * 3.6,
           severity: "CRITICAL",
-          details: "车载端触发紧急制动，请求总控保持停车并重新评估运行策略",
+          details: "车载端触发紧急制动",
         });
       }
     },
-    [updateInstance, handleControl],
+    [updateInstance, handleControl, displayFrame],
   );
 
+  // ── 派生值 ──
   const ai = activeInstance ?? createInstance(activeTrainId);
-  const currentState: TrainState | null =
-    ai.result && ai.result.states.length > 0
-      ? ai.result.states[ai.frameIndex]
-      : null;
-  const viewState =
-    displayState?.trainId === activeTrainId ? displayState : currentState;
-  const canResetEmergency =
-    ai.drivingMode === "emergency" && ai.result?.summary?.nextMode === "manual";
-  const targetStopPosition = ai.result?.stopResult?.targetStopPosition ?? 1200;
-  const speedLimitValue =
-    ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
-  const lineStartPosition = ai.result?.summary?.lineStartPosition ?? 0;
-  const fromStationName = ai.result?.summary?.fromStationName ?? null;
-  const toStationName = ai.result?.summary?.toStationName ?? null;
+  const viewState = displayFrame;
+  const canResetEmergency = ai.drivingMode === "emergency";
   const isLoading = ai.status === "loading";
   const isPlaying = ai.status === "playing";
-  const canReset = ai.result !== null || ai.status === "error";
+  const canReset =
+    ai.status === "finished" || ai.status === "error" || isPlaying;
   const labDriverDeskMode = ai.controlSourceMode === "LAB_DRIVER_DESK";
   const toStationOptions = STATIONS.filter(
     (s) => s.stationId > ai.fromStationId,
   );
-  const totalStations = ai.result?.summary?.totalStations;
-  const completedStops = ai.result?.summary?.completedStops;
-
   const trainIds = Array.from(instances.keys());
 
-  useEffect(() => {
-    const states = ai.result?.states;
-    if (!states || states.length === 0) {
-      setDisplayState(null);
-      return undefined;
-    }
-
-    const frame = states[ai.frameIndex];
-    if (
-      ai.status !== "playing" ||
-      ai.isPaused ||
-      ai.frameIndex >= states.length - 1
-    ) {
-      setDisplayState(frame);
-      return undefined;
-    }
-
-    const nextFrame = states[ai.frameIndex + 1];
-    const span = nextFrame.time - frame.time;
-    const startedAt = performance.now();
-    let rafId = 0;
-
-    const tick = () => {
-      const elapsedSeconds = (performance.now() - startedAt) / 1000;
-      const fraction = clamp(
-        span > 0 ? (elapsedSeconds * ai.speedMultiplier) / span : 1,
-        0,
-        1,
-      );
-      setDisplayState({
-        time: frame.time + span * fraction,
-        position:
-          frame.position + (nextFrame.position - frame.position) * fraction,
-        velocity:
-          frame.velocity + (nextFrame.velocity - frame.velocity) * fraction,
-        acceleration:
-          frame.acceleration +
-          (nextFrame.acceleration - frame.acceleration) * fraction,
-        phase: frame.phase,
-        trainId: frame.trainId,
-        absolutePosition:
-          frame.absolutePosition !== undefined &&
-          nextFrame.absolutePosition !== undefined
-            ? frame.absolutePosition +
-              (nextFrame.absolutePosition - frame.absolutePosition) * fraction
-            : frame.absolutePosition,
-        tractionForce:
-          (frame.tractionForce ?? 0) +
-          ((nextFrame.tractionForce ?? 0) - (frame.tractionForce ?? 0)) *
-            fraction,
-        brakeForce:
-          (frame.brakeForce ?? 0) +
-          ((nextFrame.brakeForce ?? 0) - (frame.brakeForce ?? 0)) * fraction,
-        availableMotors: frame.availableMotors,
-      });
-      if (fraction < 1) {
-        rafId = window.requestAnimationFrame(tick);
-      }
-    };
-
-    rafId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(rafId);
-  }, [
-    activeTrainId,
-    ai.result,
-    ai.frameIndex,
-    ai.status,
-    ai.isPaused,
-    ai.speedMultiplier,
-    ai.trajectoryVersion,
-  ]);
+  // 清理
+  useEffect(() => () => disconnectWs(), [disconnectWs]);
 
   if (!activeInstance) {
     return (
       <div className="vehicle-page">
         <div className="vehicle-empty flex flex-col items-center gap-3">
           <span>暂无车载实例</span>
-          <button
-            type="button"
-            className="vehicle-tab-add"
-            onClick={addInstance}
-            title="添加新车载实例"
-          >
+          <button className="vehicle-tab-add" onClick={addInstance}>
             ＋ 添加车辆
           </button>
         </div>
@@ -977,13 +753,13 @@ function Vehicle() {
 
   return (
     <div className="vehicle-page">
-      {/* ═══ 多实例标签栏 ═══ */}
+      {/* 标签栏 */}
       <div className="vehicle-tab-bar">
         <div className="vehicle-tab-list">
           {trainIds.map((tid) => {
             const inst = instances.get(tid);
             const isActive = tid === activeTrainId;
-            const statusIcon =
+            const icon =
               inst?.status === "playing"
                 ? "▶"
                 : inst?.status === "finished"
@@ -995,23 +771,19 @@ function Vehicle() {
                 className={`vehicle-tab ${isActive ? "is-active" : ""}`}
               >
                 <button
-                  type="button"
                   className="vehicle-tab-btn"
                   onClick={() => switchToTrain(tid)}
-                  title={`切换到 ${tid}`}
                 >
-                  <span className="vehicle-tab-dot">{statusIcon}</span>
+                  <span className="vehicle-tab-dot">{icon}</span>
                   <span>{tid}</span>
                 </button>
                 {trainIds.length > 1 && (
                   <button
-                    type="button"
                     className="vehicle-tab-close"
                     onClick={(e) => {
                       e.stopPropagation();
                       removeInstance(tid);
                     }}
-                    title={`关闭 ${tid}`}
                   >
                     ×
                   </button>
@@ -1020,49 +792,38 @@ function Vehicle() {
             );
           })}
         </div>
-        <button
-          type="button"
-          className="vehicle-tab-add"
-          onClick={addInstance}
-          title="添加新车载实例"
-        >
+        <button className="vehicle-tab-add" onClick={addInstance}>
           ＋
         </button>
       </div>
 
-      {/* ═══ Header（活跃实例的操作栏）═══ */}
+      {/* Header */}
       <header className="vehicle-page__header">
         <div>
           <p className="vehicle-page__eyebrow">Onboard cab HMI</p>
           <h2>车载驾驶台系统 · {activeTrainId}</h2>
         </div>
         <div className="vehicle-page__actions">
-          {/* 起止站选择器 */}
-          <div className="vehicle-station-selector" aria-label="起止站选择">
-            <label
-              htmlFor="from-station-select"
-              className="vehicle-station-label"
-            >
-              出发站
-            </label>
+          <div className="vehicle-station-selector">
+            <label htmlFor="fs">出发站</label>
             <select
-              id="from-station-select"
+              id="fs"
               className="vehicle-station-select"
               value={ai.fromStationId}
               disabled={isLoading || isPlaying}
-              onChange={(e) => {
-                const newFrom = Number(e.target.value);
+              onChange={(e) =>
                 updateInstance(activeTrainId, (cur) => {
-                  let newTo = cur.toStationId;
-                  if (newTo <= newFrom) {
-                    const nextId = STATIONS.find(
-                      (s) => s.stationId > newFrom,
+                  const nf = Number(e.target.value);
+                  let nt = cur.toStationId;
+                  if (nt <= nf) {
+                    const nx = STATIONS.find(
+                      (s) => s.stationId > nf,
                     )?.stationId;
-                    if (nextId !== undefined) newTo = nextId;
+                    if (nx !== undefined) nt = nx;
                   }
-                  return { ...cur, fromStationId: newFrom, toStationId: newTo };
-                });
-              }}
+                  return { ...cur, fromStationId: nf, toStationId: nt };
+                })
+              }
             >
               {STATIONS.filter(
                 (s) => s.stationId < STATIONS[STATIONS.length - 1].stationId,
@@ -1072,17 +833,10 @@ function Vehicle() {
                 </option>
               ))}
             </select>
-
             <span className="vehicle-station-arrow">→</span>
-
-            <label
-              htmlFor="to-station-select"
-              className="vehicle-station-label"
-            >
-              目标站
-            </label>
+            <label htmlFor="ts">目标站</label>
             <select
-              id="to-station-select"
+              id="ts"
               className="vehicle-station-select"
               value={ai.toStationId}
               disabled={isLoading || isPlaying}
@@ -1100,11 +854,9 @@ function Vehicle() {
               ))}
             </select>
           </div>
-
-          <div className="vehicle-control-mode" role="group" aria-label="控制来源">
+          <div className="vehicle-control-mode" role="group">
             <span>控制来源</span>
             <button
-              type="button"
               className={!labDriverDeskMode ? "is-active" : ""}
               disabled={isLoading || isPlaying}
               onClick={() => setControlSourceMode(activeTrainId, "SIMULATION")}
@@ -1112,20 +864,19 @@ function Vehicle() {
               软件仿真
             </button>
             <button
-              type="button"
               className={labDriverDeskMode ? "is-active" : ""}
               disabled={isLoading || isPlaying}
-              onClick={() => setControlSourceMode(activeTrainId, "LAB_DRIVER_DESK")}
+              onClick={() =>
+                setControlSourceMode(activeTrainId, "LAB_DRIVER_DESK")
+              }
             >
               实验室司机台
             </button>
           </div>
-
           <button
             className="vehicle-start-btn"
             onClick={() => handleStart(activeTrainId)}
             disabled={isLoading || isPlaying}
-            type="button"
           >
             {isLoading
               ? "准备中..."
@@ -1136,148 +887,82 @@ function Vehicle() {
                   : "上线并等待发车"}
           </button>
           <button
-            className="vehicle-secondary-btn"
-            onClick={() => handleTogglePause(activeTrainId)}
-            disabled={labDriverDeskMode || !isPlaying || !ai.departureAuthorized}
-            type="button"
-          >
-            {labDriverDeskMode
-              ? "由实体手柄控制"
-              : !ai.departureAuthorized && isPlaying
-                ? "等待调度发车"
-              : ai.isPaused
-                ? "继续"
-                : "暂停"}
-          </button>
-          <button
             className="vehicle-ghost-btn"
             onClick={() => handleReset(activeTrainId)}
             disabled={!canReset || isLoading}
-            type="button"
           >
             复位
           </button>
-
-          <div className="vehicle-speed-group" aria-label="播放倍速">
-            {SPEED_MULTIPLIER_OPTIONS.map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`vehicle-speed-btn${ai.speedMultiplier === m ? " is-active" : ""}`}
-                onClick={() =>
-                  updateInstance(activeTrainId, (cur) => ({
-                    ...cur,
-                    speedMultiplier: m,
-                  }))
-                }
-                disabled={labDriverDeskMode || (!ai.result && ai.status !== "playing")}
-                aria-pressed={ai.speedMultiplier === m}
-              >
-                {m}x
-              </button>
-            ))}
-          </div>
-
-          {/* 区间 / 多站信息 */}
-          {fromStationName && toStationName ? (
-            <span className="vehicle-section-label">
-              {fromStationName} → {toStationName}
-              {totalStations && totalStations > 2
-                ? ` (${completedStops}/${totalStations - 1}站)`
-                : ""}
-            </span>
-          ) : (
-            <span className="vehicle-section-label vehicle-section-label--pending">
-              {(STATIONS.find((s) => s.stationId === ai.fromStationId)
-                ?.displayNameOverride ??
-                STATIONS.find((s) => s.stationId === ai.fromStationId)
-                  ?.displayName) ||
-                `站${ai.fromStationId}`}
-              {" → "}
-              {(STATIONS.find((s) => s.stationId === ai.toStationId)
-                ?.displayNameOverride ??
-                STATIONS.find((s) => s.stationId === ai.toStationId)
-                  ?.displayName) ||
-                `站${ai.toStationId}`}
-            </span>
-          )}
-
           {isPlaying && viewState && (
             <span className="vehicle-status-text">
-              {labDriverDeskMode ? "司机台同步" : ai.isPaused ? "已暂停" : "播放中"}
-              {!labDriverDeskMode && <> · {ai.frameIndex + 1}/{ai.result?.states.length}</>}
-              {" · "}t={viewState.time.toFixed(1)}s{" · "}模式:
-              {ai.drivingMode.toUpperCase()}
+              {labDriverDeskMode ? "司机台同步" : "播放中"} · t=
+              {viewState.time.toFixed(1)}s · 模式:{ai.drivingMode.toUpperCase()}
             </span>
           )}
           {ai.status === "finished" && (
             <span className="vehicle-status-text">仿真完成</span>
           )}
+          {ai.fromStationName && ai.toStationName && (
+            <span className="vehicle-section-label">
+              {ai.fromStationName} → {ai.toStationName}
+            </span>
+          )}
         </div>
       </header>
 
-      {/* ═══ 所有实例的总控联调面板（隐藏非活跃实例，但保持挂载以维持通信）═══ */}
+      {/* IntegrationPanel */}
       {trainIds.map((tid) => {
         const inst = instances.get(tid)!;
-        const instState: TrainState | null =
-          inst.controlSourceMode === "LAB_DRIVER_DESK" && displayState?.trainId === tid
-            ? displayState
-            : inst.result && inst.result.states.length > 0
-              ? inst.result.states[inst.frameIndex]
-              : null;
-        const instFromName =
-          inst.result?.summary?.fromStationName ??
-          STATIONS.find((s) => s.stationId === inst.fromStationId)
-            ?.displayNameOverride ??
-          STATIONS.find((s) => s.stationId === inst.fromStationId)
-            ?.displayName ??
-          String(inst.fromStationId);
-        const instToName =
-          inst.result?.summary?.toStationName ??
-          STATIONS.find((s) => s.stationId === inst.toStationId)
-            ?.displayNameOverride ??
-          STATIONS.find((s) => s.stationId === inst.toStationId)?.displayName ??
-          String(inst.toStationId);
-        const instLineStart = inst.result?.summary?.lineStartPosition ?? 0;
-        const isActive = tid === activeTrainId;
-
         return (
           <div
             key={`ip-${tid}`}
-            style={{ display: isActive ? undefined : "none" }}
+            style={{ display: tid === activeTrainId ? undefined : "none" }}
           >
             <IntegrationPanel
               trainId={tid}
-              localState={instState}
+              localState={tid === activeTrainId ? displayFrame : null}
               pageStatus={inst.status}
-              paused={inst.isPaused}
+              paused={false}
               fromStationId={inst.fromStationId}
               toStationId={inst.toStationId}
-              fromStationName={instFromName}
-              toStationName={instToName}
-              lineStartPosition={instLineStart}
+              fromStationName={
+                inst.fromStationName ??
+                STATIONS.find((s) => s.stationId === inst.fromStationId)
+                  ?.displayNameOverride ??
+                STATIONS.find((s) => s.stationId === inst.fromStationId)
+                  ?.displayName ??
+                String(inst.fromStationId)
+              }
+              toStationName={
+                inst.toStationName ??
+                STATIONS.find((s) => s.stationId === inst.toStationId)
+                  ?.displayNameOverride ??
+                STATIONS.find((s) => s.stationId === inst.toStationId)
+                  ?.displayName ??
+                String(inst.toStationId)
+              }
+              lineStartPosition={inst.lineStartPosition}
               drivingMode={inst.drivingMode}
-              departureState={inst.result?.summary?.departureState}
+              departureState="RUNNING"
               departureAuthorized={inst.departureAuthorized}
-              onDepartAuthorized={(state) => handleDepartAuthorized(tid, state)}
+              onDepartAuthorized={() => handleDepartAuthorized(tid)}
               onDispatchHold={() => handleDispatchHold(tid)}
               onDispatchRecovery={() => handleDispatchRecovery(tid)}
               externalControl={inst.controlSourceMode === "LAB_DRIVER_DESK"}
-              onManualApproved={() => {
+              onManualApproved={() =>
                 updateInstance(tid, (cur) => ({
                   ...cur,
                   drivingMode: "manual" as DrivingMode,
-                }));
-              }}
-              onManualRejected={() => {
-                console.log("人工接管被中控拒绝");
-              }}
+                }))
+              }
+              onManualRejected={() => console.log("人工接管被中控拒绝")}
               onTrainOfflined={handleTrainOfflined}
             />
           </div>
         );
       })}
 
+      {/* Protocol704Panel */}
       {trainIds.map((tid) => (
         <div
           key={`p704-${tid}`}
@@ -1285,86 +970,39 @@ function Vehicle() {
         >
           <Protocol704Panel
             trainId={tid}
-            enabled={instances.get(tid)?.controlSourceMode === "LAB_DRIVER_DESK"}
-            onError={(message) => {
-              updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
-            }}
-            onRealtimeState={(state, mode, departureState) => {
-              setDisplayState({ ...state, trainId: tid });
+            enabled={true}
+            onError={(msg) =>
+              updateInstance(tid, (cur) => ({ ...cur, errorMessage: msg }))
+            }
+            onRealtimeState={(state, mode, ds) => {
+              if (state.velocity == null || state.position == null) return;
+              setDisplayFrame({ ...state, trainId: tid });
               updateInstance(tid, (cur) => ({
                 ...cur,
                 drivingMode: mode.toLowerCase() as DrivingMode,
-                departureAuthorized: departureState === 'RUNNING',
+                departureAuthorized: ds === "RUNNING",
               }));
             }}
             getCurrentState={() => {
-              const refs = instanceRefs.current.get(tid);
-              if (!refs?.stateRef) return null;
+              const cur = instancesRef.current.get(tid);
+              const cs = displayFrame;
+              if (!cs || !cur) return null;
               return {
                 trainId: tid,
-                fromStationId: refs.fromStationIdRef,
-                toStationId: refs.toStationIdRef,
-                currentState: refs.stateRef,
-                currentMode: refs.drivingModeRef,
-                departureConfirmed: instances.get(tid)?.departureAuthorized ?? false,
+                fromStationId: cur.fromStationId,
+                toStationId: cur.toStationId,
+                currentState: cs,
+                currentMode: cur.drivingMode,
+                departureConfirmed: cur.departureAuthorized,
               };
             }}
-            onExecutedState={(state, mode, departureState, latched, result) => {
-              setDisplayState({ ...state, trainId: tid });
-              if (mode === "MANUAL" || mode === "EMERGENCY" || mode === "ATO") {
-                updateInstance(tid, (cur) => ({
-                  ...cur,
-                  drivingMode: mode.toLowerCase() as DrivingMode,
-                  // PLC frames are the only physical clock in laboratory mode.
-                  // Keep the local trajectory paused even after departure is granted.
-                  isPaused: cur.controlSourceMode === "LAB_DRIVER_DESK"
-                    ? true
-                    : departureState !== "RUNNING",
-                  departureAuthorized: departureState === "RUNNING",
-                }));
-              }
-
-              if (result && result.states && result.states.length > 0) {
-                updateInstance(tid, (cur) => {
-                  if (!cur.result) return cur;
-                  const refs = instanceRefs.current.get(tid);
-                  const frameIndex = refs?.frameIndexRef ?? cur.frameIndex;
-                  const before = cur.result.states.slice(0, frameIndex + 1);
-                  const incomingSafetyEvents = Array.isArray(result.safetyEvents)
-                    ? result.safetyEvents
-                    : [];
-                  return {
-                    ...cur,
-                    result: {
-                      ...cur.result,
-                      states: [
-                        ...before,
-                        ...result.states.map((snapshot) => ({
-                          ...snapshot,
-                          trainId: tid,
-                        })),
-                      ],
-                      stopResult: result.stopResult ?? cur.result.stopResult,
-                      safetyEvents: [
-                        ...(cur.result.safetyEvents ?? []),
-                        ...incomingSafetyEvents,
-                      ],
-                      summary: {
-                        ...cur.result.summary,
-                        currentMode:
-                          result.summary.currentMode ?? cur.result.summary.currentMode,
-                        nextMode: result.summary.nextMode ?? cur.result.summary.nextMode,
-                      },
-                    },
-                    allSafetyEvents: [...cur.allSafetyEvents, ...incomingSafetyEvents],
-                    trajectoryVersion: cur.trajectoryVersion + 1,
-                    isPaused: latched ? false : cur.isPaused,
-                    holdAfterBraking: latched ? true : cur.holdAfterBraking,
-                    status: "playing",
-                    errorMessage: null,
-                  };
-                });
-              }
+            onExecutedState={(state, mode, ds, _latched) => {
+              setDisplayFrame({ ...state, trainId: tid });
+              updateInstance(tid, (cur) => ({
+                ...cur,
+                drivingMode: mode.toLowerCase() as DrivingMode,
+                departureAuthorized: ds === "RUNNING",
+              }));
             }}
           />
         </div>
@@ -1373,48 +1011,36 @@ function Vehicle() {
       {ai.status === "error" && (
         <div className="vehicle-error">
           <span>仿真失败：{ai.errorMessage}</span>
-          <button onClick={() => handleStart(activeTrainId)} type="button">
-            重试
-          </button>
+          <button onClick={() => handleStart(activeTrainId)}>重试</button>
         </div>
       )}
 
-      {/* SafetyEvent 紧凑展示区 */}
       {ai.allSafetyEvents.length > 0 && (
-        <div className="vehicle-safety-bar" role="alert" aria-label="安全事件">
+        <div className="vehicle-safety-bar" role="alert">
           <strong>⚠ 安全事件({ai.allSafetyEvents.length})：</strong>
           {ai.allSafetyEvents.slice(-3).map((ev, i) => (
             <span key={i} className="vehicle-safety-chip">
               {ev.reason} t={ev.time.toFixed(0)}s pos={ev.position.toFixed(0)}m
-              v={ev.velocity.toFixed(1)}m/s [{ev.action}]
             </span>
           ))}
-          {ai.allSafetyEvents.length > 3 && (
-            <span className="vehicle-safety-chip">…</span>
-          )}
         </div>
       )}
 
-      {/* 主内容区 */}
       <div className="vehicle-main-area">
         <DriverCabView
           status={ai.status}
           currentState={viewState}
           startPosition={0}
-          targetStopPosition={targetStopPosition}
-          speedLimit={speedLimitValue}
-          stopResult={ai.result?.stopResult ?? null}
+          targetStopPosition={ai.targetStopPosition}
+          speedLimit={ai.speedLimit}
+          stopResult={null}
           safetyEventCount={ai.allSafetyEvents.length}
-          isPaused={labDriverDeskMode ? false : ai.isPaused}
-          stationStops={ai.result?.stationStops}
+          isPaused={false}
+          stationStops={ai.stationStops}
           externalDriveMode={ai.drivingMode}
           onRequestManual={() => handleRequestManual(activeTrainId)}
-          onTractionLevel={(level, percent) =>
-            handleTractionLevel(activeTrainId, level, percent)
-          }
-          onBrakeLevel={(level, decel, percent) =>
-            handleBrakeLevel(activeTrainId, level, decel, percent)
-          }
+          onTractionLevel={(l, p) => handleTractionLevel(activeTrainId, l, p)}
+          onBrakeLevel={(l, d, p) => handleBrakeLevel(activeTrainId, l, d, p)}
           onCoast={() => handleCoast(activeTrainId)}
           onEmergencyBrake={() => handleEmergencyBrake(activeTrainId)}
           onRequestAto={() => handleRequestAto(activeTrainId)}
@@ -1427,21 +1053,18 @@ function Vehicle() {
         <div className="vehicle-right-panel">
           <div className="vehicle-right-tabs">
             <button
-              type="button"
               className={`vehicle-right-tab ${rightPanelTab === "lineRun" ? "is-active" : ""}`}
               onClick={() => setRightPanelTab("lineRun")}
             >
               线路运行
             </button>
             <button
-              type="button"
               className={`vehicle-right-tab ${rightPanelTab === "tractionCurve" ? "is-active" : ""}`}
               onClick={() => setRightPanelTab("tractionCurve")}
             >
               牵引曲线
             </button>
             <button
-              type="button"
               className={`vehicle-right-tab ${rightPanelTab === "timetable" ? "is-active" : ""}`}
               onClick={() => setRightPanelTab("timetable")}
             >
@@ -1454,11 +1077,11 @@ function Vehicle() {
               status={ai.status}
               currentState={viewState}
               startPosition={0}
-              targetStopPosition={targetStopPosition}
-              speedLimit={speedLimitValue}
-              stopResult={ai.result?.stopResult ?? null}
-              positionOffset={lineStartPosition}
-              stationStops={ai.result?.stationStops}
+              targetStopPosition={ai.targetStopPosition}
+              speedLimit={ai.speedLimit}
+              stopResult={null}
+              positionOffset={ai.lineStartPosition}
+              stationStops={ai.stationStops}
             />
           )}
           <div
@@ -1472,14 +1095,14 @@ function Vehicle() {
               currentState={viewState}
               status={ai.status}
               availableMotors={viewState?.availableMotors ?? 16}
-              trainMass={ai.result?.summary?.trainMass ?? 225_000}
+              trainMass={ai.trainMass}
             />
           </div>
           {rightPanelTab === "timetable" && (
             <TimetableView
               currentState={viewState}
               status={ai.status}
-              stationStops={ai.result?.stationStops}
+              stationStops={ai.stationStops}
               fromStationId={ai.fromStationId}
               toStationId={ai.toStationId}
             />

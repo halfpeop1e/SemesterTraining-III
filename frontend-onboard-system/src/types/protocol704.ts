@@ -32,6 +32,7 @@ export interface MappedControlCommand704 {
 export interface RealtimeVehicleState704 {
   trainId: string;
   lastUpdateTime: number;
+  simulationTimeSeconds?: number;  // 仿真时间（与后端 SimulationService 统一）
   positionM: number;
   velocityMs: number;
   accelerationMs2: number;

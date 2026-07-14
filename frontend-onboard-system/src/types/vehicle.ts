@@ -33,6 +33,8 @@ export interface TrainState {
   brakeForce?: number;
   /** 当前可用电机数（默认16, 后端新增字段）。 */
   availableMotors?: number;
+  /** 总阻力减速度 m/s²（Davis+坡度+隧道），后端新增字段。 */
+  resistanceDecel?: number;
 }
 
 /** 仿真总结指标。 */

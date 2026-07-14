@@ -89,9 +89,11 @@ export default function Protocol704Panel({
       setStatus(next);
       const realtime = next.realtimeVehicleState;
       if (realtime) {
+        // 使用后端统一的仿真时间（simulationTimeSeconds），非纪元时间
+        const simTime = realtime.simulationTimeSeconds ?? (realtime.lastUpdateTime / 1000);
         onRealtimeState?.({
           trainId,
-          time: realtime.lastUpdateTime / 1000,
+          time: simTime,
           position: realtime.positionM,
           velocity: realtime.velocityMs,
           acceleration: realtime.accelerationMs2,

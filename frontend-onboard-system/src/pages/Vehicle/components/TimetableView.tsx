@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { StationStop, TrainState } from "../../../types/vehicle";
 import { STATIONS } from "../data/lineMap";
 import "./TimetableView.css";
@@ -214,4 +214,4 @@ function TimetableView({
   );
 }
 
-export default TimetableView;
+export default memo(TimetableView);

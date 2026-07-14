@@ -49,6 +49,17 @@ export interface DriverCabViewProps {
   /** Physical laboratory desk controls commands while this is true. */
   controlLocked?: boolean;
   controlLockMessage?: string;
+  // ── 信号系统增强字段 ──
+  /** 前方信号灯色: 0=红, 1=绿, 2=白。对应信号屏 MMI _nSigState。 */
+  signalAspectCode?: number;
+  /** 驾驶模式协议编码: 0=DTO, 1=ATO, 2=AR, 3=SM, 4=RM。 */
+  protocolModeCode?: number;
+  /** 紧急制动是否锁存（PLC 锁存型按钮）。 */
+  ebLatched?: boolean;
+  /** 门模式: 0=半自动, 1=手动, 2=自动。 */
+  doorMode?: number;
+  /** 门是否全关。 */
+  doorsClosed?: boolean;
 }
 
 interface ProjectionPoint {
@@ -688,6 +699,11 @@ function DriverCabView({
   handleResetToken,
   controlLocked = false,
   controlLockMessage,
+  signalAspectCode,
+  protocolModeCode,
+  ebLatched,
+  doorMode,
+  doorsClosed,
 }: DriverCabViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -713,6 +729,54 @@ function DriverCabView({
   const effectiveDriveMode: DriveMode =
     externalDriveMode === 'ato' || externalDriveMode === 'manual' ? externalDriveMode : driveMode;
   const handlesDisabled = controlLocked || isEmergencyMode || effectiveDriveMode !== 'manual';
+
+  const normalizedPhase = normalizePhase(currentState?.phase);
+
+  // ── 司机台状态（对齐物理司机台操作手册）──
+  const [keySwitchOn, setKeySwitchOn] = useState(false);
+  const [directionHandle, setDirectionHandle] = useState<0 | 1 | 2>(0);
+  const [doorModeLocal, setDoorModeLocal] = useState<0 | 1 | 2>(0);
+  const [atoBtn1Held, setAtoBtn1Held] = useState(false);
+  const [atoBtn2Held, setAtoBtn2Held] = useState(false);
+  const [turnbackActive, setTurnbackActive] = useState(false);
+  const [atoLampFlashing, setAtoLampFlashing] = useState(false);
+  const [parkingBrakeApplied, setParkingBrakeApplied] = useState(false);
+
+  // 双 ATO 按钮同时按下 2 秒检测
+  const atoPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (atoBtn1Held && atoBtn2Held) {
+      if (!atoPressTimerRef.current) {
+        atoPressTimerRef.current = setTimeout(() => {
+          if (effectiveDriveMode === 'ato' && onRequestAto) {
+            onRequestAto();
+          } else if (effectiveDriveMode === 'manual' && onRequestAto) {
+            setDriveMode('ato');
+            onRequestAto();
+          }
+          setAtoBtn1Held(false);
+          setAtoBtn2Held(false);
+          setAtoLampFlashing(false);
+          atoPressTimerRef.current = null;
+        }, 2000);
+      }
+    } else {
+      if (atoPressTimerRef.current) {
+        clearTimeout(atoPressTimerRef.current);
+        atoPressTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (atoPressTimerRef.current) clearTimeout(atoPressTimerRef.current);
+    };
+  }, [atoBtn1Held, atoBtn2Held, effectiveDriveMode, onRequestAto]);
+
+  // ATO 灯闪烁：到站停稳且具备 ATO 模式且钥匙开启时
+  useEffect(() => {
+    if (normalizedPhase === 'stopped' && (externalDriveMode === 'ato' || driveMode === 'ato') && keySwitchOn) {
+      setAtoLampFlashing(true);
+    }
+  }, [normalizedPhase, externalDriveMode, driveMode, keySwitchOn]);
 
   // 同步外部模式：用 useEffect，不在 render 期间 setState
   useEffect(() => {
@@ -828,7 +892,6 @@ function DriverCabView({
   );
   // 全程总目标距离（用于 summary 信息展示）
   const totalDistanceToTarget = targetStopPosition - currentPosition;
-  const normalizedPhase = normalizePhase(currentState?.phase);
   const operatingMode = getOperatingMode(status, isPaused);
   const speedRatio = speedLimit > 0 ? currentVelocity / speedLimit : 0;
   const speedGaugeDeg = clamp(speedRatio, 0, 1.18) * 270;
@@ -884,30 +947,52 @@ function DriverCabView({
     return '已越过目标';
   }, [distanceToTarget, stationStops, currentPosition]);
 
+  const signalAspectLabel = useMemo(() => {
+    if (signalAspectCode === 1) return { text: '绿灯·通过', cls: 'cab-system-light--ok' };
+    if (signalAspectCode === 2) return { text: '白灯·调车', cls: 'cab-system-light--info' };
+    return { text: '红灯·停车', cls: 'cab-system-light--danger' };
+  }, [signalAspectCode]);
+
+  const modeLabel = useMemo(() => {
+    const labels: Record<number, string> = { 0: 'DTO', 1: 'ATO', 2: 'AR', 3: 'SM', 4: 'RM' };
+    return labels[protocolModeCode ?? 1] ?? 'ATO';
+  }, [protocolModeCode]);
+
   const systemLights = useMemo(
     () => [
       {
-        label: '安全保护',
-        value: safetyEventCount === 0 ? '正常' : `已触发 ${safetyEventCount}`,
-        tone: safetyEventCount === 0 ? 'ok' : 'warn',
+        label: '前方信号',
+        value: signalAspectLabel.text,
+        tone: signalAspectLabel.cls.includes('ok') ? 'ok'
+          : signalAspectLabel.cls.includes('danger') ? 'danger' : 'info',
+      },
+      {
+        label: '驾驶模式',
+        value: modeLabel,
+        tone: 'ok' as const,
       },
       {
         label: 'ATP 防护',
-        value: '仿真防护',
-        tone: 'info',
+        value: safetyEventCount === 0 ? '正常' : `触发 ${safetyEventCount}`,
+        tone: safetyEventCount === 0 ? ('ok' as const) : ('warn' as const),
       },
       {
-        label: '通信状态',
-        value: status === 'error' ? '异常' : '已连接',
-        tone: status === 'error' ? 'danger' : 'ok',
+        label: '门状态',
+        value: doorsClosed === false ? '门开' : doorsClosed === true ? '全关' : '--',
+        tone: doorsClosed === false ? ('warn' as const) : ('ok' as const),
       },
       {
-        label: '系统状态',
-        value: status === 'error' ? '故障' : '正常',
-        tone: status === 'error' ? 'danger' : 'ok',
+        label: '紧急制动',
+        value: ebLatched ? '已锁存' : '就绪',
+        tone: ebLatched ? ('danger' as const) : ('ok' as const),
+      },
+      {
+        label: '通信',
+        value: status === 'error' ? '异常' : '在线',
+        tone: status === 'error' ? ('danger' as const) : ('ok' as const),
       },
     ],
-    [safetyEventCount, status],
+    [signalAspectLabel, modeLabel, safetyEventCount, doorsClosed, ebLatched, status],
   );
 
   // Speed ratio for ThreeRailwayView motion sense

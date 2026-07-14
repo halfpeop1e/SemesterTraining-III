@@ -3,7 +3,6 @@ import {
   ackDispatchCommand,
   applyManualDecision,
   confirmVehicleDeparture,
-  getOnboardCommands,
   getOnboardSnapshot,
   reportOnboardEvent,
   reportOnboardStatus,
@@ -98,25 +97,16 @@ export default function IntegrationPanel({
 
   const refresh = async () => {
     try {
-      // Snapshot already uses CommandBus.forOnboard() (increments deliveryAttempts).
-      // Fall back to dedicated onboard commands API if snapshot fails partially.
       const snap = await getOnboardSnapshot(trainId);
       if (snap.train) {
         wasRegisteredRef.current = true;
       } else if (wasRegisteredRef.current && !offlinedRef.current) {
-        // Do not remove a newly opened, not-yet-online tab. Only a train that was
-        // previously confirmed by the control centre can be offlined remotely.
         offlinedRef.current = true;
         setMessage("总控已删除此车，车载实例正在下线");
         onTrainOfflinedRef.current?.(trainId);
         return;
       }
-      try {
-        const delivered = await getOnboardCommands(trainId);
-        setSnapshot({ ...snap, commands: delivered });
-      } catch {
-        setSnapshot(snap);
-      }
+      setSnapshot(snap);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     }
@@ -167,12 +157,22 @@ export default function IntegrationPanel({
   ]);
 
   useEffect(() => {
-    if (externalControl || !localState || !["playing", "finished"].includes(pageStatus)) return;
+    if (
+      externalControl ||
+      !localState ||
+      !["playing", "finished"].includes(pageStatus)
+    )
+      return;
     const action = snapshot?.commands.find(
       (command) =>
-        ["FORCE_HOLD", "HOLD", "EMERGENCY_RECOVERY", "MANUAL_APPROVED", "MANUAL_REJECTED"].includes(
-          command.commandType,
-        ) && ["PENDING", "CONFIRMED"].includes(command.status),
+        [
+          "FORCE_HOLD",
+          "HOLD",
+          "EMERGENCY_RECOVERY",
+          "MANUAL_APPROVED",
+          "MANUAL_REJECTED",
+        ].includes(command.commandType) &&
+        ["PENDING", "CONFIRMED"].includes(command.status),
     );
     if (!action || processedCommandsRef.current.has(action.commandId)) return;
     processedCommandsRef.current.add(action.commandId);
@@ -198,12 +198,26 @@ export default function IntegrationPanel({
         processedCommandsRef.current.delete(action.commandId);
         setMessage(error instanceof Error ? error.message : String(error));
       });
-  }, [snapshot, localState, pageStatus, onDispatchHold, onDispatchRecovery,
-    onManualApproved, onManualRejected, trainId, externalControl]);
+  }, [
+    snapshot,
+    localState,
+    pageStatus,
+    onDispatchHold,
+    onDispatchRecovery,
+    onManualApproved,
+    onManualRejected,
+    trainId,
+    externalControl,
+  ]);
 
   const reportCurrent = async () => {
     const state = localStateRef.current;
-    if (externalControl || !state || !["playing", "finished"].includes(pageStatus)) return;
+    if (
+      externalControl ||
+      !state ||
+      !["playing", "finished"].includes(pageStatus)
+    )
+      return;
     const absPos = state.absolutePosition ?? lineStartPosition + state.position;
     const indices = resolveStationIndices(absPos);
     await reportOnboardStatus({
@@ -218,10 +232,10 @@ export default function IntegrationPanel({
       currentStationId: String(STATIONS[indices.current].stationId),
       nextStationId: String(STATIONS[indices.next].stationId),
       phase: paused
-          ? "PAUSED"
-          : departureAuthorized || state.velocity > 0.05
-            ? state.phase.toUpperCase()
-            : "READY_TO_DEPART",
+        ? "PAUSED"
+        : departureAuthorized || state.velocity > 0.05
+          ? state.phase.toUpperCase()
+          : "READY_TO_DEPART",
       delaySeconds: 0,
       health: "HEALTHY",
       lineId: "BJ-L9",
@@ -274,7 +288,10 @@ export default function IntegrationPanel({
     <section className="integration-panel" aria-label="总控联调">
       <div>
         <strong>总控联调 · {trainId}</strong>　
-        <span>{externalControl ? "实验室司机台状态由 704 控制桥同步" : message}</span>　
+        <span>
+          {externalControl ? "实验室司机台状态由 704 控制桥同步" : message}
+        </span>
+        　
         <span>
           ATP {snapshot?.safetyStatus ?? "--"} · 发车状态{" "}
           {departureState ?? "READY_TO_DEPART"}
@@ -288,18 +305,19 @@ export default function IntegrationPanel({
         {snapshot?.movementAuthorityMeters?.toFixed(0) ?? "0"} m
       </div>
       <div>
-        {!externalControl && snapshot?.commands.map((command) => (
-          <button
-            key={command.commandId}
-            type="button"
-            onClick={async () => {
-              await ackDispatchCommand(command.commandId);
-              await refresh();
-            }}
-          >
-            ACK {command.commandType} · {command.status}
-          </button>
-        ))}
+        {!externalControl &&
+          snapshot?.commands.map((command) => (
+            <button
+              key={command.commandId}
+              type="button"
+              onClick={async () => {
+                await ackDispatchCommand(command.commandId);
+                await refresh();
+              }}
+            >
+              ACK {command.commandType} · {command.status}
+            </button>
+          ))}
       </div>
       <button
         type="button"

@@ -48,13 +48,13 @@ async function integrationRequest<T>(path: string, init?: RequestInit): Promise<
 export const getOnboardSnapshot = (trainId: string) =>
   integrationRequest<OnboardSnapshot>(`/signal/train/${trainId}/snapshot`);
 export const ackDispatchCommand = (commandId: string, executionStatus = 'EXECUTING') =>
-  integrationRequest<DispatchCommand>('/dispatch/commands/ack', {
+  integrationRequest<DispatchCommand>('/signal/command/ack', {
     method: 'POST', body: JSON.stringify({ commandId, accepted: true, executionStatus }),
   });
 export const reportOnboardStatus = (payload: object) =>
   integrationRequest<string>('/signal/report/status', { method: 'POST', body: JSON.stringify(payload) });
 export const reportOnboardEvent = (payload: object) =>
-  integrationRequest<string>('/dispatch/report/event', { method: 'POST', body: JSON.stringify(payload) });
+  integrationRequest<string>('/signal/report/event', { method: 'POST', body: JSON.stringify(payload) });
 
 export async function runVehicleSimulation(
   request?: SimulationRunRequest,
@@ -80,6 +80,22 @@ export async function runVehicleSimulation(
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+export interface StreamSimulationResponse {
+  success: boolean; message?: string;
+  data?: { trainId: string; totalFrames: number; duration: number; message: string };
+}
+
+export async function streamVehicleSimulation(
+  request?: SimulationRunRequest & { speed?: number },
+): Promise<{ success: boolean; message?: string; data?: Record<string, unknown> }> {
+  const res = await fetch(`${API_BASE}/vehicle/simulation/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: request ? JSON.stringify(request) : undefined,
+  });
+  return res.json() as Promise<{ success: boolean; message?: string; data?: Record<string, unknown> }>;
 }
 
 export interface ManualRequestPending {
@@ -139,9 +155,6 @@ export async function resetVehicleSimulation(
   if (!res.ok || !body.success) throw new Error(body.message || '车载复位失败');
   return body.data;
 }
-
-export const getOnboardCommands = (trainId: string) =>
-  integrationRequest<DispatchCommand[]>(`/onboard/${trainId}/commands`);
 
 export async function confirmVehicleDeparture(trainId: string): Promise<{ status: string; departureState?: string }> {
   const res = await fetch(`${API_BASE}/vehicle/simulation/depart-confirm`, {
