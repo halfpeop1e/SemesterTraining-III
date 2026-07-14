@@ -17,6 +17,8 @@ import com.bjtu.railtransit.vehicle.service.VehicleSimulationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -27,6 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class Protocol704VehicleControlBridge {
+    private static final Logger log = LoggerFactory.getLogger(Protocol704VehicleControlBridge.class);
+
     public static final String SOURCE_WEB_HMI = "WEB_HMI";
     public static final String SOURCE_PLC = "PLC_704_LOCAL_V1";
     public static final String SOURCE_ATO = "ATO";
@@ -38,7 +42,10 @@ public class Protocol704VehicleControlBridge {
     private static final long MIN_CONTINUATION_INTERVAL_MS = 450L;
     private static final double STOPPED_SPEED_MPS = 0.05;
     private static final double STATION_STOP_MARGIN_M = 12.0;
-    /** Conservative local protection when a physical desk keeps its traction handle applied. */
+    /**
+     * Conservative local protection when a physical desk keeps its traction handle
+     * applied.
+     */
     private static final double STATION_BRAKE_MARGIN_M = 12.0;
     /** Five seconds at the scheduler's 500 ms period. */
     private static final int AUTOMATIC_DOOR_DWELL_TICKS = 10;
@@ -59,16 +66,16 @@ public class Protocol704VehicleControlBridge {
     private final Map<String, StatusReport> pendingDispatchReports = new ConcurrentHashMap<>();
 
     public Protocol704VehicleControlBridge(VehicleSimulationService vehicleSimulationService,
-                                           DemoScenarioProvider demoScenarioProvider,
-                                           LineProfileJsonLoader lineProfileJsonLoader) {
+            DemoScenarioProvider demoScenarioProvider,
+            LineProfileJsonLoader lineProfileJsonLoader) {
         this(vehicleSimulationService, demoScenarioProvider, lineProfileJsonLoader, null);
     }
 
     @Autowired
     public Protocol704VehicleControlBridge(VehicleSimulationService vehicleSimulationService,
-                                           DemoScenarioProvider demoScenarioProvider,
-                                           LineProfileJsonLoader lineProfileJsonLoader,
-                                           SimulationService dispatchSimulationService) {
+            DemoScenarioProvider demoScenarioProvider,
+            LineProfileJsonLoader lineProfileJsonLoader,
+            SimulationService dispatchSimulationService) {
         this.vehicleSimulationService = vehicleSimulationService;
         this.demoScenarioProvider = demoScenarioProvider;
         this.lineProfileJsonLoader = lineProfileJsonLoader;
@@ -76,12 +83,12 @@ public class Protocol704VehicleControlBridge {
     }
 
     public void registerSimulation(String trainId, int fromStationId, int toStationId,
-                                   SimulationResult result, DrivingMode mode) {
+            SimulationResult result, DrivingMode mode) {
         registerSimulation(trainId, fromStationId, toStationId, result, mode, true, false);
     }
 
     public void registerSimulation(String trainId, int fromStationId, int toStationId,
-                                   SimulationResult result, DrivingMode mode, boolean departureAuthorized) {
+            SimulationResult result, DrivingMode mode, boolean departureAuthorized) {
         registerSimulation(trainId, fromStationId, toStationId, result, mode, departureAuthorized, false);
     }
 
@@ -93,8 +100,8 @@ public class Protocol704VehicleControlBridge {
      * a platform automatically.
      */
     public void registerSimulation(String trainId, int fromStationId, int toStationId,
-                                   SimulationResult result, DrivingMode mode, boolean departureAuthorized,
-                                   boolean directHandleControl) {
+            SimulationResult result, DrivingMode mode, boolean departureAuthorized,
+            boolean directHandleControl) {
         registerSimulation(trainId, fromStationId, toStationId, result, mode, departureAuthorized,
                 directHandleControl, false);
     }
@@ -105,10 +112,11 @@ public class Protocol704VehicleControlBridge {
      * or terminal station.
      */
     public void registerSimulation(String trainId, int fromStationId, int toStationId,
-                                   SimulationResult result, DrivingMode mode, boolean departureAuthorized,
-                                   boolean directHandleControl, boolean laboratoryAutoDeparture) {
+            SimulationResult result, DrivingMode mode, boolean departureAuthorized,
+            boolean directHandleControl, boolean laboratoryAutoDeparture) {
         if (trainId == null || trainId.isBlank() || result == null || result.getStates() == null
-                || result.getStates().isEmpty()) return;
+                || result.getStates().isEmpty())
+            return;
         ActiveSimulationContext context = new ActiveSimulationContext(trainId, fromStationId, toStationId,
                 copy(result.getStates().get(0)), mode == null ? DrivingMode.ATO : mode);
         context.departureAuthorized = departureAuthorized;
@@ -123,11 +131,13 @@ public class Protocol704VehicleControlBridge {
     }
 
     public void recordWebControl(String trainId, SimulationControlRequest request, SimulationResult result) {
-        if (trainId == null || trainId.isBlank() || request == null || request.getCurrentState() == null) return;
+        if (trainId == null || trainId.isBlank() || request == null || request.getCurrentState() == null)
+            return;
         ActiveSimulationContext context = contexts.get(trainId);
         // Normal web driving must not implicitly create a PLC-bound context.
         // A context is created only by a simulation run that opts in explicitly.
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             if (context.emergencyLatched) {
                 return;
@@ -154,12 +164,14 @@ public class Protocol704VehicleControlBridge {
     }
 
     public void triggerTurnback(String trainId) {
-        if (trainId == null) return;
+        if (trainId == null)
+            return;
         turnbackInProgress.put(trainId, Boolean.TRUE);
     }
 
     public void completeTurnback(String trainId) {
-        if (trainId == null) return;
+        if (trainId == null)
+            return;
         turnbackInProgress.remove(trainId);
     }
 
@@ -169,7 +181,8 @@ public class Protocol704VehicleControlBridge {
 
     public void resetEmergencyLatch(String trainId) {
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             clearEmergencyLatch(context, SOURCE_WEB_HMI);
             context.lastUpdatedAt = System.currentTimeMillis();
@@ -182,9 +195,11 @@ public class Protocol704VehicleControlBridge {
      * Keeps Protocol704 test frames and driver-cab control on the same mode.
      */
     public void syncMode(String trainId, DrivingMode mode, String source) {
-        if (trainId == null || trainId.isBlank() || mode == null) return;
+        if (trainId == null || trainId.isBlank() || mode == null)
+            return;
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             context.mode = mode;
             if (source != null && !source.isBlank()) {
@@ -206,34 +221,46 @@ public class Protocol704VehicleControlBridge {
 
     /** Signal-cycle-only departure authorization sync. */
     public void syncDepartureAuth(String trainId, boolean authorized) {
-        if (trainId == null || trainId.isBlank()) return;
+        if (trainId == null || trainId.isBlank())
+            return;
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             context.departureAuthorized = authorized;
             context.departureState = authorized && context.doorsClosed && !context.doorCycleRequired
-                    ? "ATO_READY" : context.doorsClosed ? "READY_TO_DEPART" : context.doorState;
+                    ? "ATO_READY"
+                    : context.doorsClosed ? "READY_TO_DEPART" : context.doorState;
             context.lastUpdatedAt = System.currentTimeMillis();
         }
     }
 
     /**
-     * Sync the current simulation state from the frontend ATO playback into the Bridge context.
-     * <p>Only updates state/mode/station context — does NOT trigger simulation, does NOT clear
-     * emergencyLatched, does NOT call reset. Used before sending 704 test frames so EB starts
-     * from the actual current position rather than the initial registered state.</p>
+     * Sync the current simulation state from the frontend ATO playback into the
+     * Bridge context.
+     * <p>
+     * Only updates state/mode/station context — does NOT trigger simulation, does
+     * NOT clear
+     * emergencyLatched, does NOT call reset. Used before sending 704 test frames so
+     * EB starts
+     * from the actual current position rather than the initial registered state.
+     * </p>
      *
-     * <p>坐标语义：currentState.position 是累计相对里程（从线路起点算），
+     * <p>
+     * 坐标语义：currentState.position 是累计相对里程（从线路起点算），
      * currentState.absolutePosition 是绝对里程。两者语义不同，不可互换。
      * syncCurrentState 原样保存，runContinuation 会以 position 作为 currentCumulativePos。
      * The deprecated departureAuthorized argument is intentionally ignored:
-     * a state sync must never authorize physical movement.</p>
+     * a state sync must never authorize physical movement.
+     * </p>
      */
     public void syncCurrentState(String trainId, TrainState currentState, DrivingMode mode,
-                                 Integer fromStationId, Integer toStationId, Boolean departureAuthorized) {
-        if (trainId == null || trainId.isBlank() || currentState == null) return;
+            Integer fromStationId, Integer toStationId, Boolean departureAuthorized) {
+        if (trainId == null || trainId.isBlank() || currentState == null)
+            return;
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             // 不清除 emergencyLatched —— 只有 resetEmergencyLatch 可以清除
             context.currentState = copy(currentState);
@@ -257,32 +284,46 @@ public class Protocol704VehicleControlBridge {
     /** Read-only diagnosis for the driver-desk ATO workflow. */
     public String atoWorkflowState(String trainId) {
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return "NO_ACTIVE_SIMULATION";
+        if (context == null)
+            return "NO_ACTIVE_SIMULATION";
         synchronized (context) {
-            if (context.emergencyLatched) return "ATP_EMERGENCY_BRAKE";
-            if (context.atoRunning) return "ATO_RUNNING";
-            if (!context.keySwitchOn) return "KEY_SWITCH_OFF";
-            if (!context.doorsClosed) return "DOORS_OPEN";
-            if (context.doorCycleRequired) return "DOOR_CYCLE_REQUIRED";
-            if (!context.departureAuthorized) return "WAITING_SIGNAL_AUTHORIZATION";
+            if (context.emergencyLatched)
+                return "ATP_EMERGENCY_BRAKE";
+            if (context.atoRunning)
+                return "ATO_RUNNING";
+            if (!context.keySwitchOn)
+                return "KEY_SWITCH_OFF";
+            if (!context.doorsClosed)
+                return "DOORS_OPEN";
+            if (context.doorCycleRequired)
+                return "DOOR_CYCLE_REQUIRED";
+            if (!context.departureAuthorized)
+                return "WAITING_SIGNAL_AUTHORIZATION";
             return "ATO_READY";
         }
     }
 
-    /** True while this train was deliberately configured for laboratory desk control. */
+    /**
+     * True while this train was deliberately configured for laboratory desk
+     * control.
+     */
     public boolean isLaboratoryControlEnabled(String trainId) {
         return trainId != null && !trainId.isBlank() && contexts.containsKey(trainId);
     }
 
-    /** Highest-priority ATP intervention, independent of the current control owner. */
+    /**
+     * Highest-priority ATP intervention, independent of the current control owner.
+     */
     public void applyAtpEmergencyBrake(String trainId) {
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             // Signal supervision may report the same unsafe MA on consecutive
             // cycles. One emergency trajectory is enough; regenerating it from
             // an already-braking state would make the stop non-deterministic.
-            if (context.emergencyLatched) return;
+            if (context.emergencyLatched)
+                return;
             context.atoRunning = false;
             context.atoTrajectory = List.of();
             context.atoFrameIndex = 0;
@@ -298,19 +339,27 @@ public class Protocol704VehicleControlBridge {
         }
     }
 
-    /** Remove laboratory control ownership without changing any web simulation instance. */
+    /**
+     * Remove laboratory control ownership without changing any web simulation
+     * instance.
+     */
     public void unregisterSimulation(String trainId) {
-        if (trainId == null || trainId.isBlank()) return;
+        if (trainId == null || trainId.isBlank())
+            return;
         contexts.remove(trainId);
         if (dispatchSimulationService != null) {
             dispatchSimulationService.releaseDriverDeskControl(trainId);
         }
     }
 
-    /** Thread-safe read model for laboratory output adapters; never exposes mutable context. */
+    /**
+     * Thread-safe read model for laboratory output adapters; never exposes mutable
+     * context.
+     */
     public ControlStateSnapshot snapshot(String trainId) {
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return null;
+        if (context == null)
+            return null;
         synchronized (context) {
             TrainState state = copy(context.currentState);
             // Vehicle dynamics keeps position relative to the selected origin
@@ -330,24 +379,28 @@ public class Protocol704VehicleControlBridge {
         }
     }
 
-    /** Snapshot the train IDs currently participating in the laboratory control model. */
+    /**
+     * Snapshot the train IDs currently participating in the laboratory control
+     * model.
+     */
     public List<String> activeLaboratoryTrainIds() {
         return new ArrayList<>(contexts.keySet());
     }
 
     public record ControlStateSnapshot(String trainId, int fromStationId, int toStationId,
-                                       int currentStationId, int nextTargetStationId,
-                                       double nextTargetAbsolutePositionM,
-                                       TrainState state, double absolutePositionM,
-                                       String mode, String controlSource,
-                                       String lastCommand, double lastLevelPercent,
-                                       boolean emergencyLatched, boolean departureAuthorized,
-                                       boolean doorsClosed, String doorState,
-                                       boolean atoRunning, boolean doorCycleRequired,
-                                       boolean keySwitchOn,
-                                       boolean keyPreparationComplete,
-                                       int directionHandle, int masterHandle,
-                                       long lastUpdatedAt) {}
+            int currentStationId, int nextTargetStationId,
+            double nextTargetAbsolutePositionM,
+            TrainState state, double absolutePositionM,
+            String mode, String controlSource,
+            String lastCommand, double lastLevelPercent,
+            boolean emergencyLatched, boolean departureAuthorized,
+            boolean doorsClosed, String doorState,
+            boolean atoRunning, boolean doorCycleRequired,
+            boolean keySwitchOn,
+            boolean keyPreparationComplete,
+            int directionHandle, int masterHandle,
+            long lastUpdatedAt) {
+    }
 
     /**
      * Applies discrete cab inputs that are not motion commands. The PLC sends a
@@ -356,18 +409,22 @@ public class Protocol704VehicleControlBridge {
      * confirmation; no physical PLC output is implied here.
      */
     public void updateCabInputs(String trainId, Map<String, Object> fields) {
-        if (trainId == null || trainId.isBlank() || fields == null) return;
+        if (trainId == null || trainId.isBlank() || fields == null)
+            return;
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             boolean keyRisingEdge = false;
             if (fields.containsKey("key_switch_on")) {
                 keyRisingEdge = updateKeyPreparation(context, bool(fields.get("key_switch_on")));
             }
             Integer directionHandle = integer(fields.get("direction_handle"));
-            if (directionHandle != null) context.directionHandle = directionHandle;
+            if (directionHandle != null)
+                context.directionHandle = directionHandle;
             Integer masterHandle = integer(fields.get("master_handle"));
-            if (masterHandle != null) context.masterHandle = masterHandle;
+            if (masterHandle != null)
+                context.masterHandle = masterHandle;
             boolean openRight = bool(fields.get("door_open_right"));
             boolean closeRight = bool(fields.get("door_close_right"));
             boolean openLeft = bool(fields.get("door_open_left"));
@@ -425,7 +482,10 @@ public class Protocol704VehicleControlBridge {
         }
     }
 
-    /** Read-only preflight state for binding a physical PLC desk to a simulated train. */
+    /**
+     * Read-only preflight state for binding a physical PLC desk to a simulated
+     * train.
+     */
     public ControlReadiness readiness(String trainId) {
         ActiveSimulationContext context = contexts.get(trainId);
         if (context == null) {
@@ -443,7 +503,8 @@ public class Protocol704VehicleControlBridge {
     }
 
     public record ControlReadiness(String trainId, boolean ready, String reason, String mode,
-                                   String departureState, String controlSource, long lastUpdatedAt) {}
+            String departureState, String controlSource, long lastUpdatedAt) {
+    }
 
     public Protocol704CommandLifecycle execute(String trainId, MappedControlCommand mapped) {
         return execute(trainId, mapped, SOURCE_ATO, "legacy-2arg", -1);
@@ -456,7 +517,7 @@ public class Protocol704VehicleControlBridge {
     }
 
     public Protocol704CommandLifecycle execute(String trainId, MappedControlCommand mapped,
-                                               String source, String connectionId, int port) {
+            String source, String connectionId, int port) {
         Protocol704CommandLifecycle lifecycle = lifecycle(trainId, mapped, source, connectionId, port);
         lifecycle.setStatus("RECEIVED");
         if (mapped == null || Protocol704LocalV1ControlAdapter.toLocalV1(mapped).isEmpty()) {
@@ -467,7 +528,8 @@ public class Protocol704VehicleControlBridge {
             lifecycle.setSource(source);
         }
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return reject(lifecycle, "NO_ACTIVE_SIMULATION");
+        if (context == null)
+            return reject(lifecycle, "NO_ACTIVE_SIMULATION");
         synchronized (context) {
             lifecycle.setActiveTrainId(context.trainId);
             lifecycle.setSessionId(context.sessionId);
@@ -485,7 +547,8 @@ public class Protocol704VehicleControlBridge {
             boolean modeCommand = "SET_MANUAL".equals(command) || "RESUME_ATO".equals(command)
                     || "ATO_START".equals(command)
                     || "DEPART_CONFIRM".equals(command);
-            boolean isOrdinaryMotionCommand = "traction".equals(command) || "coast".equals(command) || "brake".equals(command);
+            boolean isOrdinaryMotionCommand = "traction".equals(command) || "coast".equals(command)
+                    || "brake".equals(command);
 
             if (context.emergencyLatched && !emergency) {
                 lifecycle.setResultMode(DrivingMode.EMERGENCY.name());
@@ -603,8 +666,10 @@ public class Protocol704VehicleControlBridge {
                 return lifecycle;
             }
 
-            if (!emergency && !context.departureAuthorized) return reject(lifecycle, "NOT_READY_TO_DEPART");
-            if (!emergency && context.mode != DrivingMode.MANUAL) return reject(lifecycle, "MODE_NOT_MANUAL");
+            if (!emergency && !context.departureAuthorized)
+                return reject(lifecycle, "NOT_READY_TO_DEPART");
+            if (!emergency && context.mode != DrivingMode.MANUAL)
+                return reject(lifecycle, "MODE_NOT_MANUAL");
 
             if (!emergency && Boolean.TRUE.equals(turnbackInProgress.get(trainId)) && isOrdinaryMotionCommand) {
                 return reject(lifecycle, "TURNBACK_IN_PROGRESS");
@@ -666,7 +731,8 @@ public class Protocol704VehicleControlBridge {
                         stationProtection ? "brake" : command, context.currentState);
                 context.currentState = copy(executed);
                 context.mode = emergency ? DrivingMode.EMERGENCY
-                        : result.getSummary().getCurrentMode() == null ? context.mode : result.getSummary().getCurrentMode();
+                        : result.getSummary().getCurrentMode() == null ? context.mode
+                                : result.getSummary().getCurrentMode();
                 if (emergency) {
                     context.controlSource = SOURCE_EMERGENCY;
                     if (connectionId != null) {
@@ -707,7 +773,8 @@ public class Protocol704VehicleControlBridge {
 
     public void notifyPlcDisconnected(String trainId, int port, String connectionId) {
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) return;
+        if (context == null)
+            return;
         synchronized (context) {
             if (context.plcConnectionId != null && context.plcConnectionId.equals(connectionId)
                     && context.plcPort == port) {
@@ -719,7 +786,7 @@ public class Protocol704VehicleControlBridge {
     }
 
     private static Protocol704CommandLifecycle lifecycle(String trainId, MappedControlCommand mapped,
-                                                          String source, String connectionId, int port) {
+            String source, String connectionId, int port) {
         Protocol704CommandLifecycle lifecycle = new Protocol704CommandLifecycle();
         lifecycle.setCommandId("704-local-v1-" + UUID.randomUUID());
         lifecycle.setReceivedAt(System.currentTimeMillis());
@@ -935,8 +1002,8 @@ public class Protocol704VehicleControlBridge {
     }
 
     private Protocol704CommandLifecycle startAto(ActiveSimulationContext context,
-                                                  MappedControlCommand mapped,
-                                                  Protocol704CommandLifecycle lifecycle) {
+            MappedControlCommand mapped,
+            Protocol704CommandLifecycle lifecycle) {
         lifecycle.setStatus("VALIDATED");
         if (context.atoRunning) {
             lifecycle.setResultMode(DrivingMode.ATO.name());
@@ -947,16 +1014,23 @@ public class Protocol704VehicleControlBridge {
             lifecycle.setStatus("EXECUTED");
             return lifecycle;
         }
-        if (!context.keySwitchOn) return reject(lifecycle, "KEY_SWITCH_NOT_ON");
+        if (!context.keySwitchOn)
+            return reject(lifecycle, "KEY_SWITCH_NOT_ON");
         if (SOURCE_PLC.equals(lifecycle.getSource()) && !context.keyPreparationComplete) {
             return reject(lifecycle, "KEY_CYCLE_INCOMPLETE");
         }
-        if (!context.departureAuthorized) return reject(lifecycle, "SIGNAL_DEPARTURE_NOT_AUTHORIZED");
-        if (!context.doorsClosed) return reject(lifecycle, "DOORS_NOT_CLOSED");
-        if (context.doorCycleRequired) return reject(lifecycle, "DOOR_CYCLE_INCOMPLETE");
-        if (!"FORWARD".equals(mapped.getDirection())) return reject(lifecycle, "ATO_DIRECTION_NOT_FORWARD");
-        if (mapped.getMasterHandle() != 0) return reject(lifecycle, "ATO_MASTER_HANDLE_NOT_ZERO");
-        if (context.currentTargetStationId > context.toStationId) return reject(lifecycle, "NO_NEXT_STATION");
+        if (!context.departureAuthorized)
+            return reject(lifecycle, "SIGNAL_DEPARTURE_NOT_AUTHORIZED");
+        if (!context.doorsClosed)
+            return reject(lifecycle, "DOORS_NOT_CLOSED");
+        if (context.doorCycleRequired)
+            return reject(lifecycle, "DOOR_CYCLE_INCOMPLETE");
+        if (!"FORWARD".equals(mapped.getDirection()))
+            return reject(lifecycle, "ATO_DIRECTION_NOT_FORWARD");
+        if (mapped.getMasterHandle() != 0)
+            return reject(lifecycle, "ATO_MASTER_HANDLE_NOT_ZERO");
+        if (context.currentTargetStationId > context.toStationId)
+            return reject(lifecycle, "NO_NEXT_STATION");
 
         context.departureAuthorized = true;
         try {
@@ -1009,10 +1083,12 @@ public class Protocol704VehicleControlBridge {
      * command to any laboratory wayside device.
      */
     private boolean shouldApplyStationProtection(ActiveSimulationContext context, String command) {
-        if (!"traction".equals(command) || context.currentTargetStationId < context.fromStationId) return false;
+        if (!"traction".equals(command) || context.currentTargetStationId < context.fromStationId)
+            return false;
         double remaining = stationDistanceFromOrigin(context, context.currentTargetStationId)
                 - context.currentState.getPosition();
-        if (remaining <= STATION_STOP_MARGIN_M) return true;
+        if (remaining <= STATION_STOP_MARGIN_M)
+            return true;
         double speed = Math.max(0.0, context.currentState.getVelocity());
         double requiredDistance = speed * speed / (2.0 * 1.0)
                 + STATION_BRAKE_MARGIN_M;
@@ -1028,12 +1104,19 @@ public class Protocol704VehicleControlBridge {
         double targetPosition = stationDistanceFromOrigin(context, context.currentTargetStationId);
         // A driver may brake to zero anywhere in the section. Only a stop within
         // the configured approach tolerance is an arrival at the next station.
-        if (!forceAtoTarget && state.getPosition() < targetPosition - STATION_STOP_MARGIN_M) return;
-        if (!forceAtoTarget && state.getVelocity() > STOPPED_SPEED_MPS) return;
+        if (!forceAtoTarget && state.getPosition() < targetPosition - STATION_STOP_MARGIN_M)
+            return;
+        if (!forceAtoTarget && state.getVelocity() > STOPPED_SPEED_MPS)
+            return;
 
         // Continuation physics can stop a few metres short on a conservative
-        // approach. Treat the configured platform tolerance as the authority,
-        // snap the software train to the target and require a new departure.
+        // approach. Record the actual stop offset before aligning with the
+        // platform target, so driver stopping accuracy can be assessed.
+        double stopOffsetM = targetPosition - state.getPosition();
+        if (Math.abs(stopOffsetM) > 0.01) {
+            log.info("Train {} stopped at offset {:.2f}m from platform centre (actual={:.1f}, target={:.1f})",
+                    context.trainId, stopOffsetM, state.getPosition(), targetPosition);
+        }
         state.setPosition(targetPosition);
         state.setAbsolutePosition(stationAbsolutePosition(context.currentTargetStationId));
         state.setVelocity(0.0);
@@ -1094,7 +1177,8 @@ public class Protocol704VehicleControlBridge {
     }
 
     private void publishToDispatch(ActiveSimulationContext context) {
-        if (dispatchSimulationService == null) return;
+        if (dispatchSimulationService == null)
+            return;
         TrainState state = copy(context.currentState);
         StatusReport report = new StatusReport();
         report.setTrainId(context.trainId);
@@ -1151,16 +1235,19 @@ public class Protocol704VehicleControlBridge {
     }
 
     private double absolutePosition(ActiveSimulationContext context, TrainState state) {
-        if (state.getAbsolutePosition() != null) return state.getAbsolutePosition();
+        if (state.getAbsolutePosition() != null)
+            return state.getAbsolutePosition();
         return stationAbsolutePosition(context.fromStationId) + state.getPosition();
     }
 
     private int currentStationFor(ActiveSimulationContext context, TrainState state) {
-        if (state.getVelocity() <= STOPPED_SPEED_MPS) return context.currentStationId;
+        if (state.getVelocity() <= STOPPED_SPEED_MPS)
+            return context.currentStationId;
         double position = absolutePosition(context, state);
         int current = context.fromStationId;
         for (StationEntry station : lineProfileJsonLoader.listStations()) {
-            if (station.id > context.toStationId || station.km * 1000.0 > position + STATION_STOP_MARGIN_M) break;
+            if (station.id > context.toStationId || station.km * 1000.0 > position + STATION_STOP_MARGIN_M)
+                break;
             current = station.id;
         }
         return current;
@@ -1178,8 +1265,7 @@ public class Protocol704VehicleControlBridge {
         return lineProfileJsonLoader.listStations().stream()
                 .filter(station -> station.id == stationId)
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("unknown station id " + stationId))
-                .km * 1000.0;
+                .orElseThrow(() -> new IllegalArgumentException("unknown station id " + stationId)).km * 1000.0;
     }
 
     private String stationName(int stationId) {
@@ -1191,11 +1277,15 @@ public class Protocol704VehicleControlBridge {
     }
 
     private static TrainState selectObservableState(List<TrainState> states, String command, TrainState fallback) {
-        if (states == null || states.isEmpty()) return fallback;
+        if (states == null || states.isEmpty())
+            return fallback;
         for (TrainState state : states) {
-            if ("traction".equals(command) && state.getAcceleration() > 0.0 && state.getVelocity() > fallback.getVelocity()) return state;
+            if ("traction".equals(command) && state.getAcceleration() > 0.0
+                    && state.getVelocity() > fallback.getVelocity())
+                return state;
             if ("brake".equals(command) && state.getAcceleration() < 0.0) {
-                if (state.getVelocity() < fallback.getVelocity() - 0.01) return state;
+                if (state.getVelocity() < fallback.getVelocity() - 0.01)
+                    return state;
             }
             if ("emergency_brake".equals(command)
                     && (state.getAcceleration() < 0.0 || state.getVelocity() < fallback.getVelocity())) {
@@ -1204,7 +1294,8 @@ public class Protocol704VehicleControlBridge {
                     return state;
                 }
             }
-            if ("coast".equals(command) && "COAST".equals(state.getPhase().name())) return state;
+            if ("coast".equals(command) && "COAST".equals(state.getPhase().name()))
+                return state;
         }
         return states.get(Math.min(1, states.size() - 1));
     }
@@ -1222,7 +1313,8 @@ public class Protocol704VehicleControlBridge {
     }
 
     private static Integer integer(Object value) {
-        if (value instanceof Number number) return number.intValue();
+        if (value instanceof Number number)
+            return number.intValue();
         if (value instanceof String text) {
             try {
                 return Integer.parseInt(text.trim());
@@ -1281,7 +1373,8 @@ public class Protocol704VehicleControlBridge {
         int currentStationId;
         int currentTargetStationId;
 
-        ActiveSimulationContext(String trainId, int fromStationId, int toStationId, TrainState currentState, DrivingMode mode) {
+        ActiveSimulationContext(String trainId, int fromStationId, int toStationId, TrainState currentState,
+                DrivingMode mode) {
             this.trainId = trainId;
             this.fromStationId = fromStationId;
             this.toStationId = toStationId;

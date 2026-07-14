@@ -54,54 +54,55 @@ public class SimulationService {
     private final TrainNetworkService networkService;
     private final SignalPlcDepartureService signalPlcDepartureService;
 
-    private boolean simulationRunning = false;
-    private double simulationTimeSeconds = 0;
-    private final Map<String, TrainState> trains = new LinkedHashMap<>();
+    private volatile boolean simulationRunning = false;
+    private volatile double simulationTimeSeconds = 0;
+    private final Map<String, TrainState> trains = new java.util.concurrent.ConcurrentHashMap<>();
     /**
-     * Train IDs deliberately taken offline from the signal page.  Without this
+     * Train IDs deliberately taken offline from the signal page. Without this
      * guard a still-open onboard browser could recreate a deleted train through
      * its next status report.
      */
-    private final Set<String> offlinedTrainIds = new LinkedHashSet<>();
+    private final Set<String> offlinedTrainIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /**
      * Physical 704 driver-desk sessions own train motion. ATS and CBI still
      * supervise them, but must not synthesize a DEPART command or trajectory.
      */
-    private final Set<String> driverDeskControlledTrainIds = new LinkedHashSet<>();
+    private final Set<String> driverDeskControlledTrainIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Last StatusFusion revision consumed for each onboard-driven train. */
-    private final Map<String, Long> fusedOnboardReportRevisions = new LinkedHashMap<>();
+    private final Map<String, Long> fusedOnboardReportRevisions = new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * Last ATS departure authorization per direction; keeps depot departures evenly
      * spaced.
      */
-    private final Map<String, Double> lastDepartureAuthorizationByDirection = new LinkedHashMap<>();
-    private LineProfile lineProfile;
+    private final Map<String, Double> lastDepartureAuthorizationByDirection = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile LineProfile lineProfile;
 
     // ── CBTC 执行层: 牵引/制动系统状态 ──
-    private final Map<String, TractionSystemState> tractionStates = new LinkedHashMap<>();
-    private final Map<String, BrakingSystemState> brakeStates = new LinkedHashMap<>();
+    private final Map<String, TractionSystemState> tractionStates = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, BrakingSystemState> brakeStates = new java.util.concurrent.ConcurrentHashMap<>();
 
     // ── 多质点编组: 每列车的6节车厢独立状态 ──
-    private final Map<String, List<TrainCar>> consistMap = new LinkedHashMap<>();
+    private final Map<String, List<TrainCar>> consistMap = new java.util.concurrent.ConcurrentHashMap<>();
 
     // ── 仿真时钟权威控制 ──
     /** 上次步进的外部系统时间 (ms), 用于防止多客户端重复推进 */
-    private long lastStepSystemTimeMs = 0;
+    private volatile long lastStepSystemTimeMs = 0;
     /** 两次步进间的最小外部时间间隔 (ms), 防止多客户端同时步进 */
     private static final long MIN_STEP_INTERVAL_MS = 300;
 
     // ── 调度指令系统 ──
     /** 每列车当前活跃指令 */
-    private final Map<String, SimulationSnapshot.TrainCommand> activeCommands = new LinkedHashMap<>();
+    private final Map<String, SimulationSnapshot.TrainCommand> activeCommands = new java.util.concurrent.ConcurrentHashMap<>();
     /** 历史指令 */
-    private final List<SimulationSnapshot.TrainCommand> commandLog = new ArrayList<>();
+    private final List<SimulationSnapshot.TrainCommand> commandLog = Collections.synchronizedList(new ArrayList<>());
     /** 晚点事件日志 */
-    private final List<SimulationSnapshot.DelayEvent> delayEventLog = new ArrayList<>();
+    private final List<SimulationSnapshot.DelayEvent> delayEventLog = Collections.synchronizedList(new ArrayList<>());
 
     // ── 记录系统 ──
-    private final List<SimulationSnapshot.TrainPositionPoint> positionHistory = new ArrayList<>();
-    private double lastSampleTime = -10;
-    private final Map<String, List<SimulationSnapshot.StationArrival>> stationArrivalMap = new LinkedHashMap<>();
+    private final List<SimulationSnapshot.TrainPositionPoint> positionHistory = Collections
+            .synchronizedList(new ArrayList<>());
+    private volatile double lastSampleTime = -10;
+    private final Map<String, List<SimulationSnapshot.StationArrival>> stationArrivalMap = new java.util.concurrent.ConcurrentHashMap<>();
     private double totalEnergyKwh = 0;
     private double totalTractionEnergyKwh = 0; // 累计牵引能耗 kWh
     private double totalRegenEnergyKwh = 0; // 累计再生制动回收 kWh
@@ -109,7 +110,7 @@ public class SimulationService {
     private double totalCruisingEnergyKwh = 0; // 累计巡航能耗 kWh
 
     // ── 仿真日志采集（供能源评估等模块使用）──
-    private final List<SimulationLog> simulationLogs = new ArrayList<>();
+    private final List<SimulationLog> simulationLogs = Collections.synchronizedList(new ArrayList<>());
 
     public List<SimulationLog> getSimulationLogs() {
         return new ArrayList<>(simulationLogs);
@@ -118,6 +119,12 @@ public class SimulationService {
     // ── 物理常量 ──
     private static final double EBRAKE_KMH_PER_S = 4.68; // 紧急制动 km/h/s (≈1.3 m/s²)
     private static final double CRUISE_SPEED = 70.0; // 默认巡航速度 km/h
+    /** 进站预减速启动距离(m)：距站台小于此距离且速度>阈值时，施加轻微电制动 */
+    private static final double PRE_DECEL_DISTANCE = 300.0;
+    /** 预减速目标速度(km/h)：降到该速度后惰行，等待最终制动触发 */
+    private static final double PRE_DECEL_TARGET_SPEED_KMH = 50.0;
+    /** 调度层到站位置容差(m)，对齐车辆级 ATO 的 0.5m 容差但保留调度层安全裕度 */
+    private static final double STATION_ARRIVAL_TOLERANCE_M = 2.0;
     /** Minimum scheduled headway for the teaching simulation (same direction). */
     private static final double MIN_DEPARTURE_HEADWAY_SECONDS = 120.0;
     /**
@@ -300,14 +307,19 @@ public class SimulationService {
         return new ArrayList<>(trains.keySet());
     }
 
-    /** Explicit user action starts a new lifecycle for a previously offlined train ID. */
+    /**
+     * Explicit user action starts a new lifecycle for a previously offlined train
+     * ID.
+     */
     public synchronized void restoreTrain(String trainId) {
         if (trainId != null && !trainId.isBlank()) {
             offlinedTrainIds.remove(trainId);
         }
     }
 
-    /** Transfers motion execution to the physical-driver-desk bridge for one train. */
+    /**
+     * Transfers motion execution to the physical-driver-desk bridge for one train.
+     */
     public synchronized void claimDriverDeskControl(String trainId) {
         if (trainId != null && !trainId.isBlank()) {
             driverDeskControlledTrainIds.add(trainId);
@@ -328,11 +340,14 @@ public class SimulationService {
     }
 
     public synchronized TrainState addTrain(String trainId, int headLinkId, String direction,
-                                            int stationId, String routePattern) {
-        if (trainId == null || trainId.isBlank()) throw new IllegalArgumentException("trainId 不能为空");
-        if (trains.containsKey(trainId)) throw new IllegalStateException("列车已存在: " + trainId);
+            int stationId, String routePattern) {
+        if (trainId == null || trainId.isBlank())
+            throw new IllegalArgumentException("trainId 不能为空");
+        if (trains.containsKey(trainId))
+            throw new IllegalStateException("列车已存在: " + trainId);
         offlinedTrainIds.remove(trainId);
-        if (lineProfile == null) lineProfile = lineDataService.getLineProfile();
+        if (lineProfile == null)
+            lineProfile = lineDataService.getLineProfile();
         List<LineProfile.Station> stations = lineProfile.getStations();
         int stationIndex = Math.max(0, Math.min(stations.size() - 1, stationId - 1));
         boolean up = !"DOWN".equalsIgnoreCase(direction);
@@ -380,7 +395,8 @@ public class SimulationService {
 
     public synchronized TrainState removeTrain(String trainId) {
         TrainState removed = trains.remove(trainId);
-        if (removed == null) throw new NoSuchElementException("列车不存在: " + trainId);
+        if (removed == null)
+            throw new NoSuchElementException("列车不存在: " + trainId);
         offlinedTrainIds.add(trainId);
         driverDeskControlledTrainIds.remove(trainId);
         consistMap.remove(trainId);
@@ -400,14 +416,16 @@ public class SimulationService {
 
     public synchronized int clearTrains() {
         int count = trains.size();
-        for (String trainId : new ArrayList<>(trains.keySet())) removeTrain(trainId);
+        for (String trainId : new ArrayList<>(trains.keySet()))
+            removeTrain(trainId);
         broadcastCurrentSnapshot();
         return count;
     }
 
     public synchronized TrainState setTrainRoutePattern(String trainId, String routePattern) {
         TrainState train = trains.get(trainId);
-        if (train == null) throw new NoSuchElementException("列车不存在: " + trainId);
+        if (train == null)
+            throw new NoSuchElementException("列车不存在: " + trainId);
         train.setRoutePattern(normalizeRoutePattern(routePattern));
         TrainState result = copyTrainState(train);
         broadcastCurrentSnapshot();
@@ -415,8 +433,10 @@ public class SimulationService {
     }
 
     /**
-     * Accepts a position report from the independent onboard/driver-desk simulation.
-     * The report becomes the source of truth for that train in the dispatch snapshot,
+     * Accepts a position report from the independent onboard/driver-desk
+     * simulation.
+     * The report becomes the source of truth for that train in the dispatch
+     * snapshot,
      * so the signal topology and onboard page display the same train state.
      */
     public synchronized void acceptOnboardReport(StatusReport report) {
@@ -451,12 +471,14 @@ public class SimulationService {
     }
 
     private void broadcastCurrentSnapshot() {
-        if (webSocketHandler != null) webSocketHandler.broadcast(getSnapshot());
+        if (webSocketHandler != null)
+            webSocketHandler.broadcast(getSnapshot());
     }
 
     private String normalizeRoutePattern(String routePattern) {
         if (RoutePattern.SHORT_N.equals(routePattern) || RoutePattern.SHORT_S.equals(routePattern)
-                || RoutePattern.EXPRESS.equals(routePattern)) return routePattern;
+                || RoutePattern.EXPRESS.equals(routePattern))
+            return routePattern;
         return RoutePattern.FULL;
     }
 
@@ -725,7 +747,8 @@ public class SimulationService {
 
             // Onboard reports own their dwell timeline. Backend-owned trains are
             // handled by atoTrainStep and must not have dwell time incremented twice.
-            if (!"ONBOARD_REPORTED".equals(train.getStateSource())) continue;
+            if (!"ONBOARD_REPORTED".equals(train.getStateSource()))
+                continue;
 
             // DWELLING / TERMINAL_DWELL: 停站管理
             if ("DWELLING".equals(status) || "TERMINAL_DWELL".equals(status)) {
@@ -766,12 +789,15 @@ public class SimulationService {
      * independent safety backstop after the train enters the line.
      */
     private boolean canAuthorizeOnboardDeparture(TrainState candidate) {
-        if (!signalCycleService.isDeparturePermitted(candidate.getTrainId())) return false;
+        if (!signalCycleService.isDeparturePermitted(candidate.getTrainId()))
+            return false;
         com.bjtu.railtransit.signal.domain.MovingAuthority ma = movementAuthorityRegistry.get(candidate.getTrainId());
-        if (ma == null || ma.getMaxSpeedKmh() <= 0) return false;
+        if (ma == null || ma.getMaxSpeedKmh() <= 0)
+            return false;
         double remaining = (ma.getEndOfAuthorityM() - candidate.getPositionMeters())
                 * candidate.getDirectionSign();
-        if (remaining <= 5.0) return false;
+        if (remaining <= 5.0)
+            return false;
 
         String direction = "DOWN".equals(candidate.getDirection()) ? "DOWN" : "UP";
         double last = lastDepartureAuthorizationByDirection.getOrDefault(direction, Double.NEGATIVE_INFINITY);
@@ -798,10 +824,13 @@ public class SimulationService {
 
     private String departureBlockingReason(TrainState train) {
         String signalReason = signalCycleService.departureBlockingReason(train.getTrainId());
-        if (!"NONE".equals(signalReason)) return "WAITING_" + signalReason;
+        if (!"NONE".equals(signalReason))
+            return "WAITING_" + signalReason;
         com.bjtu.railtransit.signal.domain.MovingAuthority ma = movementAuthorityRegistry.get(train.getTrainId());
-        if (ma == null) return "WAITING_MA_UNAVAILABLE";
-        if (ma.getMaxSpeedKmh() <= 0) return "WAITING_ATP_SPEED_ZERO";
+        if (ma == null)
+            return "WAITING_MA_UNAVAILABLE";
+        if (ma.getMaxSpeedKmh() <= 0)
+            return "WAITING_ATP_SPEED_ZERO";
         return "WAITING_DEPARTURE_HEADWAY";
     }
 
@@ -833,7 +862,8 @@ public class SimulationService {
     private void publishAtpInterventions() {
         for (TrainState train : trains.values()) {
             if (!train.isEmergencyBraking()
-                    || !"ATP_EMERGENCY_BRAKE".equals(train.getActiveCommand())) continue;
+                    || !"ATP_EMERGENCY_BRAKE".equals(train.getActiveCommand()))
+                continue;
             if (!integrationCommandBus.hasOpenCommand(train.getTrainId(), "ATP_EMERGENCY_BRAKE")) {
                 integrationCommandBus.issue(train.getTrainId(), "ATP_EMERGENCY_BRAKE", 0,
                         "ATP: 移动授权不足或安全状态丢失", 1000, "ATP", simulationTimeSeconds);
@@ -1386,6 +1416,11 @@ public class SimulationService {
                 cruiseSpeed += boost;
         }
 
+        // ── 惰行模式: 检查活跃COAST指令 ──
+        if (speedCmd != null && "COAST".equals(speedCmd.getCommandType())) {
+            cruiseSpeed = Math.min(cruiseSpeed, speedCmd.getTargetValue());
+        }
+
         // 紧急制动优先
         if (train.isEmergencyBraking()) {
             double newSpeed = Math.max(0, speed - EBRAKE_KMH_PER_S);
@@ -1442,8 +1477,26 @@ public class SimulationService {
                 return;
             }
 
-            // 制动距离
-            double brakingDistance = (speed / 3.6) * (speed / 3.6) / (2 * decelMs2);
+            // ── 坡度补偿有效减速度: a_eff = a_brake + g * (permille/1000) ──
+            int gradePermille = lineDataService.getGradientAtKm(posKm);
+            double gradeCompMs2 = 9.80665 * (gradePermille / 1000.0); // 下坡为负(减小有效制动)
+            double effectiveDecelMs2 = decelMs2 + gradeCompMs2;
+            effectiveDecelMs2 = Math.max(effectiveDecelMs2, 0.3); // 下坡时保护最小有效减速度
+
+            // ── 预减速阶段: 距站台 < 300m 且速度 > 50km/h → 施加轻微电制动 ──
+            if (distToStationM <= PRE_DECEL_DISTANCE && speed > PRE_DECEL_TARGET_SPEED_KMH) {
+                double preDecelKmhPerS = 0.3 * 3.6; // 预减速 0.3 m/s²
+                double newSpeed = Math.max(PRE_DECEL_TARGET_SPEED_KMH, speed - preDecelKmhPerS);
+                train.setSpeed(newSpeed);
+                train.setAcceleration(-preDecelKmhPerS);
+                if (!"BRAKING".equals(status)) {
+                    train.setStatus("BRAKING");
+                }
+                return;
+            }
+
+            // 制动距离 (使用坡度补偿后的有效减速度)
+            double brakingDistance = (speed / 3.6) * (speed / 3.6) / (2 * effectiveDecelMs2);
 
             if (distToStationM <= Math.max(brakingDistance * 1.05, 100)) {
                 if (!"BRAKING".equals(status)) {
@@ -1451,12 +1504,12 @@ public class SimulationService {
                 }
 
                 double requiredDecelMs2 = (speed / 3.6) * (speed / 3.6) / (2 * Math.max(distToStationM, 5.0));
-                double requiredDecelKmh = Math.min(decelMs2 * 3.6, requiredDecelMs2 * 3.6);
-                double newSpeed = Math.max(0, speed - Math.max(requiredDecelKmh, 0.3));
+                double requiredDecelKmh = Math.min(effectiveDecelMs2 * 3.6, Math.max(requiredDecelMs2 * 3.6, 0.5));
+                double newSpeed = Math.max(0, speed - requiredDecelKmh);
                 train.setSpeed(newSpeed);
                 train.setAcceleration(-requiredDecelKmh);
 
-                if (newSpeed <= 0.5 && distToStationM <= 20) {
+                if (newSpeed <= 0.5 && distToStationM <= STATION_ARRIVAL_TOLERANCE_M) {
                     train.setSpeed(0);
                     train.setAcceleration(0);
                     arriveAtStation(train, stations, nextIdx);
@@ -1722,7 +1775,8 @@ public class SimulationService {
     private Map<String, PredictiveController.StrategyEvaluation> lastMpcResults;
 
     /** 能耗历史趋势 (每5秒记录一次) */
-    private final List<SimulationSnapshot.EnergyDataPoint> energyHistory = new ArrayList<>();
+    private final List<SimulationSnapshot.EnergyDataPoint> energyHistory = Collections
+            .synchronizedList(new ArrayList<>());
     private double coastingSavedKwh = 0;
     /** 上次记录能耗趋势的时间 */
     private double lastEnergyHistoryTime = -10;
@@ -1745,12 +1799,12 @@ public class SimulationService {
                 // 记录惰行指令
                 SimulationSnapshot.TrainCommand coastCmd = new SimulationSnapshot.TrainCommand();
                 coastCmd.setTrainId(cd.trainId);
-                coastCmd.setCommandType("SPEED_UP"); // 复用SPEED_UP类型表示惰行节能
+                coastCmd.setCommandType("COAST");
                 coastCmd.setTargetValue(EnergyOptimizer.COAST_CRUISE_SPEED);
                 coastCmd.setReason(cd.reason);
                 coastCmd.setIssuedTime(simulationTimeSeconds);
                 coastCmd.setStatus("EXECUTING");
-                commandLog.add(coastCmd);
+                applyCommand(coastCmd);
             }
         }
 
@@ -1764,12 +1818,12 @@ public class SimulationService {
 
                 SimulationSnapshot.TrainCommand regenCmd = new SimulationSnapshot.TrainCommand();
                 regenCmd.setTrainId(rc.absorbingTrainId);
-                regenCmd.setCommandType("SPEED_UP");
-                regenCmd.setTargetValue(rc.recoverableEnergyKw);
+                regenCmd.setCommandType("REGEN");
+                regenCmd.setTargetValue(OperationLevel.normal().getCruiseSpeedKmh());
                 regenCmd.setReason(rc.reason);
                 regenCmd.setIssuedTime(simulationTimeSeconds);
                 regenCmd.setStatus("EXECUTING");
-                commandLog.add(regenCmd);
+                applyCommand(regenCmd);
             }
         }
 
@@ -1894,11 +1948,15 @@ public class SimulationService {
                 }
             }
 
-            // 清理已恢复列车的 SPEED_UP（仅对非 MPC 管理的列车）
+            // 清理已恢复列车的 SPEED_UP 和 COAST（仅对非 MPC 管理的列车）
+            Set<String> coastTrains = lastEnergyResult != null ? lastEnergyResult.coastingOpportunities.stream()
+                    .map(cd -> cd.trainId)
+                    .collect(Collectors.toSet()) : Collections.emptySet();
             for (Map.Entry<String, SimulationSnapshot.TrainCommand> entry : activeCommands.entrySet()) {
-                if ("SPEED_UP".equals(entry.getValue().getCommandType())
-                        && !speedUpTrains.contains(entry.getKey())
-                        && !mpcHandled.contains(entry.getKey())) {
+                String cmdType = entry.getValue().getCommandType();
+                boolean shouldRemove = ("SPEED_UP".equals(cmdType) && !speedUpTrains.contains(entry.getKey()))
+                        || ("COAST".equals(cmdType) && !coastTrains.contains(entry.getKey()));
+                if (shouldRemove && !mpcHandled.contains(entry.getKey())) {
                     activeCommands.remove(entry.getKey());
                 }
             }
@@ -1929,7 +1987,7 @@ public class SimulationService {
                     : Comparator.comparingDouble(TrainState::getPositionMeters).reversed());
 
             DispatchEngine.DelayResult propResult = dispatchEngine.evaluateDelayPropagation(dirTrains,
-                    simulationTimeSeconds);
+                    simulationTimeSeconds, lineProfile);
             for (SimulationSnapshot.TrainCommand cmd : propResult.commands) {
                 applyCommand(cmd);
             }
@@ -2199,14 +2257,62 @@ public class SimulationService {
     // 指令管理
     // ================================================================
 
+    private enum CommandPriority {
+        EMERGENCY_BRAKE(100),
+        ATP_EMERGENCY_BRAKE(90),
+        HOLD(80),
+        ATC_TRACTION_FAULT(75),
+        ATC_BRAKE_FAULT(75),
+        SLOW(60),
+        SPEED_UP(50),
+        COAST(40),
+        REGEN(35),
+        SKIP_STATION(30),
+        DEPART(20),
+        TERMINAL_DWELL(15),
+        TURN_BACK(15),
+        ARRIVE(10),
+        EMERGENCY_RECOVERY(5);
+
+        private final int priority;
+
+        CommandPriority(int priority) {
+            this.priority = priority;
+        }
+
+        public int getPriority() {
+            return priority;
+        }
+    }
+
+    private int getCommandPriority(String commandType) {
+        if (commandType == null)
+            return 0;
+        try {
+            return CommandPriority.valueOf(commandType).getPriority();
+        } catch (IllegalArgumentException e) {
+            return 25;
+        }
+    }
+
     private void applyCommand(SimulationSnapshot.TrainCommand cmd) {
         cmd.setIssuedTime(simulationTimeSeconds);
         cmd.setStatus("EXECUTING");
-        activeCommands.put(cmd.getTrainId(), cmd);
+
+        String trainId = cmd.getTrainId();
+        SimulationSnapshot.TrainCommand existing = activeCommands.get(trainId);
+        if (existing != null) {
+            int newPriority = getCommandPriority(cmd.getCommandType());
+            int existingPriority = getCommandPriority(existing.getCommandType());
+            if (newPriority < existingPriority) {
+                return;
+            }
+        }
+
+        activeCommands.put(trainId, cmd);
         commandLog.add(cmd);
-        // 同步写入CommandBus，统一指令总线，HMI通过 /api/onboard/{trainId}/snapshot 可获取
         integrationCommandBus.issue(
-                cmd.getTrainId(),
+                trainId,
                 cmd.getCommandType(),
                 cmd.getTargetValue(),
                 cmd.getReason(),
@@ -2372,11 +2478,13 @@ public class SimulationService {
 
         // 指令（按时间顺序排列）
         List<SimulationSnapshot.TrainCommand> cmds = new ArrayList<>(activeCommands.values());
-        for (int i = commandLog.size() - 1; i >= 0 && cmds.size() < 40; i--) {
-            SimulationSnapshot.TrainCommand c = commandLog.get(i);
-            if (cmds.stream().noneMatch(
-                    x -> x.getTrainId().equals(c.getTrainId()) && x.getCommandType().equals(c.getCommandType()))) {
-                cmds.add(c);
+        synchronized (commandLog) {
+            for (int i = commandLog.size() - 1; i >= 0 && cmds.size() < 40; i--) {
+                SimulationSnapshot.TrainCommand c = commandLog.get(i);
+                if (cmds.stream().noneMatch(
+                        x -> x.getTrainId().equals(c.getTrainId()) && x.getCommandType().equals(c.getCommandType()))) {
+                    cmds.add(c);
+                }
             }
         }
         cmds.sort(Comparator.comparingDouble(c -> c.getIssuedTime()));
@@ -2629,7 +2737,9 @@ public class SimulationService {
         return simulationRunning;
     }
 
-    public boolean hasTrains() { return !trains.isEmpty(); }
+    public boolean hasTrains() {
+        return !trains.isEmpty();
+    }
 
     /** 重置仿真 (停止并清空所有状态) */
     // ================================================================

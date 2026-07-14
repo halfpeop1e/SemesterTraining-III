@@ -870,7 +870,7 @@ class Protocol704VehicleControlBridgeTest {
         TrainState synced = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)))
                 .getStates().get(0);
 
-        new Protocol704Service(bridge).reset("RESET_DEFAULT");
+        new Protocol704Service(bridge, null).reset("RESET_DEFAULT");
         assertNull(bridge.getMode("RESET_DEFAULT"));
 
         bridge.syncCurrentState("RESET_DEFAULT", synced, null, 1, 2, false);

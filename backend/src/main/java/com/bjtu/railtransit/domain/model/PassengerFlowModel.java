@@ -4,7 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalTime;
+
 import java.util.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -252,9 +252,8 @@ public class PassengerFlowModel {
      * 每 2 分钟平滑变化一次，避免整点突变。
      */
     private double getEntryCount(int stationId, double simTimeSeconds) {
-        LocalTime now = LocalTime.now();
-        int hour = now.getHour();
-        int minute = now.getMinute();
+        int hour = ((int) (simTimeSeconds / 3600)) % 24;
+        int minute = ((int) (simTimeSeconds / 60)) % 60;
         Map<Integer, Double> stationData = hourlyEntryFlow.get(stationId);
 
         // Base: current hour CSV value, or fallback
@@ -292,7 +291,7 @@ public class PassengerFlowModel {
     public void setEventMultiplier(double v) { this.eventMultiplier = v; }
     public double getEventMultiplier() { return eventMultiplier; }
     public TimePeriod getCurrentPeriod(double simTimeSeconds) {
-        int hour = java.time.LocalTime.now().getHour();
+        int hour = ((int) (simTimeSeconds / 3600)) % 24;
         return TimePeriod.fromSimTime(hour * 3600.0);
     }
 

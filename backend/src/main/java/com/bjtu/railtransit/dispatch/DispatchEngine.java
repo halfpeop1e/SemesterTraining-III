@@ -657,10 +657,16 @@ public class DispatchEngine {
      * - 潜力 ≥ 当前晚点 → 前车可自愈, 后车仅 SLOW_LIGHT (限速到 80% 当前速度)
      * - 潜力 < 当前晚点 → 前车无法自愈, 后车按传统逻辑 SLOW/HOLD
      */
-    public DelayResult evaluateDelayPropagation(List<TrainState> sortedTrains, double simTimeSeconds) {
+    public DelayResult evaluateDelayPropagation(List<TrainState> sortedTrains, double simTimeSeconds,
+                                                 LineProfile lineProfile) {
         DelayResult dr = new DelayResult();
         dr.commands = new ArrayList<>();
         dr.events = new ArrayList<>();
+
+        int totalStations = lineProfile != null ? lineProfile.getStations().size() : 13;
+        double totalLengthKm = lineProfile != null
+                ? lineProfile.getStations().get(totalStations - 1).getKm()
+                : 16.05;
 
         for (int i = 0; i < sortedTrains.size() - 1; i++) {
             TrainState following = sortedTrains.get(i);
@@ -669,25 +675,21 @@ public class DispatchEngine {
             if ("FINISHED".equals(leading.getStatus()) || "FINISHED".equals(following.getStatus())) continue;
 
             if (leading.getDelaySeconds() > DELAY_THRESHOLD) {
-                // 方向感知间距: 上行 leading.pos > following.pos, 下行 following.pos > leading.pos
                 int dirSign = following.getDirectionSign();
                 double gap = dirSign > 0
                         ? leading.getPositionMeters() - following.getPositionMeters()
                         : following.getPositionMeters() - leading.getPositionMeters();
                 if (gap < 0) continue;
-                // 额外保护: 两车方向不同时跳过传播评估
                 if (!following.getDirection().equals(leading.getDirection())) continue;
                 double safeDist = calcSafeDistance(following.getSpeed() / 3.6);
 
                 if (gap < safeDist * 0.9) {
-                    // ── 评估前车恢复潜力 ──
                     int leadLevel = getRecoveryLevel(leading.getDelaySeconds());
-                    int totalStations = 13; // 北京地铁9号线
                     int remainingStops;
                     double remainingDistKm;
                     if (leading.isUpDirection()) {
                         remainingStops = Math.max(1, totalStations - leading.getCurrentStationIndex() - 1);
-                        remainingDistKm = 16.05 - (leading.getPositionMeters() / 1000.0);
+                        remainingDistKm = totalLengthKm - (leading.getPositionMeters() / 1000.0);
                     } else {
                         remainingStops = Math.max(1, leading.getCurrentStationIndex());
                         remainingDistKm = leading.getPositionMeters() / 1000.0;

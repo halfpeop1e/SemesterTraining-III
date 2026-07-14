@@ -14,7 +14,11 @@ import {
   runVehicleSimulation,
 } from "../../api/vehicle";
 import type { OnboardSnapshot } from "../../api/vehicle";
-import { disconnectProtocol704, getHilGatewayStatus, resetProtocol704 } from "../../api/protocol704";
+import {
+  disconnectProtocol704,
+  getHilGatewayStatus,
+  resetProtocol704,
+} from "../../api/protocol704";
 import type {
   DrivingMode,
   SafetyEvent,
@@ -53,7 +57,8 @@ function mapSignalSnapshotToTrainState(
   if (!train) return null;
 
   const startPosition =
-    STATIONS.find((station) => station.stationId === fromStationId)?.positionM ?? 0;
+    STATIONS.find((station) => station.stationId === fromStationId)
+      ?.positionM ?? 0;
   const directionSign = toStationId >= fromStationId ? 1 : -1;
   const speedKmh = Number.isFinite(train.speedKmh) ? train.speedKmh : 0;
   const acceleration = Number.isFinite(train.accelerationMps2)
@@ -87,7 +92,8 @@ function resolveSignalTargetPosition(
   toStationId: number,
 ): number {
   const startPosition =
-    STATIONS.find((station) => station.stationId === fromStationId)?.positionM ?? 0;
+    STATIONS.find((station) => station.stationId === fromStationId)
+      ?.positionM ?? 0;
   const directionSign = toStationId >= fromStationId ? 1 : -1;
   const currentPosition = absolutePosition ?? startPosition;
   const candidates = STATIONS.filter((station) =>
@@ -99,15 +105,14 @@ function resolveSignalTargetPosition(
       ? left.positionM - right.positionM
       : right.positionM - left.positionM,
   );
-  const nextStation = candidates.find((station) =>
-    directionSign > 0
-      ? station.positionM > currentPosition + 1
-      : station.positionM < currentPosition - 1,
-  ) ?? candidates[candidates.length - 1];
+  const nextStation =
+    candidates.find((station) =>
+      directionSign > 0
+        ? station.positionM > currentPosition + 1
+        : station.positionM < currentPosition - 1,
+    ) ?? candidates[candidates.length - 1];
 
-  return nextStation
-    ? Math.abs(nextStation.positionM - startPosition)
-    : 0;
+  return nextStation ? Math.abs(nextStation.positionM - startPosition) : 0;
 }
 
 /** 单个车载实例的全部状态 */
@@ -210,9 +215,9 @@ function Vehicle() {
   });
   const [activeTrainId, setActiveTrainId] = useState<string>(urlTrainId);
   const [displayState, setDisplayState] = useState<TrainState | null>(null);
-  const [signalSnapshots, setSignalSnapshots] = useState<Map<string, OnboardSnapshot>>(
-    () => new Map(),
-  );
+  const [signalSnapshots, setSignalSnapshots] = useState<
+    Map<string, OnboardSnapshot>
+  >(() => new Map());
   const [rightPanelTab, setRightPanelTab] = useState<
     "lineRun" | "tractionCurve" | "timetable"
   >("lineRun");
@@ -261,7 +266,7 @@ function Vehicle() {
     const adoptLaboratoryTrain = async () => {
       try {
         const hil = await getHilGatewayStatus();
-        const trainId = hil.enabled ? hil.trainId?.trim() : '';
+        const trainId = hil.enabled ? hil.trainId?.trim() : "";
         if (!trainId || cancelled) return;
         setInstances((previous) => {
           const next = new Map(previous);
@@ -562,8 +567,7 @@ function Vehicle() {
           frameIndex: 0,
           isPaused: cur.controlSourceMode === "LAB_DRIVER_DESK",
           // Desk mode: physical ATO-start bit is the only departure action.
-          drivingMode:
-            "ato",
+          drivingMode: "ato",
           departureAuthorized: cur.controlSourceMode === "LAB_DRIVER_DESK",
         }));
       } catch (err) {
@@ -601,7 +605,9 @@ function Vehicle() {
       let nextStationName: string | undefined;
       const stationStops = res.stationStops;
       if (stationStops && stationStops.length > 0) {
-        const nextStation = stationStops.find((s) => s.targetPosition > cs.position + 0.5);
+        const nextStation = stationStops.find(
+          (s) => s.targetPosition > cs.position + 0.5,
+        );
         if (nextStation) {
           totalTarget = nextStation.targetPosition;
           nextStationId = nextStation.stationId;
@@ -622,7 +628,11 @@ function Vehicle() {
           nextStationName,
         });
 
-        if (controlResult && "status" in controlResult && controlResult.status === "PENDING_APPROVAL") {
+        if (
+          controlResult &&
+          "status" in controlResult &&
+          controlResult.status === "PENDING_APPROVAL"
+        ) {
           updateInstance(trainId, (cur) => ({
             ...cur,
             errorMessage: controlResult.message || "已向中控发送人工接管请求",
@@ -654,7 +664,9 @@ function Vehicle() {
             : [];
           const mergedStopsMap = new Map<number, StationStop>();
           prevStops.forEach((stop) => mergedStopsMap.set(stop.stationId, stop));
-          incomingStops.forEach((stop) => mergedStopsMap.set(stop.stationId, stop));
+          incomingStops.forEach((stop) =>
+            mergedStopsMap.set(stop.stationId, stop),
+          );
           const mergedStops = Array.from(mergedStopsMap.values()).sort(
             (left, right) => left.targetPosition - right.targetPosition,
           );
@@ -681,10 +693,7 @@ function Vehicle() {
                   controlResult.summary.nextMode ?? cur.result.summary.nextMode,
               },
             },
-            allSafetyEvents: [
-              ...cur.allSafetyEvents,
-              ...incomingSafetyEvents,
-            ],
+            allSafetyEvents: [...cur.allSafetyEvents, ...incomingSafetyEvents],
             trajectoryVersion: cur.trajectoryVersion + 1,
             drivingMode: controlResult.summary.currentMode ?? cur.drivingMode,
             handleResetToken:
@@ -715,7 +724,7 @@ function Vehicle() {
       const refs = instanceRefs.current.get(trainId);
       const lineStart = refs?.resultRef?.summary?.lineStartPosition ?? 0;
       const positionMeters = refs?.stateRef
-        ? refs.stateRef.absolutePosition ?? lineStart + refs.stateRef.position
+        ? (refs.stateRef.absolutePosition ?? lineStart + refs.stateRef.position)
         : lineStart;
       updateInstance(trainId, (cur) => {
         if (cur.timerId !== null) window.clearInterval(cur.timerId);
@@ -737,7 +746,9 @@ function Vehicle() {
           handleResetToken: cur.handleResetToken + 1,
         };
       });
-      void resetVehicleSimulation(trainId, positionMeters).catch(() => undefined);
+      void resetVehicleSimulation(trainId, positionMeters).catch(
+        () => undefined,
+      );
       void reportOnboardEvent({
         trainId,
         eventType: "SIMULATION_RESET",
@@ -764,10 +775,11 @@ function Vehicle() {
         ...cur,
         controlSourceMode: mode,
         isPaused: mode === "LAB_DRIVER_DESK" ? true : cur.isPaused,
-        departureAuthorized: mode === "LAB_DRIVER_DESK" ? false : cur.departureAuthorized,
+        departureAuthorized:
+          mode === "LAB_DRIVER_DESK" ? false : cur.departureAuthorized,
         handleResetToken: cur.handleResetToken + 1,
       }));
-      setDisplayState((state) => state?.trainId === trainId ? null : state);
+      setDisplayState((state) => (state?.trainId === trainId ? null : state));
     },
     [instances, updateInstance],
   );
@@ -960,14 +972,15 @@ function Vehicle() {
         ai.fromStationId,
         ai.toStationId,
       )
-    : ai.result?.stopResult?.targetStopPosition ?? 1200;
+    : (ai.result?.stopResult?.targetStopPosition ?? 1200);
   const speedLimitValue =
     labDriverDeskMode && activeSignalSnapshot
       ? activeSignalSnapshot.speedLimitKmh / 3.6
-      : ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
+      : (ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS);
   const lineStartPosition =
     ai.result?.summary?.lineStartPosition ??
-    STATIONS.find((station) => station.stationId === ai.fromStationId)?.positionM ??
+    STATIONS.find((station) => station.stationId === ai.fromStationId)
+      ?.positionM ??
     0;
   const fromStationName = ai.result?.summary?.fromStationName ?? null;
   const toStationName = ai.result?.summary?.toStationName ?? null;
@@ -1252,7 +1265,11 @@ function Vehicle() {
             </select>
           </div>
 
-          <div className="vehicle-control-mode" role="group" aria-label="控制来源">
+          <div
+            className="vehicle-control-mode"
+            role="group"
+            aria-label="控制来源"
+          >
             <span>控制来源</span>
             <button
               type="button"
@@ -1266,7 +1283,9 @@ function Vehicle() {
               type="button"
               className={labDriverDeskMode ? "is-active" : ""}
               disabled={isLoading || isPlaying}
-              onClick={() => setControlSourceMode(activeTrainId, "LAB_DRIVER_DESK")}
+              onClick={() =>
+                setControlSourceMode(activeTrainId, "LAB_DRIVER_DESK")
+              }
             >
               实验室司机台
             </button>
@@ -1289,16 +1308,18 @@ function Vehicle() {
           <button
             className="vehicle-secondary-btn"
             onClick={() => handleTogglePause(activeTrainId)}
-            disabled={labDriverDeskMode || !isPlaying || !ai.departureAuthorized}
+            disabled={
+              labDriverDeskMode || !isPlaying || !ai.departureAuthorized
+            }
             type="button"
           >
             {labDriverDeskMode
               ? "由实体手柄控制"
               : !ai.departureAuthorized && isPlaying
                 ? "等待调度发车"
-              : ai.isPaused
-                ? "继续"
-                : "暂停"}
+                : ai.isPaused
+                  ? "继续"
+                  : "暂停"}
           </button>
           <button
             className="vehicle-ghost-btn"
@@ -1321,7 +1342,9 @@ function Vehicle() {
                     speedMultiplier: m,
                   }))
                 }
-                disabled={labDriverDeskMode || (!ai.result && ai.status !== "playing")}
+                disabled={
+                  labDriverDeskMode || (!ai.result && ai.status !== "playing")
+                }
                 aria-pressed={ai.speedMultiplier === m}
               >
                 {m}x
@@ -1355,8 +1378,17 @@ function Vehicle() {
 
           {isPlaying && viewState && (
             <span className="vehicle-status-text">
-              {labDriverDeskMode ? "司机台同步" : ai.isPaused ? "已暂停" : "播放中"}
-              {!labDriverDeskMode && <> · {ai.frameIndex + 1}/{ai.result?.states.length}</>}
+              {labDriverDeskMode
+                ? "司机台同步"
+                : ai.isPaused
+                  ? "已暂停"
+                  : "播放中"}
+              {!labDriverDeskMode && (
+                <>
+                  {" "}
+                  · {ai.frameIndex + 1}/{ai.result?.states.length}
+                </>
+              )}
               {" · "}t={viewState.time.toFixed(1)}s{" · "}模式:
               {ai.drivingMode.toUpperCase()}
             </span>
@@ -1445,7 +1477,9 @@ function Vehicle() {
         >
           <Protocol704Panel
             trainId={tid}
-            enabled={instances.get(tid)?.controlSourceMode === "LAB_DRIVER_DESK"}
+            enabled={
+              instances.get(tid)?.controlSourceMode === "LAB_DRIVER_DESK"
+            }
             onError={(message) => {
               updateInstance(tid, (cur) => ({ ...cur, errorMessage: message }));
             }}
@@ -1454,20 +1488,21 @@ function Vehicle() {
               updateInstance(tid, (cur) => ({
                 ...cur,
                 drivingMode: mode.toLowerCase() as DrivingMode,
-                departureAuthorized: departureState === 'RUNNING',
+                departureAuthorized: departureState === "RUNNING",
               }));
             }}
             getCurrentState={() => {
               const refs = instanceRefs.current.get(tid);
               const instance = instances.get(tid);
-              const state = instance?.controlSourceMode === "LAB_DRIVER_DESK"
-                ? mapSignalSnapshotToTrainState(
-                    signalSnapshots.get(tid),
-                    tid,
-                    instance.fromStationId,
-                    instance.toStationId,
-                  )
-                : refs?.stateRef ?? null;
+              const state =
+                instance?.controlSourceMode === "LAB_DRIVER_DESK"
+                  ? mapSignalSnapshotToTrainState(
+                      signalSnapshots.get(tid),
+                      tid,
+                      instance.fromStationId,
+                      instance.toStationId,
+                    )
+                  : (refs?.stateRef ?? null);
               if (!refs || !state) return null;
               return {
                 trainId: tid,
@@ -1475,7 +1510,8 @@ function Vehicle() {
                 toStationId: refs.toStationIdRef,
                 currentState: state,
                 currentMode: refs.drivingModeRef,
-                departureConfirmed: instances.get(tid)?.departureAuthorized ?? false,
+                departureConfirmed:
+                  instances.get(tid)?.departureAuthorized ?? false,
               };
             }}
             onExecutedState={(state, mode, departureState, latched, result) => {
@@ -1486,9 +1522,10 @@ function Vehicle() {
                   drivingMode: mode.toLowerCase() as DrivingMode,
                   // PLC frames are the only physical clock in laboratory mode.
                   // Keep the local trajectory paused even after departure is granted.
-                  isPaused: cur.controlSourceMode === "LAB_DRIVER_DESK"
-                    ? true
-                    : departureState !== "RUNNING",
+                  isPaused:
+                    cur.controlSourceMode === "LAB_DRIVER_DESK"
+                      ? true
+                      : departureState !== "RUNNING",
                   departureAuthorized: departureState === "RUNNING",
                 }));
               }
@@ -1499,7 +1536,9 @@ function Vehicle() {
                   const refs = instanceRefs.current.get(tid);
                   const frameIndex = refs?.frameIndexRef ?? cur.frameIndex;
                   const before = cur.result.states.slice(0, frameIndex + 1);
-                  const incomingSafetyEvents = Array.isArray(result.safetyEvents)
+                  const incomingSafetyEvents = Array.isArray(
+                    result.safetyEvents,
+                  )
                     ? result.safetyEvents
                     : [];
                   return {
@@ -1521,11 +1560,17 @@ function Vehicle() {
                       summary: {
                         ...cur.result.summary,
                         currentMode:
-                          result.summary.currentMode ?? cur.result.summary.currentMode,
-                        nextMode: result.summary.nextMode ?? cur.result.summary.nextMode,
+                          result.summary.currentMode ??
+                          cur.result.summary.currentMode,
+                        nextMode:
+                          result.summary.nextMode ??
+                          cur.result.summary.nextMode,
                       },
                     },
-                    allSafetyEvents: [...cur.allSafetyEvents, ...incomingSafetyEvents],
+                    allSafetyEvents: [
+                      ...cur.allSafetyEvents,
+                      ...incomingSafetyEvents,
+                    ],
                     trajectoryVersion: cur.trajectoryVersion + 1,
                     isPaused: latched ? false : cur.isPaused,
                     holdAfterBraking: latched ? true : cur.holdAfterBraking,
@@ -1537,21 +1582,24 @@ function Vehicle() {
             }}
             onRealtimeState={(realtimeState: RealtimeVehicleState704) => {
               setDisplayState((previous) => {
-                const baseState = previous?.trainId === tid
-                  ? previous
-                  : instanceRefs.current.get(tid)?.stateRef;
+                const baseState =
+                  previous?.trainId === tid
+                    ? previous
+                    : instanceRefs.current.get(tid)?.stateRef;
                 if (!baseState) return previous;
 
-                const lineStartPosition = instances.get(tid)?.result?.summary.lineStartPosition;
+                const lineStartPosition =
+                  instances.get(tid)?.result?.summary.lineStartPosition;
                 return {
                   ...baseState,
                   trainId: tid,
                   position: realtimeState.positionM,
                   velocity: realtimeState.velocityMs,
                   acceleration: realtimeState.accelerationMs2,
-                  absolutePosition: lineStartPosition === undefined
-                    ? baseState.absolutePosition
-                    : lineStartPosition + realtimeState.positionM,
+                  absolutePosition:
+                    lineStartPosition === undefined
+                      ? baseState.absolutePosition
+                      : lineStartPosition + realtimeState.positionM,
                 };
               });
             }}
