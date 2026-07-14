@@ -37,7 +37,7 @@ class Protocol704ServiceBridgeTest {
         loader = new LineProfileJsonLoader();
         vehicleService = new VehicleSimulationService(provider, new MultiParticleSimulationService());
         bridge = new Protocol704VehicleControlBridge(vehicleService, provider, loader);
-        service = new Protocol704Service(bridge, null);
+        service = new Protocol704Service(bridge, null, null);
         ReflectionTestUtils.setField(service, "defaultHost", "127.0.0.1");
         ReflectionTestUtils.setField(service, "portsConfig", "8001");
         ReflectionTestUtils.setField(service, "autoStart", false);
@@ -153,7 +153,7 @@ class Protocol704ServiceBridgeTest {
         Protocol704VehicleControlBridge b = new Protocol704VehicleControlBridge(vs, p, l);
         SimulationResult result = vs.run(p.buildScenario(l.buildLineProfile(1, 2)));
         b.registerSimulation("TCP1", 1, 2, result, DrivingMode.MANUAL);
-        Protocol704Service wired = new Protocol704Service(b, null);
+        Protocol704Service wired = new Protocol704Service(b, null, null);
         ReflectionTestUtils.setField(wired, "defaultHost", "127.0.0.1");
         ReflectionTestUtils.setField(wired, "portsConfig", String.valueOf(port));
         ReflectionTestUtils.setField(wired, "ports", new ArrayList<>());
@@ -231,7 +231,7 @@ class Protocol704ServiceBridgeTest {
         Protocol704VehicleControlBridge b = new Protocol704VehicleControlBridge(vs, p, l);
         SimulationResult result = vs.run(p.buildScenario(l.buildLineProfile(1, 2)));
         b.registerSimulation(trainId, 1, 2, result, DrivingMode.MANUAL);
-        Protocol704Service wired = new Protocol704Service(b, null);
+        Protocol704Service wired = new Protocol704Service(b, null, null);
         ReflectionTestUtils.setField(wired, "defaultHost", "127.0.0.1");
         ReflectionTestUtils.setField(wired, "portsConfig", String.valueOf(port));
         ReflectionTestUtils.setField(wired, "ports", new ArrayList<>());

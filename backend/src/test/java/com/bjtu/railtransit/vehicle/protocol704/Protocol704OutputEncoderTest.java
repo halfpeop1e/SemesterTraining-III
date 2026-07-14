@@ -16,15 +16,15 @@ class Protocol704OutputEncoderTest {
         LocalDateTime ts = LocalDateTime.of(2026, 7, 12, 10, 30, 45);
         byte[] frame = Protocol704OutputEncoder.encodeOutputFrame(state, ts);
 
-        assertEquals(26, frame.length);
+        assertEquals(28, frame.length);
         assertEquals((byte) 0x55, frame[0]);
         assertEquals((byte) 0xAA, frame[1]);
         assertEquals((byte) 0x55, frame[2]);
         assertEquals((byte) 0xAA, frame[3]);
 
         ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
-        assertEquals(26, bb.getShort(4) & 0xFFFF);
-        assertEquals(2, bb.getShort(6) & 0xFFFF);
+        assertEquals(28, bb.getShort(4) & 0xFFFF);
+        assertEquals(4, bb.getShort(6) & 0xFFFF);
     }
 
     @Test
@@ -90,10 +90,30 @@ class Protocol704OutputEncoderTest {
     @Test
     void encodeOutputFrame_nullStateAndTimestamp_safeDefaults() {
         byte[] frame = Protocol704OutputEncoder.encodeOutputFrame(null, null);
-        assertEquals(26, frame.length);
+        assertEquals(28, frame.length);
         assertEquals((byte) 0x55, frame[0]);
         assertEquals(1, (frame[24] >> 5) & 1);
         assertEquals(0, frame[25] & 0x01);
+    }
+
+    @Test
+    void encodeOutputFrame_speedWord_bytes26to27() {
+        RealtimeVehicleState state = new RealtimeVehicleState();
+        state.setVelocityMs(12.5); // 12.5 m/s = 45 km/h
+        byte[] frame = Protocol704OutputEncoder.encodeOutputFrame(state, LocalDateTime.of(2026, 1, 1, 0, 0, 0));
+        ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(45, bb.getShort(26) & 0xFFFF);
+
+        state.setVelocityMs(0.0);
+        frame = Protocol704OutputEncoder.encodeOutputFrame(state, LocalDateTime.of(2026, 1, 1, 0, 0, 0));
+        bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(0, bb.getShort(26) & 0xFFFF);
+
+        // negative velocity should be clamped to 0
+        state.setVelocityMs(-5.0);
+        frame = Protocol704OutputEncoder.encodeOutputFrame(state, LocalDateTime.of(2026, 1, 1, 0, 0, 0));
+        bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(0, bb.getShort(26) & 0xFFFF);
     }
 
     @Test
