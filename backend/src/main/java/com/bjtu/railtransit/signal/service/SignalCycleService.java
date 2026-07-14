@@ -46,7 +46,7 @@ public class SignalCycleService {
      */
     private final Map<String, LaboratoryRouteLease> laboratoryRouteLeases =
             new java.util.concurrent.ConcurrentHashMap<>();
-    /** Automatic local ATO station legs use the same CBI routes but have no PLC cab context. */
+    /** Local ATO station legs have no PLC cab context and may use a software corridor. */
     private final Map<String, LocalStationLegLease> localStationLegLeases =
             new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -162,7 +162,8 @@ public class SignalCycleService {
         Map<String, MovingAuthority> values = movingAuthorityService.compute(
                 lineProfile, signalTrains, activeRoutes, nowSeconds);
         for (com.bjtu.railtransit.signal.domain.TrainState signalTrain : signalTrains) {
-            if (!activeRoutes.containsKey(signalTrain.getTrainId())) {
+            if (!activeRoutes.containsKey(signalTrain.getTrainId())
+                    && !hasSoftwareLocalStationLeg(signalTrain.getTrainId())) {
                 MovingAuthority blocked = new MovingAuthority();
                 blocked.setTrainId(signalTrain.getTrainId());
                 blocked.setEndOfAuthorityM(signalTrain.getPositionM());
@@ -243,15 +244,24 @@ public class SignalCycleService {
     public boolean isSimulatedInterlocking() { return simulatedInterlocking; }
     public Map<String, Route> getActiveRoutes() { return Collections.unmodifiableMap(activeRoutes); }
     public boolean isDeparturePermitted(String trainId) {
-        return interlockingService.isDeparturePermitted(trainId);
+        return hasSoftwareLocalStationLeg(trainId)
+                ? localAuthorityPermitsDeparture(trainId)
+                : interlockingService.isDeparturePermitted(trainId);
     }
 
-    /** True when CBI has a runtime route assignment for the train. */
+    /** True while a CBI route or software local station corridor is assigned. */
     public boolean hasRouteRuntime(String trainId) {
-        return interlockingService.getRouteRuntimeForTrain(trainId) != null;
+        return localStationLegLeases.containsKey(trainId)
+                || interlockingService.getRouteRuntimeForTrain(trainId) != null;
     }
 
     public String departureBlockingReason(String trainId) {
+        if (hasSoftwareLocalStationLeg(trainId)) {
+            MovingAuthority ma = registry.get(trainId);
+            if (ma == null) return "LOCAL_MA_UNAVAILABLE";
+            if (ma.getEvent() != SignalEvent.NONE) return "LOCAL_" + ma.getEvent().name();
+            return ma.getMaxSpeedKmh() > 0 ? "NONE" : "LOCAL_SPEED_ZERO";
+        }
         return interlockingService.departureBlockingReason(trainId);
     }
     public void removeTrain(String trainId) {
@@ -264,6 +274,10 @@ public class SignalCycleService {
     public synchronized List<Integer> ensureLocalStationLeg(
             String trainId, int fromStationId, int toStationId,
             String direction, double nowSeconds) {
+        LocalStationLegLease localLease = localStationLegLeases.get(trainId);
+        if (localLease != null && localLease.targetStationId == toStationId) {
+            return localLease.routeIds;
+        }
         RouteRuntimeState existing = interlockingService.getRouteRuntimeForTrain(trainId);
         if (existing != null && existing.state() == RouteLifecycleState.ESTABLISHED) {
             return interlockingService.getBuiltRoutesForTrain(trainId).stream().map(Route::getId).toList();
@@ -272,9 +286,16 @@ public class SignalCycleService {
                 "DOWN".equalsIgnoreCase(direction)
                         ? com.bjtu.railtransit.signal.domain.Direction.DOWN
                         : com.bjtu.railtransit.signal.domain.Direction.UP;
-        List<Route> routes = interlockingService.buildAndAssignLocalStationLeg(
-                trainId, fromStationId, toStationId, routeDirection, nowSeconds);
-        return routes.stream().map(Route::getId).toList();
+        try {
+            List<Route> routes = interlockingService.buildAndAssignLocalStationLeg(
+                    trainId, fromStationId, toStationId, routeDirection, nowSeconds);
+            return routes.stream().map(Route::getId).toList();
+        } catch (IllegalArgumentException error) {
+            if (routeDirection != Direction.DOWN) throw error;
+            localStationLegLeases.put(trainId, new LocalStationLegLease(
+                    List.of(), toStationId, stationPosition(toStationId), false));
+            return List.of();
+        }
     }
 
     /** Releases a local ATO leg exactly when the backend-owned train reaches its platform. */
@@ -324,7 +345,8 @@ public class SignalCycleService {
 
     private void synchronizeLocalStationLegLeases(List<TrainState> trains) {
         Map<String, Integer> bindings = interlockingService.getRouteBindings();
-        localStationLegLeases.keySet().removeIf(trainId -> !bindings.containsKey(trainId));
+        localStationLegLeases.entrySet().removeIf(entry -> entry.getValue().cbiBacked
+                && !bindings.containsKey(entry.getKey()));
         for (TrainState train : trains) {
             String trainId = train.getTrainId();
             RouteRuntimeState runtime = interlockingService.getRouteRuntimeForTrain(trainId);
@@ -340,7 +362,7 @@ public class SignalCycleService {
             List<Integer> routeIds = routes.stream().map(Route::getId).toList();
             if (interlockingService.hasEstablishedRouteSequence(trainId, routeIds)) {
                 localStationLegLeases.put(trainId,
-                        new LocalStationLegLease(routeIds, targetStationId, target));
+                        new LocalStationLegLease(routeIds, targetStationId, target, true));
             }
         }
     }
@@ -416,13 +438,35 @@ public class SignalCycleService {
             if (routeIds == null || ma == null) continue;
             if (targetPosition <= train.getPositionMeters() + STOP_MARGIN_METERS && train.getDirectionSign() > 0) continue;
             if (train.getDirectionSign() < 0 && targetPosition >= train.getPositionMeters() - STOP_MARGIN_METERS) continue;
-            if (!interlockingService.hasEstablishedRouteSequence(train.getTrainId(), routeIds)) continue;
+            boolean softwareLocalLeg = localLease != null && !localLease.cbiBacked;
+            if (!softwareLocalLeg
+                    && !interlockingService.hasEstablishedRouteSequence(train.getTrainId(), routeIds)) continue;
+            if (softwareLocalLeg && ma.getEvent() != SignalEvent.NONE
+                    && ma.getEvent() != SignalEvent.SIGNAL_BOUNDARY) continue;
             if (ma.getEvent() != SignalEvent.NONE && ma.getEvent() != SignalEvent.SIGNAL_BOUNDARY) continue;
             ma.setEndOfAuthorityM(targetPosition);
             ma.setBasis(com.bjtu.railtransit.signal.domain.AuthorityBasis.ROUTE_END);
             ma.setEvent(SignalEvent.NONE);
-            ma.setRouteId(routeIds.get(0));
+            ma.setRouteId(routeIds.isEmpty() ? null : routeIds.get(0));
         }
+    }
+
+    private boolean hasSoftwareLocalStationLeg(String trainId) {
+        LocalStationLegLease lease = localStationLegLeases.get(trainId);
+        return lease != null && !lease.cbiBacked;
+    }
+
+    private boolean localAuthorityPermitsDeparture(String trainId) {
+        MovingAuthority ma = registry.get(trainId);
+        return ma != null && ma.getEvent() == SignalEvent.NONE && ma.getMaxSpeedKmh() > 0;
+    }
+
+    private double stationPosition(int stationId) {
+        return lineProfile.getStations().stream()
+                .filter(station -> String.valueOf(stationId).equals(station.getId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("unknown station " + stationId))
+                .getPositionM();
     }
 
     private void syncLaboratoryDepartureAuthorizations(List<TrainState> trains,
@@ -460,7 +504,7 @@ public class SignalCycleService {
                                         double targetAbsolutePositionM) {}
 
     private record LocalStationLegLease(List<Integer> routeIds, int targetStationId,
-                                        double targetAbsolutePositionM) {}
+                                        double targetAbsolutePositionM, boolean cbiBacked) {}
 
     /**
      * G2: 按车 positionM 刷新 axleSections.occupied。

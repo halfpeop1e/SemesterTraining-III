@@ -36,14 +36,14 @@ const MODEL_PRESETS: Record<string, ModelPreset> = {
     label: 'railway.glb',
     targetMaxDim: 42,
     position: [0, 0.02, -24],
-    scrollCopies: 7,
+    scrollCopies: 3,
   },
   '/models/vehicle/train-cab.glb': {
     label: 'train-cab.glb',
     targetMaxDim: 15,
     position: [0, 0.02, -16],
     rotation: [0, Math.PI / 2, 0],
-    scrollCopies: 3,
+    scrollCopies: 2,
   },
 };
 
@@ -76,9 +76,13 @@ export default function ThreeRailwayView({
         if (cancelled) return;
 
         // Renderer
-        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.shadowMap.enabled = true;
+        const renderer = new THREE.WebGLRenderer({
+          antialias: false,
+          alpha: false,
+          powerPreference: 'high-performance',
+        });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+        renderer.shadowMap.enabled = false;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.15;
         container.appendChild(renderer.domElement);
@@ -107,7 +111,7 @@ export default function ThreeRailwayView({
         scene.add(new THREE.HemisphereLight('#d8f3ff', '#1f2933', 0.85));
         const dirLight = new THREE.DirectionalLight('#ffffff', 1.1);
         dirLight.position.set(4, 10, 6);
-        dirLight.castShadow = true;
+        dirLight.castShadow = false;
         scene.add(dirLight);
 
         const platformLight = new THREE.PointLight('#97e8d6', 1.8, 35);
@@ -556,8 +560,8 @@ export default function ThreeRailwayView({
                 model.traverse((child) => {
                   const mesh = child as THREE_TYPES.Mesh;
                   if (mesh.isMesh) {
-                    mesh.castShadow = true;
-                    mesh.receiveShadow = true;
+                    mesh.castShadow = false;
+                    mesh.receiveShadow = false;
                     const mats: THREE_TYPES.Material[] = Array.isArray(mesh.material)
                       ? mesh.material
                       : [mesh.material as THREE_TYPES.Material];
@@ -616,7 +620,7 @@ export default function ThreeRailwayView({
           } else {
             platformLight.color.set('#97e8d6'); platformLight.intensity = 1.4;
           }
-          camera.position.x = sr > 0.5 ? Math.sin(Date.now() * 0.08) * 0.012 * sr : 0;
+          camera.position.x = sr > 0.5 ? Math.sin(clock.elapsedTime * 6) * 0.005 * sr : 0;
           renderer.render(scene, camera);
         };
         animate();

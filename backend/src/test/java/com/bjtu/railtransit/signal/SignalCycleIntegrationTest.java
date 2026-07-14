@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SignalCycleIntegrationTest {
     @Test
@@ -58,6 +59,31 @@ class SignalCycleIntegrationTest {
         assertEquals(train.getPositionMeters(), ma.getEndOfAuthorityM(), 0.001);
         assertEquals(0, ma.getMaxSpeedKmh(), 0.001);
         assertEquals("LAB_INTERLOCKING", registry.getSource());
+    }
+
+    @Test
+    void localDownDirectionUsesSoftwareStationCorridorWhenReverseCbiDataIsUnavailable() throws Exception {
+        MaConfig config = MaConfig.exampleConfig();
+        MovementAuthorityRegistry registry = new MovementAuthorityRegistry();
+        LineProfileLoader loader = new LineProfileLoader();
+        SignalInterlockingService interlocking = new SignalInterlockingService(loader);
+        SignalCycleService cycle = new SignalCycleService(
+                new MovingAuthorityService(config), registry, loader, interlocking, new SignalEventLog(), true);
+        double fromPosition = loader.getLineProfile().getStations().stream()
+                .filter(station -> "13".equals(station.getId()))
+                .findFirst().orElseThrow().getPositionM();
+        double targetPosition = loader.getLineProfile().getStations().stream()
+                .filter(station -> "12".equals(station.getId()))
+                .findFirst().orElseThrow().getPositionM();
+        TrainState train = train("LOCAL_DOWN", fromPosition, 0);
+        train.setDirection("DOWN");
+
+        cycle.ensureLocalStationLeg("LOCAL_DOWN", 13, 12, "DOWN", 0);
+        MovingAuthority ma = cycle.runCycle(List.of(train), 0).get("LOCAL_DOWN");
+
+        assertTrue(cycle.isDeparturePermitted("LOCAL_DOWN"));
+        assertEquals(targetPosition, ma.getEndOfAuthorityM(), 0.001);
+        assertTrue(ma.getMaxSpeedKmh() > 0);
     }
 
     private TrainState train(String id, double position, double speedKmh) {

@@ -1216,41 +1216,46 @@ function Vehicle() {
     const nextFrame = states[ai.frameIndex + 1];
     const span = nextFrame.time - frame.time;
     const startedAt = performance.now();
+    let lastUiCommitAt = -Infinity;
     let rafId = 0;
 
     const tick = () => {
-      const elapsedSeconds = (performance.now() - startedAt) / 1000;
+      const now = performance.now();
+      const elapsedSeconds = (now - startedAt) / 1000;
       const fraction = clamp(
         span > 0 ? (elapsedSeconds * ai.speedMultiplier) / span : 1,
         0,
         1,
       );
-      setDisplayState({
-        time: frame.time + span * fraction,
-        position:
-          frame.position + (nextFrame.position - frame.position) * fraction,
-        velocity:
-          frame.velocity + (nextFrame.velocity - frame.velocity) * fraction,
-        acceleration:
-          frame.acceleration +
-          (nextFrame.acceleration - frame.acceleration) * fraction,
-        phase: frame.phase,
-        trainId: frame.trainId,
-        absolutePosition:
-          frame.absolutePosition !== undefined &&
-          nextFrame.absolutePosition !== undefined
-            ? frame.absolutePosition +
-              (nextFrame.absolutePosition - frame.absolutePosition) * fraction
-            : frame.absolutePosition,
-        tractionForce:
-          (frame.tractionForce ?? 0) +
-          ((nextFrame.tractionForce ?? 0) - (frame.tractionForce ?? 0)) *
-            fraction,
-        brakeForce:
-          (frame.brakeForce ?? 0) +
-          ((nextFrame.brakeForce ?? 0) - (frame.brakeForce ?? 0)) * fraction,
-        availableMotors: frame.availableMotors,
-      });
+      if (fraction === 1 || now - lastUiCommitAt >= 1000 / 30) {
+        lastUiCommitAt = now;
+        setDisplayState({
+          time: frame.time + span * fraction,
+          position:
+            frame.position + (nextFrame.position - frame.position) * fraction,
+          velocity:
+            frame.velocity + (nextFrame.velocity - frame.velocity) * fraction,
+          acceleration:
+            frame.acceleration +
+            (nextFrame.acceleration - frame.acceleration) * fraction,
+          phase: frame.phase,
+          trainId: frame.trainId,
+          absolutePosition:
+            frame.absolutePosition !== undefined &&
+            nextFrame.absolutePosition !== undefined
+              ? frame.absolutePosition +
+                (nextFrame.absolutePosition - frame.absolutePosition) * fraction
+              : frame.absolutePosition,
+          tractionForce:
+            (frame.tractionForce ?? 0) +
+            ((nextFrame.tractionForce ?? 0) - (frame.tractionForce ?? 0)) *
+              fraction,
+          brakeForce:
+            (frame.brakeForce ?? 0) +
+            ((nextFrame.brakeForce ?? 0) - (frame.brakeForce ?? 0)) * fraction,
+          availableMotors: frame.availableMotors,
+        });
+      }
       if (fraction < 1) {
         rafId = window.requestAnimationFrame(tick);
       }

@@ -63,20 +63,6 @@ class LaboratoryStationLegResolverTest {
     }
 
     @Test
-    void resolvesEveryDownDirectionLegForTheLocalSimulation() {
-        LaboratoryStationLegResolver resolver = new LaboratoryStationLegResolver(
-                new LineProfileLoader().getLineProfile());
-
-        for (int fromStationId = 13; fromStationId > 1; fromStationId--) {
-            LaboratoryStationLegResolver.LaboratoryStationLeg leg = resolver.resolve(
-                    fromStationId, fromStationId - 1, Direction.DOWN);
-            assertEquals(fromStationId, leg.fromStationId());
-            assertEquals(fromStationId - 1, leg.toStationId());
-            assertEquals(Direction.DOWN, leg.direction());
-        }
-    }
-
-    @Test
     void followsNormalMainlineAndCanonicalizesDuplicateCbiRows() {
         LaboratoryStationLegResolver resolver = new LaboratoryStationLegResolver(
                 new LineProfileLoader().getLineProfile());

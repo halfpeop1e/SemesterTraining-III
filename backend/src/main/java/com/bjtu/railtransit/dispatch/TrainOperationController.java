@@ -2,7 +2,6 @@ package com.bjtu.railtransit.dispatch;
 
 import com.bjtu.railtransit.common.ApiResponse;
 import com.bjtu.railtransit.domain.model.TrainState;
-import com.bjtu.railtransit.signal.service.SignalInterlockingService;
 import com.bjtu.railtransit.vehicle.protocol704.Protocol704Service;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,14 +15,11 @@ import java.util.Map;
 public class TrainOperationController {
     private final SimulationService simulationService;
     private final Protocol704Service protocol704Service;
-    private final SignalInterlockingService signalInterlockingService;
 
     public TrainOperationController(SimulationService simulationService,
-                                    Protocol704Service protocol704Service,
-                                    SignalInterlockingService signalInterlockingService) {
+                                    Protocol704Service protocol704Service) {
         this.simulationService = simulationService;
         this.protocol704Service = protocol704Service;
-        this.signalInterlockingService = signalInterlockingService;
     }
 
     @PostMapping
@@ -87,7 +83,6 @@ public class TrainOperationController {
      */
     private void cleanupExternalBindings(String trainId) {
         protocol704Service.reset(trainId);
-        signalInterlockingService.unassignRoute(trainId);
     }
 
     @PostMapping("/{trainId}/route-pattern")

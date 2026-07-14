@@ -52,9 +52,6 @@ final class LaboratoryStationLegResolver {
         }
 
         int platformDirection = direction == Direction.UP ? UP_PLATFORM_DIRECTION : DOWN_PLATFORM_DIRECTION;
-
-        // 直接从起点站查找出发信号，而非从边界终端站追溯。
-        // 避免终端站缺少下行出发进路时阻断非终端区间的路由解析。
         Station fromStation = station(fromStationId);
         Station toStation = station(toStationId);
 

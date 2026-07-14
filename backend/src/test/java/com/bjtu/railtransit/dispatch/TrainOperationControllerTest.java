@@ -186,6 +186,19 @@ class TrainOperationControllerTest {
     }
 
     @Test
+    void deletesTrainImmediatelyWhileItsCompleteStationLegIsEstablished() throws Exception {
+        simulationService.addTrain("DELETE_RUNNING", 1, "UP", 1, "FULL", 3);
+        simulationService.requestDeparture("DELETE_RUNNING");
+
+        mockMvc.perform(delete("/api/dispatch/trains/DELETE_RUNNING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.trainId").value("DELETE_RUNNING"));
+
+        org.junit.jupiter.api.Assertions.assertNull(simulationService.findTrain("DELETE_RUNNING"));
+    }
+
+    @Test
     void deletedTrainDoesNotReappearFromStaleOnboardStatus() throws Exception {
         mockMvc.perform(post("/api/dispatch/trains")
                         .contentType(MediaType.APPLICATION_JSON)
