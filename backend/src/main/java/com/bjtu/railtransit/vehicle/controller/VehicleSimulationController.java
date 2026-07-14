@@ -255,7 +255,7 @@ public class VehicleSimulationController {
                 }
                 protocol704VehicleControlBridge.registerSimulation(
                         request.getTrainId(), fromId, toId, result, DrivingMode.MANUAL,
-                        false, false);
+                        false, false, request.isLabAutoDepartureEnabled());
                 // The dispatch train enters the signal cycle before this 704
                 // context exists. Re-run safety evaluation now so automatic
                 // laboratory station-leg routing sees the newly registered cab.

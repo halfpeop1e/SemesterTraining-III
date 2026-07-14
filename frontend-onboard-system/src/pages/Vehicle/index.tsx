@@ -8,10 +8,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   callVehicleControl,
   getAllSidingStatuses,
+  getOnboardSnapshot,
   reportOnboardEvent,
   resetVehicleSimulation,
   runVehicleSimulation,
 } from "../../api/vehicle";
+import type { OnboardSnapshot } from "../../api/vehicle";
 import { disconnectProtocol704, getHilGatewayStatus, resetProtocol704 } from "../../api/protocol704";
 import type {
   DrivingMode,
@@ -38,6 +40,73 @@ type ControlSourceMode = "SIMULATION" | "LAB_DRIVER_DESK";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function mapSignalSnapshotToTrainState(
+  snapshot: OnboardSnapshot | undefined,
+  trainId: string,
+  fromStationId: number,
+  toStationId: number,
+): TrainState | null {
+  const train = snapshot?.train;
+  if (!train) return null;
+
+  const startPosition =
+    STATIONS.find((station) => station.stationId === fromStationId)?.positionM ?? 0;
+  const directionSign = toStationId >= fromStationId ? 1 : -1;
+  const speedKmh = Number.isFinite(train.speedKmh) ? train.speedKmh : 0;
+  const acceleration = Number.isFinite(train.accelerationMps2)
+    ? train.accelerationMps2
+    : 0;
+  const phase =
+    Math.abs(speedKmh) <= 0.05
+      ? "stopped"
+      : acceleration < -0.02
+        ? "braking"
+        : acceleration > 0.02
+          ? "traction"
+          : "coast";
+
+  return {
+    time: Number.isFinite(train.timestamp)
+      ? train.timestamp
+      : snapshot.currentTimeSeconds,
+    position: Math.max(0, (train.positionM - startPosition) * directionSign),
+    absolutePosition: train.positionM,
+    velocity: speedKmh / 3.6,
+    acceleration,
+    phase,
+    trainId,
+  };
+}
+
+function resolveSignalTargetPosition(
+  absolutePosition: number | undefined,
+  fromStationId: number,
+  toStationId: number,
+): number {
+  const startPosition =
+    STATIONS.find((station) => station.stationId === fromStationId)?.positionM ?? 0;
+  const directionSign = toStationId >= fromStationId ? 1 : -1;
+  const currentPosition = absolutePosition ?? startPosition;
+  const candidates = STATIONS.filter((station) =>
+    directionSign > 0
+      ? station.stationId > fromStationId && station.stationId <= toStationId
+      : station.stationId < fromStationId && station.stationId >= toStationId,
+  ).sort((left, right) =>
+    directionSign > 0
+      ? left.positionM - right.positionM
+      : right.positionM - left.positionM,
+  );
+  const nextStation = candidates.find((station) =>
+    directionSign > 0
+      ? station.positionM > currentPosition + 1
+      : station.positionM < currentPosition - 1,
+  ) ?? candidates[candidates.length - 1];
+
+  return nextStation
+    ? Math.abs(nextStation.positionM - startPosition)
+    : 0;
 }
 
 /** 单个车载实例的全部状态 */
@@ -140,6 +209,9 @@ function Vehicle() {
   });
   const [activeTrainId, setActiveTrainId] = useState<string>(urlTrainId);
   const [displayState, setDisplayState] = useState<TrainState | null>(null);
+  const [signalSnapshots, setSignalSnapshots] = useState<Map<string, OnboardSnapshot>>(
+    () => new Map(),
+  );
   const [rightPanelTab, setRightPanelTab] = useState<
     "lineRun" | "tractionCurve" | "timetable"
   >("lineRun");
@@ -862,20 +934,45 @@ function Vehicle() {
     ai.result && ai.result.states.length > 0
       ? ai.result.states[ai.frameIndex]
       : null;
-  const viewState =
-    displayState?.trainId === activeTrainId ? displayState : currentState;
+  const labDriverDeskMode = ai.controlSourceMode === "LAB_DRIVER_DESK";
+  const activeSignalSnapshot = labDriverDeskMode
+    ? signalSnapshots.get(activeTrainId)
+    : undefined;
+  const signalViewState = labDriverDeskMode
+    ? mapSignalSnapshotToTrainState(
+        activeSignalSnapshot,
+        activeTrainId,
+        ai.fromStationId,
+        ai.toStationId,
+      )
+    : null;
+  const viewState = labDriverDeskMode
+    ? signalViewState
+    : displayState?.trainId === activeTrainId
+      ? displayState
+      : currentState;
   const canResetEmergency =
     ai.drivingMode === "emergency" && ai.result?.summary?.nextMode === "manual";
-  const targetStopPosition = ai.result?.stopResult?.targetStopPosition ?? 1200;
+  const targetStopPosition = labDriverDeskMode
+    ? resolveSignalTargetPosition(
+        signalViewState?.absolutePosition,
+        ai.fromStationId,
+        ai.toStationId,
+      )
+    : ai.result?.stopResult?.targetStopPosition ?? 1200;
   const speedLimitValue =
-    ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
-  const lineStartPosition = ai.result?.summary?.lineStartPosition ?? 0;
+    labDriverDeskMode && activeSignalSnapshot
+      ? activeSignalSnapshot.speedLimitKmh / 3.6
+      : ai.result?.summary?.speedLimit ?? DEMO_SPEED_LIMIT_FALLBACK_MS;
+  const lineStartPosition =
+    ai.result?.summary?.lineStartPosition ??
+    STATIONS.find((station) => station.stationId === ai.fromStationId)?.positionM ??
+    0;
   const fromStationName = ai.result?.summary?.fromStationName ?? null;
   const toStationName = ai.result?.summary?.toStationName ?? null;
   const isLoading = ai.status === "loading";
   const isPlaying = ai.status === "playing";
   const canReset = ai.result !== null || ai.status === "error";
-  const labDriverDeskMode = ai.controlSourceMode === "LAB_DRIVER_DESK";
   const toStationOptions = STATIONS.filter(
     (s) => s.stationId > ai.fromStationId,
   );
@@ -883,8 +980,61 @@ function Vehicle() {
   const completedStops = ai.result?.summary?.completedStops;
 
   const trainIds = Array.from(instances.keys());
+  const laboratoryTrainIdsDigest = Array.from(instances.entries())
+    .filter(([, instance]) => instance.controlSourceMode === "LAB_DRIVER_DESK")
+    .map(([trainId]) => trainId)
+    .sort()
+    .join("|");
+
+  // The signal system is authoritative for a laboratory train. Poll its
+  // fused snapshot directly; PLC callbacks remain responsible for device I/O,
+  // but they no longer define a separate onboard display trajectory.
+  useEffect(() => {
+    const laboratoryTrainIds = laboratoryTrainIdsDigest
+      .split("|")
+      .filter((trainId) => trainId.length > 0);
+    if (laboratoryTrainIds.length === 0) {
+      setSignalSnapshots(new Map());
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timerId: number | null = null;
+    const refresh = async () => {
+      const updates = await Promise.all(
+        laboratoryTrainIds.map(async (trainId) => {
+          try {
+            return [trainId, await getOnboardSnapshot(trainId)] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setSignalSnapshots((previous) => {
+          const next = new Map(previous);
+          updates.forEach((update) => {
+            if (update) next.set(update[0], update[1]);
+          });
+          Array.from(next.keys()).forEach((trainId) => {
+            if (!laboratoryTrainIds.includes(trainId)) next.delete(trainId);
+          });
+          return next;
+        });
+        timerId = window.setTimeout(refresh, 400);
+      }
+    };
+
+    void refresh();
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [laboratoryTrainIdsDigest]);
 
   useEffect(() => {
+    if (labDriverDeskMode) return undefined;
     const states = ai.result?.states;
     if (!states || states.length === 0) {
       setDisplayState(null);
@@ -954,6 +1104,7 @@ function Vehicle() {
     ai.isPaused,
     ai.speedMultiplier,
     ai.trajectoryVersion,
+    labDriverDeskMode,
   ]);
 
   if (!activeInstance) {
@@ -1219,8 +1370,13 @@ function Vehicle() {
       {trainIds.map((tid) => {
         const inst = instances.get(tid)!;
         const instState: TrainState | null =
-          inst.controlSourceMode === "LAB_DRIVER_DESK" && displayState?.trainId === tid
-            ? displayState
+          inst.controlSourceMode === "LAB_DRIVER_DESK"
+            ? mapSignalSnapshotToTrainState(
+                signalSnapshots.get(tid),
+                tid,
+                inst.fromStationId,
+                inst.toStationId,
+              )
             : inst.result && inst.result.states.length > 0
               ? inst.result.states[inst.frameIndex]
               : null;
@@ -1237,7 +1393,11 @@ function Vehicle() {
             ?.displayNameOverride ??
           STATIONS.find((s) => s.stationId === inst.toStationId)?.displayName ??
           String(inst.toStationId);
-        const instLineStart = inst.result?.summary?.lineStartPosition ?? 0;
+        const instLineStart =
+          inst.result?.summary?.lineStartPosition ??
+          STATIONS.find((station) => station.stationId === inst.fromStationId)
+            ?.positionM ??
+          0;
         const isActive = tid === activeTrainId;
 
         return (
@@ -1298,12 +1458,21 @@ function Vehicle() {
             }}
             getCurrentState={() => {
               const refs = instanceRefs.current.get(tid);
-              if (!refs?.stateRef) return null;
+              const instance = instances.get(tid);
+              const state = instance?.controlSourceMode === "LAB_DRIVER_DESK"
+                ? mapSignalSnapshotToTrainState(
+                    signalSnapshots.get(tid),
+                    tid,
+                    instance.fromStationId,
+                    instance.toStationId,
+                  )
+                : refs?.stateRef ?? null;
+              if (!refs || !state) return null;
               return {
                 trainId: tid,
                 fromStationId: refs.fromStationIdRef,
                 toStationId: refs.toStationIdRef,
-                currentState: refs.stateRef,
+                currentState: state,
                 currentMode: refs.drivingModeRef,
                 departureConfirmed: instances.get(tid)?.departureAuthorized ?? false,
               };

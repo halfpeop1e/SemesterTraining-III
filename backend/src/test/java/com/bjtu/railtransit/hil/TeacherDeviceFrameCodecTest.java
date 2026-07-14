@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -46,6 +45,9 @@ class TeacherDeviceFrameCodecTest {
         assertEquals(62, Short.toUnsignedInt(b.getShort(4)));
         assertEquals(42, Short.toUnsignedInt(b.getShort(6)));
         assertEquals(3, Byte.toUnsignedInt(frame[36]));
+        assertEquals(0, Byte.toUnsignedInt(frame[39]));
+        assertEquals(0, Byte.toUnsignedInt(frame[40]));
+        assertEquals(0, Byte.toUnsignedInt(frame[41]));
         assertEquals(4, Byte.toUnsignedInt(frame[37]));
         assertEquals(0, Byte.toUnsignedInt(frame[42]));
         assertEquals(36.0, b.getFloat(44), 0.001);
@@ -73,6 +75,15 @@ class TeacherDeviceFrameCodecTest {
     }
 
     @Test
+    void encodesTheConfiguredPhysicalScreenTrainNumber() {
+        byte[] mmi = TeacherDeviceFrameCodec.signalScreen(state, 1001);
+        byte[] hmi = TeacherDeviceFrameCodec.networkScreen(state, 1001);
+
+        assertEquals(1001, Short.toUnsignedInt(le(mmi).getShort(62)));
+        assertEquals(1001, Short.toUnsignedInt(le(hmi).getShort(568)));
+    }
+
+    @Test
     void encodesDocumentedVision13BasePacketAt128Bytes() {
         byte[] signals = new byte[TeacherDeviceFrameCodec.VISION_SIGNAL_COUNT];
         byte[] switches = new byte[TeacherDeviceFrameCodec.VISION_SWITCH_COUNT];
@@ -81,7 +92,7 @@ class TeacherDeviceFrameCodecTest {
         signals[1] = 0x02;
         switches[2] = 0x02;
 
-        byte[] frame = TeacherDeviceFrameCodec.vision(state, 42, signals, switches, List.of());
+        byte[] frame = TeacherDeviceFrameCodec.vision(state, 42, signals, switches);
         ByteBuffer b = le(frame);
         assertEquals(128, frame.length);
         assertEquals(42, b.getInt(0));
@@ -95,21 +106,6 @@ class TeacherDeviceFrameCodecTest {
         assertEquals(16, Short.toUnsignedInt(b.getShort(124)));
         assertEquals(1, Byte.toUnsignedInt(frame[126]));
         assertEquals(0, Byte.toUnsignedInt(frame[127]));
-    }
-
-    @Test
-    void appendsNineBytesPerVisionOtherTrain() {
-        byte[] signals = new byte[TeacherDeviceFrameCodec.VISION_SIGNAL_COUNT];
-        byte[] switches = new byte[TeacherDeviceFrameCodec.VISION_SWITCH_COUNT];
-        byte[] frame = TeacherDeviceFrameCodec.vision(state, 1, signals, switches,
-                List.of(new TeacherDeviceFrameCodec.VisionOtherTrain(3000, 7, -1, 12.34)));
-        ByteBuffer b = le(frame);
-        assertEquals(137, frame.length);
-        assertEquals(1, Byte.toUnsignedInt(frame[127]));
-        assertEquals(3_000_000, b.getInt(128));
-        assertEquals(7, Short.toUnsignedInt(b.getShort(132)));
-        assertEquals(-1, frame[134]);
-        assertEquals(1234, Short.toUnsignedInt(b.getShort(135)));
     }
 
     private static ByteBuffer le(byte[] frame) {

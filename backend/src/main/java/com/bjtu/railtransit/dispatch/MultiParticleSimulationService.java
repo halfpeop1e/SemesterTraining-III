@@ -236,13 +236,31 @@ public class MultiParticleSimulationService {
      * @param speedKmh    初始速度
      */
     public void initCarPositions(List<TrainCar> cars, double headPosM, double speedKmh) {
-        double cumulativeOffset = 0;
-        for (int i = 0; i < cars.size(); i++) {
-            TrainCar c = cars.get(i);
-            c.setPositionMeters(headPosM - cumulativeOffset);
-            c.setSpeedKmh(speedKmh);
-            cumulativeOffset += c.getLengthMeters() + COUPLER_FREE_LENGTH;
+        if (cars == null || cars.isEmpty()) return;
+        cars.get(0).setPositionMeters(headPosM);
+        cars.get(0).setSpeedKmh(speedKmh);
+        for (int i = 1; i < cars.size(); i++) {
+            TrainCar front = cars.get(i - 1);
+            TrainCar rear = cars.get(i);
+            // positionMeters is the car tail. Match computeCouplerForce's
+            // rear-head geometry so every coupler starts at its free length.
+            rear.setPositionMeters(front.getPositionMeters()
+                    - rear.getLengthMeters() - COUPLER_FREE_LENGTH);
+            rear.setSpeedKmh(speedKmh);
         }
+    }
+
+    /** Mass-weighted consist speed used as the externally observable train speed. */
+    public double consistSpeedMps(List<TrainCar> cars) {
+        if (cars == null || cars.isEmpty()) return 0.0;
+        double momentum = 0.0;
+        double mass = 0.0;
+        for (TrainCar car : cars) {
+            double carMass = Math.max(0.0, car.getOccupiedMass());
+            momentum += carMass * car.getSpeedMps();
+            mass += carMass;
+        }
+        return mass > 0.0 ? Math.max(0.0, momentum / mass) : 0.0;
     }
 
     // ═══════════════════════════════════════════════════════════════

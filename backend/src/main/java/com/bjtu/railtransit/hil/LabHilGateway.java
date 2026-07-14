@@ -22,6 +22,7 @@ public class LabHilGateway {
 
     @Value("${hil.enabled:false}") private boolean enabled;
     @Value("${hil.train-id:LB}") private String trainId;
+    @Value("${hil.screen-train-number:1001}") private int screenTrainNumber = 1001;
     @Value("${hil.connect-timeout-ms:1000}") private int connectTimeoutMs;
     @Value("${hil.signal-screen.enabled:false}") private boolean signalEnabled;
     @Value("${hil.signal-screen.host:192.168.100.122}") private String signalHost;
@@ -57,10 +58,10 @@ public class LabHilGateway {
         if (!enabled) return;
         HilVehicleSnapshot snapshot = snapshots.snapshot(trainId);
         if (signalEnabled) signalWriter.send(signalHost, signalPort,
-                TeacherDeviceFrameCodec.signalScreen(snapshot), connectTimeoutMs);
+                TeacherDeviceFrameCodec.signalScreen(snapshot, screenTrainNumber), connectTimeoutMs);
         else signalWriter.disable();
         if (networkEnabled) networkWriter.send(networkHost, networkPort,
-                TeacherDeviceFrameCodec.networkScreen(snapshot), connectTimeoutMs);
+                TeacherDeviceFrameCodec.networkScreen(snapshot, screenTrainNumber), connectTimeoutMs);
         else networkWriter.disable();
     }
 
@@ -104,6 +105,8 @@ public class LabHilGateway {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("enabled", enabled);
         result.put("trainId", trainId);
+        result.put("screenTrainNumber", screenTrainNumber);
+        result.put("vehicleSnapshot", snapshots.snapshot(trainId));
         result.put("signalScreen", signalWriter.status(signalHost, signalPort, enabled && signalEnabled));
         result.put("networkScreen", networkWriter.status(networkHost, networkPort, enabled && networkEnabled));
         result.put("plcOutput", plcStatus);
@@ -126,20 +129,16 @@ public class LabHilGateway {
             return;
         }
         if (!isSupportedVisionProfile(visionProfile)) {
-            // The 154B capture reports 92 signals and 40 switches. This project
-            // only has the authoritative ordering for the documented 77/29 table;
-            // padding the shorter table would mis-address live wayside objects.
             visionStatus.setConnected(false);
             visionStatus.setLastError("unsupported Vision profile '" + visionProfile
-                    + "': capture-154 requires the complete 92-signal/40-switch order table");
+                    + "': use documented-128 for the laboratory 128-byte protocol");
             closeVision();
             return;
         }
         long now = System.currentTimeMillis();
         try {
             byte[] frame = TeacherDeviceFrameCodec.vision(snapshot, ++visionCounter,
-                    visionStateProvider.signalStates(), visionStateProvider.switchStates(),
-                    snapshots.otherTrains(trainId));
+                    visionStateProvider.signalStates(), visionStateProvider.switchStates());
             if (visionSocket == null || visionSocket.isClosed()) visionSocket = new DatagramSocket();
             visionSocket.send(new DatagramPacket(frame, frame.length,
                     new InetSocketAddress(visionHost, visionPort)));

@@ -1,28 +1,34 @@
 package com.bjtu.railtransit.signal.service;
 
 import com.bjtu.railtransit.signal.domain.Direction;
+import com.bjtu.railtransit.signal.model.AxleCounterSection;
 import com.bjtu.railtransit.signal.model.LineProfile;
 import com.bjtu.railtransit.signal.model.Platform;
 import com.bjtu.railtransit.signal.model.Route;
 import com.bjtu.railtransit.signal.model.Signal;
 import com.bjtu.railtransit.signal.model.Station;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 
 /**
  * Resolves one physical laboratory station leg to a CBI route sequence.
  *
  * <p>The supplied data has platform Seg IDs and directed CBI routes but no
- * direct station-to-route table. This resolver accepts a leg only when those
- * two sources produce one unambiguous shortest directed sequence. It never
- * derives a station target from a route ID or from the synthetic Seg mileage.
+ * direct station-to-route table. Interchange and terminal stations may place
+ * the forward signal on the other platform Seg, and the export contains exact
+ * duplicate route rows. This resolver therefore searches every station
+ * platform for a same-direction signal, collapses operationally identical
+ * routes, and accepts only one shortest path with the fewest reverse-switch
+ * segments. A remaining tie is still rejected as ambiguous. It never derives
+ * a station target from a route ID or from the synthetic Seg mileage.
  */
 final class LaboratoryStationLegResolver {
     private static final int UP_PLATFORM_DIRECTION = 0x55;
@@ -43,25 +49,38 @@ final class LaboratoryStationLegResolver {
             throw new IllegalArgumentException("laboratory station leg must use adjacent stations");
         }
 
-        Station fromStation = station(fromStationId);
-        Station toStation = station(toStationId);
         int platformDirection = direction == Direction.UP ? UP_PLATFORM_DIRECTION : DOWN_PLATFORM_DIRECTION;
-        Platform fromPlatform = uniquePlatform(fromStation, platformDirection, "source");
-        Platform toPlatform = uniquePlatform(toStation, platformDirection, "target");
-        int startSignalId = uniqueSignalOnPlatform(fromPlatform, platformDirection, "source");
-        int targetSignalId = uniqueSignalOnPlatform(toPlatform, platformDirection, "target");
+        int firstStationId = lineProfile.getStations().stream()
+                .map(Station::getId)
+                .mapToInt(Integer::parseInt)
+                .min()
+                .orElseThrow(() -> new IllegalArgumentException("line has no stations"));
+        int currentSignalId = initialMainlineSignal(station(firstStationId), platformDirection);
 
-        List<List<Integer>> candidates = shortestRouteSequences(startSignalId, targetSignalId);
-        if (candidates.isEmpty()) {
-            throw new IllegalArgumentException("no directed CBI route sequence from station "
-                    + fromStationId + " to station " + toStationId);
+        // Derive the source signal by following the already-selected mainline
+        // from the line origin. This preserves the verified 1->6 platform while
+        // carrying the actual arrival signal through interchange station 7.
+        for (int stationId = firstStationId; stationId <= fromStationId; stationId++) {
+            Station targetStation = station(stationId + 1);
+            List<RoutePath> candidates = bestRouteSequences(
+                    List.of(currentSignalId), stationSignals(targetStation, platformDirection, "target"));
+            if (candidates.isEmpty()) {
+                throw new IllegalArgumentException("no directed CBI route sequence from station "
+                        + stationId + " to station " + (stationId + 1));
+            }
+            if (candidates.size() != 1) {
+                throw new IllegalArgumentException("ambiguous directed CBI route sequence from station "
+                        + stationId + " to station " + (stationId + 1));
+            }
+            RoutePath selected = candidates.get(0);
+            if (stationId == fromStationId) {
+                return new LaboratoryStationLeg(fromStationId, toStationId, direction,
+                        selected.routes().stream().map(Route::getId).toList(),
+                        targetStation.getPositionM(), selected.startSignalId(), selected.signalId());
+            }
+            currentSignalId = selected.signalId();
         }
-        if (candidates.size() != 1) {
-            throw new IllegalArgumentException("ambiguous directed CBI route sequence from station "
-                    + fromStationId + " to station " + toStationId);
-        }
-        return new LaboratoryStationLeg(fromStationId, toStationId, direction,
-                candidates.get(0), toStation.getPositionM(), startSignalId, targetSignalId);
+        throw new IllegalArgumentException("cannot resolve laboratory station leg");
     }
 
     private Station station(int stationId) {
@@ -71,65 +90,140 @@ final class LaboratoryStationLegResolver {
                 .orElseThrow(() -> new IllegalArgumentException("unknown station " + stationId));
     }
 
-    private Platform uniquePlatform(Station station, int direction, String role) {
+    private int initialMainlineSignal(Station station, int direction) {
         Set<Integer> platformIds = new HashSet<>(station.getPlatformIds());
-        List<Platform> matches = lineProfile.getPlatforms().stream()
+        List<Platform> platforms = lineProfile.getPlatforms().stream()
                 .filter(platform -> platformIds.contains(platform.getId()))
                 .filter(platform -> platform.getDir() == direction)
                 .toList();
-        if (matches.size() != 1) {
-            throw new IllegalArgumentException("station " + station.getId() + " has no unique "
-                    + role + " platform for this direction");
+        if (platforms.size() != 1) {
+            throw new IllegalArgumentException("station " + station.getId()
+                    + " has no unique initial platform for this direction");
         }
-        return matches.get(0);
+        List<Integer> signals = lineProfile.getSignals().stream()
+                .filter(signal -> signal.getSegId() == platforms.get(0).getSegId())
+                .filter(signal -> signal.getProtectDir() == direction)
+                .map(Signal::getId)
+                .toList();
+        if (signals.size() != 1) {
+            throw new IllegalArgumentException("station " + station.getId()
+                    + " has no unique initial signal for this direction");
+        }
+        return signals.get(0);
     }
 
-    private int uniqueSignalOnPlatform(Platform platform, int direction, String role) {
-        List<Signal> matches = lineProfile.getSignals().stream()
-                .filter(signal -> signal.getSegId() == platform.getSegId())
+    private List<Integer> stationSignals(Station station, int direction, String role) {
+        Set<Integer> platformIds = new HashSet<>(station.getPlatformIds());
+        Set<Integer> platformSegIds = lineProfile.getPlatforms().stream()
+                .filter(platform -> platformIds.contains(platform.getId()))
+                .map(Platform::getSegId)
+                .collect(java.util.stream.Collectors.toSet());
+        List<Integer> matches = lineProfile.getSignals().stream()
+                .filter(signal -> platformSegIds.contains(signal.getSegId()))
                 .filter(signal -> signal.getProtectDir() == direction)
+                .map(Signal::getId)
+                .distinct()
+                .sorted()
                 .toList();
-        if (matches.size() != 1) {
-            throw new IllegalArgumentException("platform " + platform.getId() + " has no unique "
+        if (matches.isEmpty()) {
+            throw new IllegalArgumentException("station " + station.getId() + " has no "
                     + role + " signal for this direction");
         }
-        return matches.get(0).getId();
+        return matches;
     }
 
-    private List<List<Integer>> shortestRouteSequences(int startSignalId, int targetSignalId) {
+    private List<RoutePath> bestRouteSequences(List<Integer> startSignalIds, List<Integer> targetSignalIds) {
         Map<Integer, List<Route>> outgoing = new HashMap<>();
-        for (Route route : lineProfile.getRoutes()) {
+        for (Route route : canonicalRoutes()) {
             outgoing.computeIfAbsent(route.getStartSignalId(), ignored -> new ArrayList<>()).add(route);
         }
         for (List<Route> routes : outgoing.values()) {
             routes.sort(Comparator.comparingInt(Route::getId));
         }
 
-        ArrayDeque<RoutePath> pending = new ArrayDeque<>();
-        pending.add(new RoutePath(startSignalId, List.of(), Set.of(startSignalId)));
-        List<List<Integer>> matches = new ArrayList<>();
-        int shortestLength = Integer.MAX_VALUE;
+        Map<Integer, AxleCounterSection> axleSections = new HashMap<>();
+        for (AxleCounterSection section : lineProfile.getAxleSections()) {
+            axleSections.put(section.getId(), section);
+        }
+        Set<Integer> reverseSwitchSegIds = new HashSet<>();
+        lineProfile.getSwitches().forEach(item -> reverseSwitchSegIds.add(item.getReverseSegId()));
+
+        Comparator<RoutePath> byCost = Comparator
+                .comparingInt((RoutePath path) -> path.routes().size())
+                .thenComparingInt(RoutePath::reverseSwitchTraversals);
+        PriorityQueue<RoutePath> pending = new PriorityQueue<>(byCost);
+        Map<Integer, PathCost> bestAtSignal = new HashMap<>();
+        for (int startSignalId : startSignalIds) {
+            pending.add(new RoutePath(startSignalId, startSignalId, List.of(), Set.of(startSignalId), 0));
+            bestAtSignal.put(startSignalId, new PathCost(0, 0));
+        }
+
+        Set<Integer> targetSet = new HashSet<>(targetSignalIds);
+        List<RoutePath> matches = new ArrayList<>();
+        PathCost bestTargetCost = null;
         while (!pending.isEmpty()) {
-            RoutePath current = pending.removeFirst();
-            if (current.routeIds().size() >= shortestLength || current.routeIds().size() >= MAX_ROUTE_HOPS) {
+            RoutePath current = pending.remove();
+            PathCost currentCost = current.cost();
+            if (bestTargetCost != null && currentCost.compareTo(bestTargetCost) > 0) break;
+            PathCost knownCost = bestAtSignal.get(current.signalId());
+            if (knownCost != null && currentCost.compareTo(knownCost) > 0) continue;
+            if (!current.routes().isEmpty() && targetSet.contains(current.signalId())) {
+                bestTargetCost = currentCost;
+                matches.add(current);
                 continue;
             }
+            if (current.routes().size() >= MAX_ROUTE_HOPS) continue;
+
             for (Route route : outgoing.getOrDefault(current.signalId(), List.of())) {
-                List<Integer> nextPath = new ArrayList<>(current.routeIds());
-                nextPath.add(route.getId());
-                if (route.getEndSignalId() == targetSignalId) {
-                    shortestLength = nextPath.size();
-                    matches.add(nextPath);
-                    continue;
-                }
                 if (current.visitedSignals().contains(route.getEndSignalId())) continue;
+                List<Route> nextPath = new ArrayList<>(current.routes());
+                nextPath.add(route);
                 Set<Integer> visited = new HashSet<>(current.visitedSignals());
                 visited.add(route.getEndSignalId());
-                pending.addLast(new RoutePath(route.getEndSignalId(), nextPath, visited));
+                int reverseTraversals = current.reverseSwitchTraversals()
+                        + reverseSwitchTraversals(route, axleSections, reverseSwitchSegIds);
+                RoutePath next = new RoutePath(route.getEndSignalId(), current.startSignalId(),
+                        nextPath, visited, reverseTraversals);
+                PathCost nextCost = next.cost();
+                PathCost previous = bestAtSignal.get(route.getEndSignalId());
+                if (previous == null || nextCost.compareTo(previous) <= 0) {
+                    if (previous == null || nextCost.compareTo(previous) < 0) {
+                        bestAtSignal.put(route.getEndSignalId(), nextCost);
+                    }
+                    pending.add(next);
+                }
             }
         }
-        int finalShortestLength = shortestLength;
-        return matches.stream().filter(path -> path.size() == finalShortestLength).toList();
+        return matches;
+    }
+
+    private List<Route> canonicalRoutes() {
+        List<Route> sorted = new ArrayList<>(lineProfile.getRoutes());
+        sorted.sort(Comparator.comparingInt(Route::getId));
+        Map<RouteSignature, Route> canonical = new LinkedHashMap<>();
+        for (Route route : sorted) {
+            RouteSignature signature = new RouteSignature(route.getStartSignalId(), route.getEndSignalId(),
+                    safeList(route.getAxleSectionIds()), safeList(route.getOverlapIds()), route.getCiZoneId());
+            canonical.putIfAbsent(signature, route);
+        }
+        return List.copyOf(canonical.values());
+    }
+
+    private int reverseSwitchTraversals(Route route, Map<Integer, AxleCounterSection> axleSections,
+                                        Set<Integer> reverseSwitchSegIds) {
+        Set<Integer> routeReverseSegIds = new HashSet<>();
+        for (int sectionId : safeList(route.getAxleSectionIds())) {
+            AxleCounterSection section = axleSections.get(sectionId);
+            if (section == null || section.getSegIds() == null) continue;
+            for (int segId : section.getSegIds()) {
+                if (reverseSwitchSegIds.contains(segId)) routeReverseSegIds.add(segId);
+            }
+        }
+        return routeReverseSegIds.size();
+    }
+
+    private List<Integer> safeList(List<Integer> values) {
+        return values == null ? List.of() : List.copyOf(values);
     }
 
     record LaboratoryStationLeg(int fromStationId, int toStationId, Direction direction,
@@ -144,5 +238,22 @@ final class LaboratoryStationLegResolver {
         }
     }
 
-    private record RoutePath(int signalId, List<Integer> routeIds, Set<Integer> visitedSignals) {}
+    private record RouteSignature(int startSignalId, int endSignalId, List<Integer> axleSectionIds,
+                                  List<Integer> overlapIds, int ciZoneId) {}
+
+    private record PathCost(int routeHops, int reverseSwitchTraversals) implements Comparable<PathCost> {
+        @Override
+        public int compareTo(PathCost other) {
+            int byHops = Integer.compare(routeHops, other.routeHops);
+            return byHops != 0 ? byHops : Integer.compare(reverseSwitchTraversals,
+                    other.reverseSwitchTraversals);
+        }
+    }
+
+    private record RoutePath(int signalId, int startSignalId, List<Route> routes,
+                             Set<Integer> visitedSignals, int reverseSwitchTraversals) {
+        PathCost cost() {
+            return new PathCost(routes.size(), reverseSwitchTraversals);
+        }
+    }
 }

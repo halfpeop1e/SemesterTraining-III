@@ -209,6 +209,7 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
           fromStationId,
           toStationId,
           hardwareControlEnabled: true,
+          labAutoDepartureEnabled: true,
         }),
       });
       await postText(`/vehicle/protocol704/connect?trainId=${encodeURIComponent(id)}`);

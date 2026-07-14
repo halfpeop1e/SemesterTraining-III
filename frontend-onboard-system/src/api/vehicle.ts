@@ -27,13 +27,26 @@ export interface TimetableEntry {
 
 export interface OnboardSnapshot {
   currentTimeSeconds: number;
-  train: { trainId: string; speedKmh: number; positionMeters: number; status: string } | null;
+  train: {
+    trainId: string;
+    positionM: number;
+    speedKmh: number;
+    accelerationMps2: number;
+    lengthM: number;
+    direction: string;
+    timestamp: number;
+    faultSpeedLimitKmh?: number | null;
+    positionLost?: boolean;
+    integrityLost?: boolean;
+    loadFactor?: number | null;
+  } | null;
   commands: DispatchCommand[];
   movementAuthorityMeters: number;
   speedLimitKmh: number;
   communicationStatus: string;
   safetyStatus: string;
   timetable: TimetableEntry[];
+  signalSource?: string;
 }
 
 async function integrationRequest<T>(path: string, init?: RequestInit): Promise<T> {

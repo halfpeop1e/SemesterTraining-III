@@ -35,10 +35,10 @@ public class SimulationRunRequest {
      */
     private boolean hardwareControlEnabled;
     /**
-     * Retained only for backwards-compatible request parsing. It is ignored:
-     * every hardware departure must be authorized by the signal/ATS path.
+     * Enables automatic door operation and ATO restart after intermediate
+     * stations. Signal/MA authorization and all cab safety conditions remain
+     * mandatory; the origin and terminal station never auto-depart.
      */
-    @Deprecated
     private boolean labAutoDepartureEnabled;
 
     public SimulationRunRequest() {

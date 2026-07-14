@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Inspect or replay a teacher-approved 154-byte Vision UDP capture.
+"""Inspect or replay a teacher-approved 128-byte Vision UDP capture.
 
-The actual Vision target is 192.168.100.124:8303.  It expects the 154-byte
-92-signal / 40-switch variant.  The ordering table is not available in this
-repository, so this script never synthesizes a packet.  It can inspect a pcapng
+The actual Vision target is 192.168.100.124:8303.  It expects the 128-byte
+77-signal / 29-switch Vision 1.3 variant. This script never synthesizes a packet.
+It can inspect a pcapng
 file and, only with --send --teacher-approved, replay one captured UDP payload.
 """
 
@@ -64,7 +64,7 @@ def extract_payloads(pcapng_path: Path, port: int) -> list[bytes]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Vision 154B capture inspector / approved replay")
+    parser = argparse.ArgumentParser(description="Vision 128B capture inspector / approved replay")
     parser.add_argument("--capture", type=Path, default=Path("8303-port.pcapng"))
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -91,7 +91,7 @@ def main() -> int:
     print(f"payload_head={payload[:24].hex(' ')}")
 
     if not args.send:
-        print("INSPECT_ONLY (refusing to synthesize or transmit a 154B Vision frame)")
+        print("INSPECT_ONLY (refusing to synthesize or transmit a 128B Vision frame)")
         return 0
     if not args.teacher_approved:
         print("SEND_REFUSED: add --teacher-approved after confirming the target accepts this capture variant", file=sys.stderr)

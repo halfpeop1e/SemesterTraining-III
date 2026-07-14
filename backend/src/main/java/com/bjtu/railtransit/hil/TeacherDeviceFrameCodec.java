@@ -19,7 +19,6 @@ public final class TeacherDeviceFrameCodec {
     public static final int VISION_BASE_BYTES = 128;
     public static final int VISION_SIGNAL_COUNT = 77;
     public static final int VISION_SWITCH_COUNT = 29;
-    public static final int VISION_OTHER_TRAIN_BYTES = 9;
 
     private TeacherDeviceFrameCodec() {}
 
@@ -69,13 +68,20 @@ public final class TeacherDeviceFrameCodec {
     }
 
     public static byte[] signalScreen(HilVehicleSnapshot state) {
+        return signalScreen(state, protocolTrainNumber(state.trainId()));
+    }
+
+    public static byte[] signalScreen(HilVehicleSnapshot state, int screenTrainNumber) {
         ByteBuffer frame = screenHeader(SIGNAL_SCREEN_BYTES, 62, 42);
         frame.put(36, (byte) state.currentStationId());
         frame.put(37, (byte) state.nextStationId());
         frame.put(38, (byte) state.terminalStationId());
-        frame.put(39, (byte) 1); // CM communication alive
-        frame.put(40, (byte) 1); // MM communication alive
-        frame.put(41, (byte) 1); // CTC communication alive
+        // Every supplied 9999 capture carries 0/0/0 here. The old demo treated
+        // these status bytes as active-high "alive" flags without hardware
+        // evidence, which makes our frame differ from the accepted desk image.
+        frame.put(39, (byte) 0);
+        frame.put(40, (byte) 0);
+        frame.put(41, (byte) 0);
 
         // Laboratory-confirmed 9999 layout. The 62-byte header value is not
         // the TCP payload size: fields through byte 67 are transmitted.
@@ -91,12 +97,16 @@ public final class TeacherDeviceFrameCodec {
         frame.put(59, (byte) (state.emergencyBrake() ? 1 : 0));
         frame.put(60, (byte) 0);
         frame.put(61, (byte) (state.nextSignalState() & 0x0F));
-        frame.putShort(62, (short) protocolTrainNumber(state.trainId()));
+        frame.putShort(62, (short) clampU16(screenTrainNumber));
         frame.putFloat(64, (float) Math.max(0, state.nextStationDistanceM()));
         return frame.array();
     }
 
     public static byte[] networkScreen(HilVehicleSnapshot state) {
+        return networkScreen(state, protocolTrainNumber(state.trainId()));
+    }
+
+    public static byte[] networkScreen(HilVehicleSnapshot state, int screenTrainNumber) {
         ByteBuffer frame = screenHeader(NETWORK_SCREEN_BYTES);
         frame.put(36, (byte) state.currentStationId());
         frame.put(37, (byte) state.nextStationId());
@@ -120,24 +130,20 @@ public final class TeacherDeviceFrameCodec {
             frame.put(168 + car, (byte) 50); // AW load placeholder, documented default
             frame.put(174 + car, (byte) clampU8(Math.round(Math.abs(state.lineCurrentA()))));
         }
-        frame.putShort(568, (short) protocolTrainNumber(state.trainId()));
+        frame.putShort(568, (short) clampU16(screenTrainNumber));
         return frame.array();
     }
 
     /**
      * Beijing Metro Line 9 Vision 1.3 TCMS2VIEW datagram.
-     * The teacher capture's 154-byte packet carries 92 signals and 40 switches;
-     * this project uses the documented 77-signal/29-switch main-line definition.
+     * The laboratory device uses the 128-byte 77-signal/29-switch definition.
      */
     public static byte[] vision(HilVehicleSnapshot state, int liveCounter,
-                                byte[] signalStates, byte[] switchStates,
-                                java.util.List<VisionOtherTrain> otherTrains) {
+                                byte[] signalStates, byte[] switchStates) {
         requireCount(signalStates, VISION_SIGNAL_COUNT, "vision signal states");
         requireCount(switchStates, VISION_SWITCH_COUNT, "vision switch states");
-        java.util.List<VisionOtherTrain> trains = otherTrains == null ? java.util.List.of() : otherTrains;
-        if (trains.size() > 255) throw new IllegalArgumentException("vision other train count exceeds 255");
 
-        ByteBuffer frame = ByteBuffer.allocate(VISION_BASE_BYTES + trains.size() * VISION_OTHER_TRAIN_BYTES)
+        ByteBuffer frame = ByteBuffer.allocate(VISION_BASE_BYTES)
                 .order(ByteOrder.LITTLE_ENDIAN);
         frame.putInt(liveCounter);
         frame.put((byte) VISION_SIGNAL_COUNT);
@@ -151,17 +157,9 @@ public final class TeacherDeviceFrameCodec {
         frame.putInt(clampI32(Math.round(Math.max(0, state.positionM()) * 1000.0)));
         frame.putShort((short) clampU16(state.visionEdgeId()));
         frame.put((byte) (state.visionDirection() < 0 ? -1 : 1));
-        frame.put((byte) trains.size());
-        for (VisionOtherTrain train : trains) {
-            frame.putInt(clampI32(Math.round(Math.max(0, train.positionM()) * 1000.0)));
-            frame.putShort((short) clampU16(train.edgeId()));
-            frame.put((byte) (train.direction() < 0 ? -1 : 1));
-            frame.putShort((short) clampU16(Math.round(Math.max(0, train.speedMps()) * 100.0)));
-        }
+        frame.put((byte) 0); // single-train laboratory workflow; frame stays exactly 128 B
         return frame.array();
     }
-
-    public record VisionOtherTrain(double positionM, int edgeId, int direction, double speedMps) {}
 
     private static ByteBuffer screenHeader(int size) {
         return screenHeader(size, size, size - 24);

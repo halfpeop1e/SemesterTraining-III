@@ -1,6 +1,7 @@
 package com.bjtu.railtransit.vehicle.protocol704;
 
 import com.bjtu.railtransit.dispatch.MultiParticleSimulationService;
+import com.bjtu.railtransit.dispatch.SimulationService;
 import com.bjtu.railtransit.vehicle.dto.SimulationResult;
 import com.bjtu.railtransit.vehicle.dto.TrainState;
 import com.bjtu.railtransit.vehicle.enums.DrivingMode;
@@ -12,8 +13,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 class Protocol704VehicleControlBridgeTest {
     private DemoScenarioProvider provider;
@@ -365,6 +375,45 @@ class Protocol704VehicleControlBridgeTest {
     }
 
     @Test
+    void atoPlaybackDefersDispatchPublicationUntilNoVehicleLockIsHeld() {
+        SimulationService dispatch = mock(SimulationService.class);
+        doAnswer(invocation -> {
+            synchronized (dispatch) {
+                return null;
+            }
+        }).when(dispatch).acceptOnboardReport(org.mockito.ArgumentMatchers.any());
+        Protocol704VehicleControlBridge wired = new Protocol704VehicleControlBridge(
+                vehicleService, provider, loader, dispatch);
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        wired.registerSimulation("ATO_ASYNC", 1, 2, result, DrivingMode.ATO, true);
+        wired.updateCabInputs("ATO_ASYNC", java.util.Map.of("key_switch_on", true));
+
+        MappedControlCommand start = command("ATO_START", 0);
+        start.setMasterHandle(0);
+        assertEquals("EXECUTED", wired.execute("ATO_ASYNC", start).getStatus());
+        wired.flushDispatchReports();
+        clearInvocations(dispatch);
+
+        double before = wired.snapshot("ATO_ASYNC").state().getPosition();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            synchronized (dispatch) {
+                Future<?> advance = executor.submit(wired::advanceAtoSessions);
+                assertDoesNotThrow(() -> advance.get(1, TimeUnit.SECONDS),
+                        "ATO must not wait for the dispatch monitor while holding its vehicle context");
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertTrue(wired.snapshot("ATO_ASYNC").state().getPosition() > before);
+        verify(dispatch, never()).acceptOnboardReport(org.mockito.ArgumentMatchers.any());
+
+        wired.flushDispatchReports();
+        verify(dispatch).acceptOnboardReport(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void neutralFramesDoNotCreateDepartureAuthorizationWhileWaitingForAtoStart() {
         SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
         bridge.registerSimulation("LAB_STANDBY", 1, 2, result, DrivingMode.ATO, false, false);
@@ -428,6 +477,50 @@ class Protocol704VehicleControlBridgeTest {
         assertEquals("SIGNAL_DEPARTURE_NOT_AUTHORIZED", bridge.execute("LAB_AUTO", start).getRejectionReason());
         bridge.syncDepartureAuth("LAB_AUTO", true);
         assertEquals("EXECUTED", bridge.execute("LAB_AUTO", start).getStatus());
+    }
+
+    @Test
+    void laboratoryAutoModeCyclesDoorsAndRestartsOnlyAfterNewSignalAuthorization() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 3)));
+        bridge.registerSimulation("AUTO_NEXT", 1, 3, result, DrivingMode.MANUAL,
+                true, false, true);
+        preparePhysicalDesk("AUTO_NEXT");
+
+        TrainState stoppedAtStationTwo = new TrainState(200.0, 1348.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "AUTO_NEXT");
+        bridge.syncCurrentState("AUTO_NEXT", stoppedAtStationTwo, DrivingMode.MANUAL, 1, 3, true);
+        bridge.execute("AUTO_NEXT", command("coast", 0));
+
+        assertFalse(bridge.snapshot("AUTO_NEXT").doorsClosed());
+        assertEquals("RIGHT_OPEN", bridge.snapshot("AUTO_NEXT").doorState());
+        for (int i = 0; i <= 10; i++) bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("AUTO_NEXT").doorsClosed());
+        assertFalse(bridge.snapshot("AUTO_NEXT").departureAuthorized());
+        assertFalse(bridge.snapshot("AUTO_NEXT").atoRunning());
+
+        bridge.syncDepartureAuth("AUTO_NEXT", true);
+        bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("AUTO_NEXT").atoRunning());
+        assertEquals("ATO_RUNNING", bridge.atoWorkflowState("AUTO_NEXT"));
+    }
+
+    @Test
+    void laboratoryAutoModeNeverDepartsAgainFromTerminal() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("AUTO_END", 1, 2, result, DrivingMode.MANUAL,
+                true, false, true);
+        preparePhysicalDesk("AUTO_END");
+
+        TrainState stoppedAtTerminal = new TrainState(200.0, 1348.0, 0.0, 0.0,
+                SimulationPhase.STOPPED, "AUTO_END");
+        bridge.syncCurrentState("AUTO_END", stoppedAtTerminal, DrivingMode.MANUAL, 1, 2, true);
+        bridge.execute("AUTO_END", command("coast", 0));
+        for (int i = 0; i <= 10; i++) bridge.advanceAtoSessions();
+
+        bridge.syncDepartureAuth("AUTO_END", true);
+        bridge.advanceAtoSessions();
+        assertFalse(bridge.snapshot("AUTO_END").atoRunning());
+        assertEquals(2, bridge.snapshot("AUTO_END").currentStationId());
     }
 
     @Test
@@ -689,6 +782,15 @@ class Protocol704VehicleControlBridgeTest {
     private void register(String trainId, DrivingMode mode) {
         SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
         bridge.registerSimulation(trainId, 1, 2, result, mode);
+    }
+
+    private void preparePhysicalDesk(String trainId) {
+        bridge.updateCabInputs(trainId, java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs(trainId, java.util.Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs(trainId, java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 1, "master_handle", 0));
     }
 
     private static MappedControlCommand command(String command, double level) {

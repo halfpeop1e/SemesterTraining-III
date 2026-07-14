@@ -10,7 +10,7 @@ class LabHilGatewayTest {
     void allowsOnlyProfilesWithAnAuthoritativeOrderTable() {
         assertTrue(LabHilGateway.isSupportedVisionProfile("documented-128"));
         assertTrue(LabHilGateway.isSupportedVisionProfile("DOCUMENTED-128"));
-        assertFalse(LabHilGateway.isSupportedVisionProfile("capture-154"));
+        assertFalse(LabHilGateway.isSupportedVisionProfile("unknown"));
         assertFalse(LabHilGateway.isSupportedVisionProfile(null));
     }
 }

@@ -105,16 +105,6 @@ public class HilSnapshotProvider {
                 visionEdgeFor(position, visionDirection), visionDirection);
     }
 
-    /** Other trains use the variable-length Vision 1.3 tail, 9 bytes per train. */
-    public List<TeacherDeviceFrameCodec.VisionOtherTrain> otherTrains(String ownTrainId) {
-        return bridge.activeLaboratoryTrainIds().stream()
-                .filter(trainId -> !trainId.equals(ownTrainId))
-                .map(this::snapshot)
-                .map(state -> new TeacherDeviceFrameCodec.VisionOtherTrain(
-                        state.positionM(), state.visionEdgeId(), state.visionDirection(), state.speedMps()))
-                .toList();
-    }
-
     /** The Vision computer accepts table-3 edge IDs (1-48), never internal Seg IDs. */
     private static int visionEdgeFor(double positionM, int direction) {
         VisionEdge[] candidates = direction < 0 ? NEGATIVE_VISION_EDGES : POSITIVE_VISION_EDGES;
