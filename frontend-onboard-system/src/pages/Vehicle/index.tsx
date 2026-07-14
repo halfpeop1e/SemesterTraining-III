@@ -469,7 +469,6 @@ function Vehicle() {
           fromStationId: inst.fromStationId,
           toStationId: inst.toStationId,
           hardwareControlEnabled: inst.controlSourceMode === "LAB_DRIVER_DESK",
-          labAutoDepartureEnabled: inst.controlSourceMode === "LAB_DRIVER_DESK",
         });
         if (!simulationResult.states || simulationResult.states.length === 0) {
           throw new Error("后端返回的仿真结果不包含任何 states 数据");

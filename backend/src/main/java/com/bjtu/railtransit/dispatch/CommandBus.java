@@ -83,6 +83,14 @@ public class CommandBus {
                     c.setCompletedTimeSeconds(now);
                 });
     }
+
+    /** Invalidates pending commands that may no longer be executed by the current control owner. */
+    public synchronized void supersedeOpenCommands(String trainId, String type) {
+        commands.values().stream()
+                .filter(c -> trainId.equals(c.getTrainId()) && type.equals(c.getCommandType()))
+                .filter(c -> !TERMINAL.contains(c.getStatus()))
+                .forEach(c -> c.setStatus("SUPERSEDED"));
+    }
     public synchronized List<TrainCommand> all() { return new ArrayList<>(commands.values()); }
     public synchronized List<TrainCommand> pendingConfirmations() {
         return commands.values().stream().filter(c -> "CONFIRM_REQUIRED".equals(c.getStatus())).toList();

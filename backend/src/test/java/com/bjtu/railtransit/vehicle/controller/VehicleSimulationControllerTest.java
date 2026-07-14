@@ -74,17 +74,18 @@ class VehicleSimulationControllerTest {
     /** 显式传 fromStationId=1, toStationId=2，应与默认结果一致。 */
     @Test
     void runWithStation1To2ReturnsCorrectTargetStop() throws Exception {
-        // 郭公庄 km=0.313, 丰台科技园 km=1.661 -> runDistance = (1.661-0.313)*1000 = 1348m
+        // Static platform centres: K0+313.000 -> K1+660.520, so the
+        // vehicle-model relative distance is 1347.520m.
         mockMvc.perform(post("/api/vehicle/simulation/run")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"fromStationId\":1,\"toStationId\":2}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.summary.lineStartPosition").value(313.0))
-                .andExpect(jsonPath("$.data.summary.lineTargetPosition").value(1661.0))
+                .andExpect(jsonPath("$.data.summary.lineTargetPosition").value(1660.52))
                 .andExpect(jsonPath("$.data.summary.fromStationName").value("郭公庄"))
                 .andExpect(jsonPath("$.data.summary.toStationName").value("丰台科技园"))
-                .andExpect(jsonPath("$.data.stopResult.targetStopPosition").value(1348.0));
+                .andExpect(jsonPath("$.data.stopResult.targetStopPosition").value(1347.52));
     }
 
     /** 非法站点 id 应返回 success=false，message 包含错误说明。 */

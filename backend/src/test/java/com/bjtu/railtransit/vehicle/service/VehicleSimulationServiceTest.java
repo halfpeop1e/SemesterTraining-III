@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>阶段4B 新增测试覆盖：
  * <ul>
- *   <li>默认请求（1→2）仍能跑通，targetStopPosition ≈ 1348m。</li>
+ *   <li>默认请求（1→2）仍能跑通，targetStopPosition = 1347.520m。</li>
  *   <li>LineProfileJsonLoader 验证：listStations 站点数量、buildLineProfile 正确计算。</li>
  *   <li>非法站点 id 报错清晰。</li>
  *   <li>toStationId &le; fromStationId 报错清晰。</li>
@@ -319,18 +319,18 @@ class VehicleSimulationServiceTest {
 
     /**
      * 阶段4B：默认区间 1→2（郭公庄→丰台科技园）的 targetStopPosition 应约等于
-     * (1.661 - 0.313) * 1000 = 1348m。
+     * (1.660520 - 0.313000) * 1000 = 1347.520m。
      */
     @Test
-    void defaultStation1To2TargetStopPositionApprox1348m() {
+    void defaultStation1To2TargetStopPositionUsesStaticPlatformCentres() {
         LineProfile lineProfile = loader.buildLineProfile(1, 2);
         ScenarioConfig scenario = demoScenarioProvider.buildScenario(lineProfile);
         SimulationResult result = service.run(scenario);
 
         double target = result.getStopResult().getTargetStopPosition();
-        // (1.661 - 0.313) * 1000 = 1348.0m
-        assertEquals(1348.0, target, 1.0,
-                "1→2 区间 targetStopPosition 应约等于 1348m，实际=" + target);
+        // (1.660520 - 0.313000) * 1000 = 1347.520m
+        assertEquals(1347.52, target, 0.001,
+                "1→2 区间 targetStopPosition 必须来自静态站台中心里程，实际=" + target);
     }
 
     /**
@@ -546,7 +546,7 @@ class VehicleSimulationServiceTest {
         req.setCurrentState(midState);
         req.setCurrentMode(com.bjtu.railtransit.vehicle.enums.DrivingMode.ATO);
         req.setControlCommand(new com.bjtu.railtransit.vehicle.dto.ControlCommand("coast", 0));
-        req.setTotalTargetPosition(line.getTargetStopPosition()); // 1348m
+        req.setTotalTargetPosition(line.getTargetStopPosition()); // 1347.520m
 
         SimulationResult result = service.runContinuation(req, scenario);
         // 续算结果应末态为 STOPPED，模式为 ATO（coast 不切换模式）

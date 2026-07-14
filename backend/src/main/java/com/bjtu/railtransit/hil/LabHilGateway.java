@@ -21,7 +21,7 @@ public class LabHilGateway {
     private final Protocol704Service plcService;
 
     @Value("${hil.enabled:false}") private boolean enabled;
-    @Value("${hil.train-id:T1}") private String trainId;
+    @Value("${hil.train-id:LB}") private String trainId;
     @Value("${hil.connect-timeout-ms:1000}") private int connectTimeoutMs;
     @Value("${hil.signal-screen.enabled:false}") private boolean signalEnabled;
     @Value("${hil.signal-screen.host:192.168.100.122}") private String signalHost;
@@ -30,10 +30,11 @@ public class LabHilGateway {
     @Value("${hil.network-screen.host:192.168.100.121}") private String networkHost;
     @Value("${hil.network-screen.port:8888}") private int networkPort;
     @Value("${hil.plc-output.enabled:false}") private boolean plcOutputEnabled;
-    @Value("${hil.plc-output.frame-format:documented-26}") private String plcOutputFrameFormat;
+    @Value("${hil.plc-output.frame-format:capture-variant-28}") private String plcOutputFrameFormat;
     @Value("${hil.vision.enabled:false}") private boolean visionEnabled;
     @Value("${hil.vision.host:192.168.100.124}") private String visionHost;
     @Value("${hil.vision.port:8303}") private int visionPort;
+    @Value("${hil.vision.profile:documented-128}") private String visionProfile;
 
     private final TcpWriter signalWriter = new TcpWriter("signal-screen");
     private final TcpWriter networkWriter = new TcpWriter("network-screen");
@@ -124,6 +125,16 @@ public class LabHilGateway {
             visionStatus.setConnected(false);
             return;
         }
+        if (!isSupportedVisionProfile(visionProfile)) {
+            // The 154B capture reports 92 signals and 40 switches. This project
+            // only has the authoritative ordering for the documented 77/29 table;
+            // padding the shorter table would mis-address live wayside objects.
+            visionStatus.setConnected(false);
+            visionStatus.setLastError("unsupported Vision profile '" + visionProfile
+                    + "': capture-154 requires the complete 92-signal/40-switch order table");
+            closeVision();
+            return;
+        }
         long now = System.currentTimeMillis();
         try {
             byte[] frame = TeacherDeviceFrameCodec.vision(snapshot, ++visionCounter,
@@ -147,6 +158,10 @@ public class LabHilGateway {
     private synchronized void closeVision() {
         if (visionSocket != null) visionSocket.close();
         visionSocket = null;
+    }
+
+    static boolean isSupportedVisionProfile(String profile) {
+        return "documented-128".equalsIgnoreCase(profile);
     }
 
     private static final class TcpWriter {

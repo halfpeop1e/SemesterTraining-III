@@ -1,0 +1,27 @@
+{
+  "safety": "read-only; no PLC or screen write is performed by this tool",
+  "source": "live",
+  "host": "192.168.100.123",
+  "port": 8001,
+  "started_at": "2026-07-13T03:27:59.702+00:00",
+  "stopped_at": "2026-07-13T03:28:29.752+00:00",
+  "bytes_received": 13754,
+  "frames_valid": 299,
+  "invalid_chunks": 0,
+  "reconnects": 0,
+  "first_frame_at": "2026-07-13T03:27:59.773+00:00",
+  "last_frame_at": "2026-07-13T03:28:29.752+00:00",
+  "frame_interval_ms": {
+    "count": 298,
+    "min": 31.0,
+    "max": 172.0,
+    "average": 100.567
+  },
+  "changed_field_counts": {
+    "traction_percent": 68,
+    "master_handle": 14,
+    "brake_percent": 69,
+    "direction_handle": 3
+  },
+  "error": null
+}

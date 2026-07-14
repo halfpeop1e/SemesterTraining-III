@@ -1,5 +1,10 @@
 package com.bjtu.railtransit.vehicle.protocol704;
 
+import com.bjtu.railtransit.dispatch.CommandBus;
+import com.bjtu.railtransit.signal.domain.MovingAuthority;
+import com.bjtu.railtransit.signal.domain.SignalEvent;
+import com.bjtu.railtransit.signal.service.MovementAuthorityRegistry;
+import com.bjtu.railtransit.signal.service.SignalPlcDepartureService;
 import com.bjtu.railtransit.vehicle.dto.SimulationResult;
 import com.bjtu.railtransit.vehicle.dto.TrainState;
 import com.bjtu.railtransit.vehicle.enums.DrivingMode;
@@ -14,7 +19,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -23,6 +31,8 @@ import java.nio.ByteOrder;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 class Protocol704ServiceBridgeTest {
     private Protocol704Service service;
@@ -30,6 +40,7 @@ class Protocol704ServiceBridgeTest {
     private VehicleSimulationService vehicleService;
     private DemoScenarioProvider provider;
     private LineProfileJsonLoader loader;
+    private MovementAuthorityRegistry maRegistry;
 
     @BeforeEach
     void setUp() {
@@ -37,7 +48,9 @@ class Protocol704ServiceBridgeTest {
         loader = new LineProfileJsonLoader();
         vehicleService = new VehicleSimulationService(provider, new MultiParticleSimulationService());
         bridge = new Protocol704VehicleControlBridge(vehicleService, provider, loader);
-        service = new Protocol704Service(bridge, null);
+        maRegistry = new MovementAuthorityRegistry();
+        service = new Protocol704Service(bridge,
+                new SignalPlcDepartureService(new CommandBus(), maRegistry, bridge));
         ReflectionTestUtils.setField(service, "defaultHost", "127.0.0.1");
         ReflectionTestUtils.setField(service, "portsConfig", "8001");
         ReflectionTestUtils.setField(service, "autoStart", false);
@@ -144,6 +157,59 @@ class Protocol704ServiceBridgeTest {
     }
 
     @Test
+    void statusDoesNotAdvertiseAtoReadyWhenSignalIsAuthorizedButKeyIsOff() {
+        authorizeAtoSummary("KEY_OFF");
+
+        Protocol704Status status = service.getStatus("KEY_OFF");
+
+        assertFalse(status.getRealtimeVehicleState().isAtoReady());
+        assertNotEquals("ATO_READY", status.getRealtimeVehicleState().getDepartureState());
+    }
+
+    @Test
+    void statusAdvertisesAtoReadyOnlyAfterKeyIsOnAndMaReachesNextPlatform() {
+        authorizeAtoSummary("KEY_ON");
+        bridge.updateCabInputs("KEY_ON", Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("KEY_ON", Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("KEY_ON", Map.of(
+                "key_switch_on", true, "direction_handle", 1, "master_handle", 0));
+
+        Protocol704Status status = service.getStatus("KEY_ON");
+
+        assertTrue(status.getRealtimeVehicleState().isAtoReady());
+        assertEquals("ATO_READY", status.getRealtimeVehicleState().getDepartureState());
+    }
+
+    @Test
+    void physicalAtoStartIsRejectedWhenItsCachedBridgeAuthorizationHasNoCurrentMa() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("STALE_MA", 1, 2, result, DrivingMode.MANUAL, false, false);
+        // Simulate a route that was withdrawn after the previous signal cycle:
+        // the bridge still has an old bit, but the authoritative MA registry
+        // does not cover station 2.
+        bridge.updateCabInputs("STALE_MA", Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("STALE_MA", Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("STALE_MA", Map.of(
+                "key_switch_on", true, "direction_handle", 1, "master_handle", 0));
+        bridge.syncDepartureAuth("STALE_MA", true);
+        Protocol704Status status = service.getStatus("STALE_MA");
+
+        ReflectionTestUtils.invokeMethod(service, "processCompleteFrame",
+                "STALE_MA", status, 8001, atoStartFrame(),
+                Protocol704VehicleControlBridge.SOURCE_PLC, "PLC", "desk-8001", "unit test");
+
+        assertEquals("REJECTED", status.getLastCommandLifecycle().getStatus());
+        assertEquals("SIGNAL_DEPARTURE_NOT_AUTHORIZED",
+                status.getLastCommandLifecycle().getRejectionReason());
+        assertFalse(bridge.snapshot("STALE_MA").atoRunning());
+        assertFalse(bridge.snapshot("STALE_MA").departureAuthorized());
+    }
+
+    @Test
     void hardwareTcpFrameTraversesAccumulatorParserAdapterBridgeAndExecutedState() throws Exception {
         int port;
         try (ServerSocket probe = new ServerSocket(0)) { port = probe.getLocalPort(); }
@@ -240,6 +306,21 @@ class Protocol704ServiceBridgeTest {
         return wired;
     }
 
+    private void authorizeAtoSummary(String trainId) {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation(trainId, 1, 2, result, DrivingMode.MANUAL, false, false);
+        bridge.syncDepartureAuth(trainId, true);
+
+        MovingAuthority ma = new MovingAuthority();
+        ma.setTrainId(trainId);
+        ma.setEndOfAuthorityM(1_660.52);
+        ma.setMaxSpeedKmh(65);
+        ma.setEvent(SignalEvent.NONE);
+        Map<String, MovingAuthority> authorities = new LinkedHashMap<>();
+        authorities.put(trainId, ma);
+        maRegistry.replace(authorities, 1.0, "TEST");
+    }
+
     private static byte[] frame() {
         byte[] frame = new byte[46];
         ByteBuffer bb = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN);
@@ -247,5 +328,13 @@ class Protocol704ServiceBridgeTest {
         bb.putShort(8, (short) 2026); bb.putShort(10, (short) 7); bb.putShort(12, (short) 12);
         frame[24] = 0x20; bb.putShort(36, (short) 1); bb.putShort(38, (short) 1);
         bb.putShort(40, (short) 50); return frame;
+    }
+
+    private static byte[] atoStartFrame() {
+        byte[] frame = frame();
+        frame[34] = (byte) 0x80;
+        frame[35] = 0x02;
+        ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN).putShort(38, (short) 0);
+        return frame;
     }
 }

@@ -112,13 +112,7 @@ function LineSignal() {
   const loadBuilt = useCallback(async () => {
     try {
       const list = await getBuiltRoutes();
-      setBuiltRouteIds((prev) => {
-        if (list.length > 0) {
-          return new Set(list.map((r) => Number(r.id)));
-        }
-        // 远程空：保留本地已建（乐观/mock），避免闪回 0
-        return prev.size > 0 ? prev : new Set();
-      });
+      setBuiltRouteIds(new Set(list.map((r) => Number(r.id))));
     } catch {
       /* keep */
     }
@@ -166,7 +160,11 @@ function LineSignal() {
     })();
   }, [loadLine, loadBuilt, loadBindings, loadTsrs, loadEvents]);
 
-  const { snapshot, isRunning, step: refreshSimulation } = useSimulation();
+  const {
+    snapshot,
+    isRunning,
+    step: refreshSimulation,
+  } = useSimulation();
   const [simTime, setSimTime] = useState(0);
   const [simNotStarted, setSimNotStarted] = useState(false);
   const maInflight = useRef(false);
@@ -287,6 +285,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await buildRoute({ routeId }, trainId);
+        if (!res.success) {
+          throw new Error(res.message || '办理失败');
+        }
         message.success(res.message || `进路 ${routeId} 已办理`);
         pushLocalEvent(res.message || `进路 #${routeId} 办理`, 'INFO');
         setLineProfile((lp) => {
@@ -406,6 +407,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await cancelRoute(routeId);
+        if (!res.success) {
+          throw new Error(res.message || '取消失败');
+        }
         message.success(res.message || `进路 ${routeId} 已取消`);
         pushLocalEvent(res.message || `进路 #${routeId} 取消`, 'INFO');
         setLineProfile((lp) => (lp ? patchRouteBuilt(lp, routeId, false) : lp));
@@ -431,6 +435,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await operateSwitch({ switchId, position });
+        if (!res.success) {
+          throw new Error(res.message || '道岔操作失败');
+        }
         message.success(res.message || `道岔 ${switchId} → ${position}`);
         pushLocalEvent(res.message || `道岔 ${switchId} → ${position}`, 'INFO');
         setLineProfile((lp) => (lp ? patchSwitchState(lp, switchId, position) : lp));
@@ -449,6 +456,9 @@ function LineSignal() {
       setActionLoading(true);
       try {
         const res = await openSignal({ signalId, aspect });
+        if (!res.success) {
+          throw new Error(res.message || '信号机设置失败');
+        }
         message.success(res.message || `信号 ${signalId} → ${aspect}`);
         pushLocalEvent(res.message || `信号 #${signalId} → ${aspect}`, 'INFO');
         setLineProfile((lp) => {
@@ -668,7 +678,7 @@ function LineSignal() {
           banner
           showIcon
           message="仿真未启动"
-          description="请到「调度控制」点启动。启动后本页自动跟车、刷新 MA 与占用。"
+          description="请在上方“实验列车”栏创建列车，系统会自动启动仿真并连接司机台。"
         />
       )}
       {simLive && (

@@ -170,7 +170,7 @@ export default function IntegrationPanel({
     if (externalControl || !localState || !["playing", "finished"].includes(pageStatus)) return;
     const action = snapshot?.commands.find(
       (command) =>
-        ["FORCE_HOLD", "HOLD", "EMERGENCY_RECOVERY", "MANUAL_APPROVED", "MANUAL_REJECTED"].includes(
+        ["FORCE_HOLD", "HOLD", "ATP_EMERGENCY_BRAKE", "EMERGENCY_RECOVERY", "MANUAL_APPROVED", "MANUAL_REJECTED"].includes(
           command.commandType,
         ) && ["PENDING", "CONFIRMED"].includes(command.status),
     );

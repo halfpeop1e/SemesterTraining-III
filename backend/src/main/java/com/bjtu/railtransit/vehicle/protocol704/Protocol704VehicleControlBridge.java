@@ -89,9 +89,8 @@ public class Protocol704VehicleControlBridge {
     }
 
     /**
-     * The optional laboratory auto-departure flag is used only by the dedicated
-     * lab quick-start flow. It preserves cab interlocks but avoids requiring a
-     * separate software dispatch confirmation after every station door cycle.
+     * Compatibility overload. The former auto-departure argument is ignored so
+     * a physical desk cannot bypass signal/ATS authorization after a door cycle.
      */
     public void registerSimulation(String trainId, int fromStationId, int toStationId,
                                    SimulationResult result, DrivingMode mode, boolean departureAuthorized,
@@ -103,8 +102,10 @@ public class Protocol704VehicleControlBridge {
         context.departureAuthorized = departureAuthorized;
         context.departureState = departureAuthorized ? "RUNNING" : "READY_TO_DEPART";
         context.directHandleControl = directHandleControl;
-        context.laboratoryAutoDeparture = laboratoryAutoDeparture;
         contexts.put(trainId, context);
+        if (dispatchSimulationService != null) {
+            dispatchSimulationService.claimDriverDeskControl(trainId);
+        }
         publishToDispatch(context);
     }
 
@@ -158,6 +159,9 @@ public class Protocol704VehicleControlBridge {
         if (context == null) return;
         synchronized (context) {
             context.emergencyLatched = false;
+            context.emergencyBrakeRunning = false;
+            context.emergencyTrajectory = List.of();
+            context.emergencyFrameIndex = 0;
             if (context.mode == DrivingMode.EMERGENCY) {
                 context.mode = DrivingMode.MANUAL;
             }
@@ -192,14 +196,15 @@ public class Protocol704VehicleControlBridge {
         }
     }
 
-    /** External departure-authorization sync (dispatch DEPART → vehicle confirm). */
+    /** Signal-cycle-only departure authorization sync. */
     public void syncDepartureAuth(String trainId, boolean authorized) {
         if (trainId == null || trainId.isBlank()) return;
         ActiveSimulationContext context = contexts.get(trainId);
         if (context == null) return;
         synchronized (context) {
             context.departureAuthorized = authorized;
-            context.departureState = authorized ? "RUNNING" : "READY_TO_DEPART";
+            context.departureState = authorized && context.doorsClosed && !context.doorCycleRequired
+                    ? "ATO_READY" : context.doorsClosed ? "READY_TO_DEPART" : context.doorState;
             context.lastUpdatedAt = System.currentTimeMillis();
         }
     }
@@ -212,33 +217,20 @@ public class Protocol704VehicleControlBridge {
      *
      * <p>坐标语义：currentState.position 是累计相对里程（从线路起点算），
      * currentState.absolutePosition 是绝对里程。两者语义不同，不可互换。
-     * syncCurrentState 原样保存，runContinuation 会以 position 作为 currentCumulativePos。</p>
+     * syncCurrentState 原样保存，runContinuation 会以 position 作为 currentCumulativePos。
+     * The deprecated departureAuthorized argument is intentionally ignored:
+     * a state sync must never authorize physical movement.</p>
      */
     public void syncCurrentState(String trainId, TrainState currentState, DrivingMode mode,
                                  Integer fromStationId, Integer toStationId, Boolean departureAuthorized) {
         if (trainId == null || trainId.isBlank() || currentState == null) return;
         ActiveSimulationContext context = contexts.get(trainId);
-        if (context == null) {
-            int fromId = fromStationId != null ? fromStationId : 1;
-            int toId = toStationId != null ? toStationId : 2;
-            context = new ActiveSimulationContext(trainId, fromId, toId,
-                    copy(currentState), mode == null ? DrivingMode.ATO : mode);
-            if (departureAuthorized != null) {
-                context.departureAuthorized = departureAuthorized;
-                context.departureState = departureAuthorized ? "RUNNING" : "READY_TO_DEPART";
-            }
-            contexts.put(trainId, context);
-            return;
-        }
+        if (context == null) return;
         synchronized (context) {
             // 不清除 emergencyLatched —— 只有 resetEmergencyLatch 可以清除
             context.currentState = copy(currentState);
             if (mode != null) {
                 context.mode = mode;
-            }
-            if (departureAuthorized != null) {
-                context.departureAuthorized = departureAuthorized;
-                context.departureState = departureAuthorized ? "RUNNING" : "READY_TO_DEPART";
             }
             context.lastUpdatedAt = System.currentTimeMillis();
         }
@@ -254,15 +246,57 @@ public class Protocol704VehicleControlBridge {
         return context != null && context.departureAuthorized;
     }
 
+    /** Read-only diagnosis for the driver-desk ATO workflow. */
+    public String atoWorkflowState(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) return "NO_ACTIVE_SIMULATION";
+        synchronized (context) {
+            if (context.emergencyLatched) return "ATP_EMERGENCY_BRAKE";
+            if (context.atoRunning) return "ATO_RUNNING";
+            if (!context.keySwitchOn) return "KEY_SWITCH_OFF";
+            if (!context.doorsClosed) return "DOORS_OPEN";
+            if (context.doorCycleRequired) return "DOOR_CYCLE_REQUIRED";
+            if (!context.departureAuthorized) return "WAITING_SIGNAL_AUTHORIZATION";
+            return "ATO_READY";
+        }
+    }
+
     /** True while this train was deliberately configured for laboratory desk control. */
     public boolean isLaboratoryControlEnabled(String trainId) {
         return trainId != null && !trainId.isBlank() && contexts.containsKey(trainId);
+    }
+
+    /** Highest-priority ATP intervention, independent of the current control owner. */
+    public void applyAtpEmergencyBrake(String trainId) {
+        ActiveSimulationContext context = contexts.get(trainId);
+        if (context == null) return;
+        synchronized (context) {
+            // Signal supervision may report the same unsafe MA on consecutive
+            // cycles. One emergency trajectory is enough; regenerating it from
+            // an already-braking state would make the stop non-deterministic.
+            if (context.emergencyLatched) return;
+            context.atoRunning = false;
+            context.atoTrajectory = List.of();
+            context.atoFrameIndex = 0;
+            context.emergencyLatched = true;
+            context.departureAuthorized = false;
+            context.departureState = "ATP_EMERGENCY_BRAKE";
+            context.mode = DrivingMode.EMERGENCY;
+            context.controlSource = SOURCE_EMERGENCY;
+            context.lastCommand = "ATP_EMERGENCY_BRAKE";
+            context.lastUpdatedAt = System.currentTimeMillis();
+            startEmergencyTrajectory(context);
+            publishToDispatch(context);
+        }
     }
 
     /** Remove laboratory control ownership without changing any web simulation instance. */
     public void unregisterSimulation(String trainId) {
         if (trainId == null || trainId.isBlank()) return;
         contexts.remove(trainId);
+        if (dispatchSimulationService != null) {
+            dispatchSimulationService.releaseDriverDeskControl(trainId);
+        }
     }
 
     /** Thread-safe read model for laboratory output adapters; never exposes mutable context. */
@@ -271,11 +305,20 @@ public class Protocol704VehicleControlBridge {
         if (context == null) return null;
         synchronized (context) {
             TrainState state = copy(context.currentState);
+            // Vehicle dynamics keeps position relative to the selected origin
+            // station. Every cross-system consumer must use this absolute value.
+            double absolutePositionM = absolutePosition(context, state);
+            state.setAbsolutePosition(absolutePositionM);
             return new ControlStateSnapshot(context.trainId, context.fromStationId, context.toStationId,
-                    state, context.mode.name(), context.controlSource, context.lastCommand,
+                    context.currentStationId, context.currentTargetStationId,
+                    stationAbsolutePosition(context.currentTargetStationId),
+                    state, absolutePositionM, context.mode.name(), context.controlSource, context.lastCommand,
                     Double.isFinite(context.lastLevel) ? context.lastLevel : 0,
                     context.emergencyLatched, context.departureAuthorized, context.doorsClosed,
-                    context.doorState, context.lastUpdatedAt);
+                    context.doorState, context.atoRunning, context.doorCycleRequired, context.keySwitchOn,
+                    context.keyPreparationComplete,
+                    context.directionHandle, context.masterHandle,
+                    context.lastUpdatedAt);
         }
     }
 
@@ -285,10 +328,17 @@ public class Protocol704VehicleControlBridge {
     }
 
     public record ControlStateSnapshot(String trainId, int fromStationId, int toStationId,
-                                       TrainState state, String mode, String controlSource,
+                                       int currentStationId, int nextTargetStationId,
+                                       double nextTargetAbsolutePositionM,
+                                       TrainState state, double absolutePositionM,
+                                       String mode, String controlSource,
                                        String lastCommand, double lastLevelPercent,
                                        boolean emergencyLatched, boolean departureAuthorized,
                                        boolean doorsClosed, String doorState,
+                                       boolean atoRunning, boolean doorCycleRequired,
+                                       boolean keySwitchOn,
+                                       boolean keyPreparationComplete,
+                                       int directionHandle, int masterHandle,
                                        long lastUpdatedAt) {}
 
     /**
@@ -302,11 +352,23 @@ public class Protocol704VehicleControlBridge {
         ActiveSimulationContext context = contexts.get(trainId);
         if (context == null) return;
         synchronized (context) {
-            context.keySwitchOn = bool(fields.get("key_switch_on"));
+            if (fields.containsKey("key_switch_on")) {
+                updateKeyPreparation(context, bool(fields.get("key_switch_on")));
+            }
+            Integer directionHandle = integer(fields.get("direction_handle"));
+            if (directionHandle != null) context.directionHandle = directionHandle;
+            Integer masterHandle = integer(fields.get("master_handle"));
+            if (masterHandle != null) context.masterHandle = masterHandle;
             boolean openRight = bool(fields.get("door_open_right"));
             boolean closeRight = bool(fields.get("door_close_right"));
             boolean openLeft = bool(fields.get("door_open_left"));
             boolean closeLeft = bool(fields.get("door_close_left"));
+            boolean atoStart = bool(fields.get("ato_start_btn"));
+
+            // PLC carries a cyclic image. Keep only a fresh edge so a held
+            // button cannot be replayed when a later signal cycle authorizes it.
+            context.atoStartRisingEdge = atoStart && !context.atoStartPressed;
+            context.atoStartPressed = atoStart;
 
             if ((openRight && !context.rightDoorOpenPressed)
                     || (openLeft && !context.leftDoorOpenPressed)) {
@@ -325,7 +387,9 @@ public class Protocol704VehicleControlBridge {
                     context.doorsClosed = true;
                     context.doorCycleRequired = false;
                     context.doorState = "CLOSED";
-                    context.departureAuthorized = context.laboratoryAutoDeparture;
+                    // Closing doors records only a completed station operation.
+                    // The next movement still needs a new route/MA authorization.
+                    context.departureAuthorized = false;
                     context.departureState = "READY_TO_DEPART";
                     context.lastCommand = closeRight ? "RIGHT_DOOR_CLOSE" : "LEFT_DOOR_CLOSE";
                 }
@@ -414,6 +478,9 @@ public class Protocol704VehicleControlBridge {
             }
 
             if ("ATO_START".equals(command)) {
+                if (SOURCE_PLC.equals(source) && !context.atoRunning && !consumeAtoStartRisingEdge(context)) {
+                    return reject(lifecycle, "ATO_START_NOT_NEW_EDGE");
+                }
                 return startAto(context, mapped, lifecycle);
             }
 
@@ -426,22 +493,6 @@ public class Protocol704VehicleControlBridge {
                 lifecycle.setResultMode(DrivingMode.ATO.name());
                 lifecycle.setControlSource(SOURCE_ATO);
                 lifecycle.setDepartureState("RUNNING");
-                lifecycle.setExecutedState(copy(context.currentState));
-                lifecycle.setEmergencyLatchedAfter(false);
-                lifecycle.setStatus("EXECUTED");
-                return lifecycle;
-            }
-
-            // Before ATO has started, the physical desk also publishes its
-            // neutral master-handle image continuously. This is a keepalive,
-            // not a manual takeover. Treat it as healthy standby so the UI
-            // does not report MODE_NOT_MANUAL while waiting for ATO_START.
-            if (!emergency && context.laboratoryAutoDeparture && context.mode == DrivingMode.ATO && !context.atoRunning
-                    && "coast".equals(command) && mapped.getMasterHandle() == 0) {
-                context.lastUpdatedAt = System.currentTimeMillis();
-                lifecycle.setResultMode(DrivingMode.ATO.name());
-                lifecycle.setControlSource(context.controlSource);
-                lifecycle.setDepartureState(context.departureState);
                 lifecycle.setExecutedState(copy(context.currentState));
                 lifecycle.setEmergencyLatchedAfter(false);
                 lifecycle.setStatus("EXECUTED");
@@ -475,9 +526,10 @@ public class Protocol704VehicleControlBridge {
                     context.controlSource = SOURCE_ATO;
                     context.plcConnectionId = null;
                     context.plcPort = -1;
-                } else {
-                    context.departureAuthorized = true;
-                    context.departureState = "RUNNING";
+                } else if ("DEPART_CONFIRM".equals(command)) {
+                    if (!context.departureAuthorized) {
+                        return reject(lifecycle, "SIGNAL_DEPARTURE_NOT_AUTHORIZED");
+                    }
                 }
                 context.lastCommand = command;
                 context.lastUpdatedAt = System.currentTimeMillis();
@@ -505,16 +557,11 @@ public class Protocol704VehicleControlBridge {
                 return reject(lifecycle, "UNKNOWN_DIRECTION");
             }
 
-            // The physical desk has no separately verified departure button.
-            // After a protected intermediate stop, require one coast frame as
-            // an explicit handle reset before accepting traction toward the
-            // next station. A held traction handle therefore cannot depart by
-            // itself, while the operator still needs no synthetic web button.
+            // After a protected intermediate stop, a coast frame clears only
+            // the handle-reset interlock. It never grants a new departure.
             if (context.directHandleControl && context.awaitingNeutralAfterStation
                     && "coast".equals(command)) {
                 context.awaitingNeutralAfterStation = false;
-                context.departureAuthorized = true;
-                context.departureState = "RUNNING";
                 context.controlSource = source;
                 if (connectionId != null) {
                     context.plcConnectionId = connectionId;
@@ -673,11 +720,41 @@ public class Protocol704VehicleControlBridge {
         return Double.isFinite(value) && value >= 0.0 && value <= 100.0;
     }
 
-    /** Advances a started ATO run on the backend clock. */
+    private static boolean consumeAtoStartRisingEdge(ActiveSimulationContext context) {
+        boolean edge = context.atoStartRisingEdge;
+        context.atoStartRisingEdge = false;
+        return edge;
+    }
+
+    /**
+     * The laboratory preparation requires the physical key transition
+     * open -> closed -> open. A cyclic PLC image only carries its current bit,
+     * so retain this small transition history per registered desk session.
+     */
+    private static void updateKeyPreparation(ActiveSimulationContext context, boolean keySwitchOn) {
+        boolean previous = context.keySwitchOn;
+        context.keySwitchOn = keySwitchOn;
+
+        if (!previous && keySwitchOn) {
+            if (context.keyOpenedOnce && context.keyClosedAfterOpen) {
+                context.keyPreparationComplete = true;
+            } else {
+                context.keyOpenedOnce = true;
+            }
+        } else if (previous && !keySwitchOn && context.keyOpenedOnce) {
+            context.keyClosedAfterOpen = true;
+        }
+    }
+
+    /** Advances backend-owned ATO and ATP emergency-brake trajectories. */
     @Scheduled(fixedRate = 500)
     public void advanceAtoSessions() {
         for (ActiveSimulationContext context : contexts.values()) {
             synchronized (context) {
+                if (context.emergencyBrakeRunning) {
+                    advanceEmergencyTrajectory(context);
+                    continue;
+                }
                 if (!context.atoRunning || context.emergencyLatched) continue;
                 if (context.atoFrameIndex + 1 < context.atoTrajectory.size()) {
                     context.atoFrameIndex++;
@@ -690,11 +767,76 @@ public class Protocol704VehicleControlBridge {
                 context.atoRunning = false;
                 context.atoTrajectory = List.of();
                 context.atoFrameIndex = 0;
-                updateStationStop(context);
+                // ATO generated this trajectory for exactly the next station.
+                // Numerical integration may stop a little short, so completion
+                // must transition to the platform state instead of leaving an
+                // ended ATO run in an in-between section state.
+                updateStationStop(context, true);
                 context.lastUpdatedAt = System.currentTimeMillis();
                 publishToDispatch(context);
             }
         }
+    }
+
+    /**
+     * Generates the complete ATP emergency-brake curve once, then publishes one
+     * physically integrated state every 500 ms. The bridge remains the single
+     * source of the desk-visible state throughout the stop.
+     */
+    private void startEmergencyTrajectory(ActiveSimulationContext context) {
+        try {
+            double targetPosition = stationDistanceFromOrigin(context, context.currentTargetStationId);
+            SimulationControlRequest request = new SimulationControlRequest();
+            request.setFromStationId(context.currentStationId);
+            request.setToStationId(context.currentTargetStationId);
+            request.setCurrentState(copy(context.currentState));
+            request.setCurrentMode(DrivingMode.EMERGENCY);
+            request.setControlCommand(new ControlCommand("atp_emergency_brake", 2.5, 100.0));
+            request.setDepartureConfirmed(true);
+            request.setTotalTargetPosition(targetPosition);
+            request.setNextStationId(context.currentTargetStationId);
+            request.setNextStationName(stationName(context.currentTargetStationId));
+            LineProfile line = lineProfileJsonLoader.buildLineProfile(
+                    context.currentStationId, context.currentTargetStationId);
+            SimulationResult result = vehicleSimulationService.runContinuation(
+                    request, demoScenarioProvider.buildScenario(line), targetPosition);
+            if (result.getStates() == null || result.getStates().isEmpty()) {
+                context.emergencyBrakeRunning = false;
+                return;
+            }
+            context.emergencyTrajectory = result.getStates().stream()
+                    .map(Protocol704VehicleControlBridge::copy).toList();
+            context.emergencyFrameIndex = 0;
+            context.emergencyBrakeRunning = true;
+            context.currentState = copy(context.emergencyTrajectory.get(0));
+        } catch (Exception ex) {
+            // A failed local integration must still leave the physical desk in
+            // the latched emergency state. The caller can observe this through
+            // the bridge snapshot and must not resume traction automatically.
+            context.emergencyBrakeRunning = false;
+            context.emergencyTrajectory = List.of();
+            context.emergencyFrameIndex = 0;
+        }
+    }
+
+    private void advanceEmergencyTrajectory(ActiveSimulationContext context) {
+        if (context.emergencyFrameIndex + 1 < context.emergencyTrajectory.size()) {
+            context.emergencyFrameIndex++;
+            context.currentState = copy(context.emergencyTrajectory.get(context.emergencyFrameIndex));
+            context.lastCommand = "ATP_EMERGENCY_BRAKE";
+            context.lastUpdatedAt = System.currentTimeMillis();
+            publishToDispatch(context);
+            return;
+        }
+        context.emergencyBrakeRunning = false;
+        context.emergencyTrajectory = List.of();
+        context.emergencyFrameIndex = 0;
+        context.currentState.setVelocity(0.0);
+        context.currentState.setAcceleration(0.0);
+        context.currentState.setPhase(SimulationPhase.STOPPED);
+        context.lastCommand = "ATP_EMERGENCY_BRAKE";
+        context.lastUpdatedAt = System.currentTimeMillis();
+        publishToDispatch(context);
     }
 
     private Protocol704CommandLifecycle startAto(ActiveSimulationContext context,
@@ -710,15 +852,15 @@ public class Protocol704VehicleControlBridge {
             lifecycle.setStatus("EXECUTED");
             return lifecycle;
         }
-        // Laboratory desk mode: ATO-start bit alone triggers departure.
-        if (!context.laboratoryAutoDeparture) {
-            if (!context.keySwitchOn) return reject(lifecycle, "KEY_SWITCH_NOT_ON");
-            if (!context.departureAuthorized) return reject(lifecycle, "SIGNAL_DEPARTURE_NOT_AUTHORIZED");
-            if (!context.doorsClosed) return reject(lifecycle, "DOORS_NOT_CLOSED");
-            if (context.doorCycleRequired) return reject(lifecycle, "DOOR_CYCLE_INCOMPLETE");
-            if (!"FORWARD".equals(mapped.getDirection())) return reject(lifecycle, "ATO_DIRECTION_NOT_FORWARD");
-            if (mapped.getMasterHandle() != 0) return reject(lifecycle, "ATO_MASTER_HANDLE_NOT_ZERO");
+        if (!context.keySwitchOn) return reject(lifecycle, "KEY_SWITCH_NOT_ON");
+        if (SOURCE_PLC.equals(lifecycle.getSource()) && !context.keyPreparationComplete) {
+            return reject(lifecycle, "KEY_CYCLE_INCOMPLETE");
         }
+        if (!context.departureAuthorized) return reject(lifecycle, "SIGNAL_DEPARTURE_NOT_AUTHORIZED");
+        if (!context.doorsClosed) return reject(lifecycle, "DOORS_NOT_CLOSED");
+        if (context.doorCycleRequired) return reject(lifecycle, "DOOR_CYCLE_INCOMPLETE");
+        if (!"FORWARD".equals(mapped.getDirection())) return reject(lifecycle, "ATO_DIRECTION_NOT_FORWARD");
+        if (mapped.getMasterHandle() != 0) return reject(lifecycle, "ATO_MASTER_HANDLE_NOT_ZERO");
         if (context.currentTargetStationId > context.toStationId) return reject(lifecycle, "NO_NEXT_STATION");
 
         context.departureAuthorized = true;
@@ -783,17 +925,22 @@ public class Protocol704VehicleControlBridge {
     }
 
     private void updateStationStop(ActiveSimulationContext context) {
+        updateStationStop(context, false);
+    }
+
+    private void updateStationStop(ActiveSimulationContext context, boolean forceAtoTarget) {
         TrainState state = context.currentState;
         double targetPosition = stationDistanceFromOrigin(context, context.currentTargetStationId);
         // A driver may brake to zero anywhere in the section. Only a stop within
         // the configured approach tolerance is an arrival at the next station.
-        if (state.getPosition() < targetPosition - STATION_STOP_MARGIN_M) return;
-        if (state.getVelocity() > STOPPED_SPEED_MPS) return;
+        if (!forceAtoTarget && state.getPosition() < targetPosition - STATION_STOP_MARGIN_M) return;
+        if (!forceAtoTarget && state.getVelocity() > STOPPED_SPEED_MPS) return;
 
         // Continuation physics can stop a few metres short on a conservative
         // approach. Treat the configured platform tolerance as the authority,
         // snap the software train to the target and require a new departure.
         state.setPosition(targetPosition);
+        state.setAbsolutePosition(stationAbsolutePosition(context.currentTargetStationId));
         state.setVelocity(0.0);
         state.setAcceleration(0.0);
         state.setPhase(SimulationPhase.STOPPED);
@@ -925,6 +1072,18 @@ public class Protocol704VehicleControlBridge {
         return Boolean.TRUE.equals(value);
     }
 
+    private static Integer integer(Object value) {
+        if (value instanceof Number number) return number.intValue();
+        if (value instanceof String text) {
+            try {
+                return Integer.parseInt(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
     private static final class ActiveSimulationContext {
         final String trainId;
         final int fromStationId;
@@ -939,9 +1098,13 @@ public class Protocol704VehicleControlBridge {
         boolean departureAuthorized;
         String departureState = "READY_TO_DEPART";
         boolean directHandleControl;
-        boolean laboratoryAutoDeparture;
         boolean awaitingNeutralAfterStation;
         boolean keySwitchOn;
+        boolean keyOpenedOnce;
+        boolean keyClosedAfterOpen;
+        boolean keyPreparationComplete;
+        int directionHandle;
+        int masterHandle;
         boolean doorsClosed = true;
         boolean doorCycleRequired;
         boolean doorOpenedAtStop;
@@ -950,9 +1113,14 @@ public class Protocol704VehicleControlBridge {
         boolean rightDoorClosePressed;
         boolean leftDoorOpenPressed;
         boolean leftDoorClosePressed;
+        boolean atoStartPressed;
+        boolean atoStartRisingEdge;
         boolean atoRunning;
         List<TrainState> atoTrajectory = List.of();
         int atoFrameIndex;
+        boolean emergencyBrakeRunning;
+        List<TrainState> emergencyTrajectory = List.of();
+        int emergencyFrameIndex;
         String plcConnectionId;
         int plcPort = -1;
         long lastUpdatedAt = System.currentTimeMillis();

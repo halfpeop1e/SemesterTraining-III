@@ -35,11 +35,10 @@ public class SimulationRunRequest {
      */
     private boolean hardwareControlEnabled;
     /**
-     * Laboratory demonstration convenience only. When enabled, the driver-desk
-     * ATO button is the departure action after the required door cycle, without
-     * an additional dispatch-page confirmation. This never sends a wayside
-     * authority command to physical equipment.
+     * Retained only for backwards-compatible request parsing. It is ignored:
+     * every hardware departure must be authorized by the signal/ATS path.
      */
+    @Deprecated
     private boolean labAutoDepartureEnabled;
 
     public SimulationRunRequest() {

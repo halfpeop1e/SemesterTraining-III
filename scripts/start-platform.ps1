@@ -48,16 +48,44 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-$backendPort = [int](Get-ComposeSetting 'BACKEND_PORT' '8080')
-$controlCenterPort = [int](Get-ComposeSetting 'CONTROL_CENTER_PORT' '5173')
-$onboardPort = [int](Get-ComposeSetting 'ONBOARD_PORT' '5174')
-foreach ($port in $backendPort, $controlCenterPort, $onboardPort) {
-    $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($listener) {
-        throw "Port $port is already in use by process $($listener.OwningProcess). Stop the existing local service, or change the matching port in .env before starting Docker."
+function Find-FreePort([int]$StartPort) {
+    $port = $StartPort
+    while ($port -lt 65535) {
+        $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $listener) { return $port }
+        $port++
     }
+    throw "No free port found starting from $StartPort."
 }
+
+$configuredBackendPort = [int](Get-ComposeSetting 'BACKEND_PORT' '8080')
+$configuredControlCenterPort = [int](Get-ComposeSetting 'CONTROL_CENTER_PORT' '5173')
+$configuredOnboardPort = [int](Get-ComposeSetting 'ONBOARD_PORT' '5174')
+
+$backendPort = Find-FreePort $configuredBackendPort
+$controlCenterPort = $configuredControlCenterPort
+$onboardPort = $configuredOnboardPort
+
+if ($backendPort -ne $configuredBackendPort) {
+    Write-Host "Port $configuredBackendPort is in use. Backend will use port $backendPort instead." -ForegroundColor Yellow
+}
+if ($controlCenterPort -eq $backendPort) {
+    $controlCenterPort = Find-FreePort ($controlCenterPort + 1)
+}
+if ($controlCenterPort -ne $configuredControlCenterPort) {
+    Write-Host "Port $configuredControlCenterPort is in use. Control center will use port $controlCenterPort instead." -ForegroundColor Yellow
+}
+if ($onboardPort -eq $backendPort -or $onboardPort -eq $controlCenterPort) {
+    $onboardPort = Find-FreePort ([Math]::Max($onboardPort, $controlCenterPort) + 1)
+}
+if ($onboardPort -ne $configuredOnboardPort) {
+    Write-Host "Port $configuredOnboardPort is in use. Onboard system will use port $onboardPort instead." -ForegroundColor Yellow
+}
+
+$env:BACKEND_PORT = $backendPort.ToString()
+$env:CONTROL_CENTER_PORT = $controlCenterPort.ToString()
+$env:ONBOARD_PORT = $onboardPort.ToString()
 
 $env:HIL_TRAIN_ID = $TrainId
 if ($Lab) {
@@ -66,8 +94,9 @@ if ($Lab) {
     $env:HIL_NETWORK_SCREEN_ENABLED = 'true'
     $env:HIL_VISION_ENABLED = 'true'
     $env:PLC_AUTO_START = 'false'
-    $env:PLC_OUTPUT_ENABLED = 'false'
-    Write-Host "Laboratory mode: train ID=$TrainId; network, signal, and Vision outputs are enabled." -ForegroundColor Cyan
+    $env:PLC_OUTPUT_ENABLED = 'true'
+    $env:PLC_OUTPUT_FRAME_FORMAT = 'capture-variant-28'
+    Write-Host "Laboratory mode: train ID=$TrainId; screens, Vision, and PLC 28-byte output are enabled." -ForegroundColor Cyan
     Write-Host 'PLC is not auto-connected. Create and bring the same train ID online, then click 704 Connect in the onboard page.' -ForegroundColor Yellow
 } else {
     $env:HIL_ENABLED = 'false'
@@ -76,6 +105,7 @@ if ($Lab) {
     $env:HIL_VISION_ENABLED = 'false'
     $env:PLC_AUTO_START = 'false'
     $env:PLC_OUTPUT_ENABLED = 'false'
+    $env:PLC_OUTPUT_FRAME_FORMAT = 'capture-variant-28'
     Write-Host 'Local simulation mode: no laboratory device will be connected or written.' -ForegroundColor Green
 }
 

@@ -22,6 +22,8 @@ import com.bjtu.railtransit.signal.service.MovementAuthorityRegistry;
 import com.bjtu.railtransit.signal.service.SignalEventLog;
 import com.bjtu.railtransit.signal.service.SignalInterlockingService;
 import com.bjtu.railtransit.signal.service.TsrService;
+import com.bjtu.railtransit.signal.service.SignalPlcDepartureService;
+import com.bjtu.railtransit.vehicle.protocol704.Protocol704VehicleControlBridge;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -61,13 +63,17 @@ public class SignalController {
     private final CommandBus commandBus;
     private final DispatchEngine dispatchEngine;
     private final SimulationService simulationService;
+    private final SignalPlcDepartureService signalPlcDepartureService;
+    private final Protocol704VehicleControlBridge vehicleBridge;
 
     @Autowired
     public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader,
                             MovementAuthorityRegistry registry, SignalInterlockingService interlocking,
                             TsrService tsrService, SignalEventLog eventLog,
                             StatusFusion statusFusion, CommandBus commandBus,
-                            DispatchEngine dispatchEngine, SimulationService simulationService) {
+                            DispatchEngine dispatchEngine, SimulationService simulationService,
+                            SignalPlcDepartureService signalPlcDepartureService,
+                            Protocol704VehicleControlBridge vehicleBridge) {
         this.maService = maService;
         this.lineProfileLoader = lineProfileLoader;
         this.registry = registry;
@@ -78,11 +84,14 @@ public class SignalController {
         this.commandBus = commandBus;
         this.dispatchEngine = dispatchEngine;
         this.simulationService = simulationService;
+        this.signalPlcDepartureService = signalPlcDepartureService;
+        this.vehicleBridge = vehicleBridge;
     }
 
     /** Backward-compatible constructor for the existing standalone verification harnesses. */
     public SignalController(MovingAuthorityService maService, LineProfileLoader lineProfileLoader) {
-        this(maService, lineProfileLoader, new MovementAuthorityRegistry(), null, null, null, null, null, null, null);
+        this(maService, lineProfileLoader, new MovementAuthorityRegistry(), null, null, null,
+                null, null, null, null, null, null);
     }
 
     @GetMapping("/events")
@@ -176,29 +185,22 @@ public class SignalController {
             @RequestParam int routeId,
             @RequestParam(required = false) String trainId) {
         try {
-            Route route = interlocking.buildRoute(routeId);
+            Route route = trainId != null && !trainId.isBlank()
+                    ? interlocking.buildAndAssignRoute(routeId, trainId, "MANUAL_CTC",
+                            simulationService != null ? simulationService.getSimulationTimeSeconds() : Double.NaN)
+                    : interlocking.buildRoute(routeId);
+            if (simulationService != null) simulationService.refreshSignalSafetyState();
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("routeId", routeId);
             data.put("built", true);
 
             if (trainId != null && !trainId.isBlank()) {
-                try {
-                    interlocking.assignRoute(trainId, routeId);
-                    data.put("trainId", trainId);
-                    data.put("bound", true);
-                    if (eventLog != null) eventLog.add("INFO", "SIGNAL",
-                            "进路 " + routeId + " 建立并绑定 " + trainId, String.valueOf(routeId));
-                    return ApiResponse.ok(
-                            "进路 " + routeId + " 已建立并绑定 " + trainId, data);
-                } catch (Exception ae) {
-                    // 非原子：build 成功但 assign 失败 → 不回滚 build；bound=false + 明确 message
-                    data.put("bound", false);
-                    data.put("boundError", ae.getMessage());
-                    if (eventLog != null) eventLog.add("WARN", "SIGNAL",
-                            "进路 " + routeId + " 已建立；绑车失败：" + ae.getMessage(), String.valueOf(routeId));
-                    return ApiResponse.ok(
-                            "进路 " + routeId + " 已建立；绑车失败：" + ae.getMessage(), data);
-                }
+                data.put("trainId", trainId);
+                data.put("bound", true);
+                data.put("runtime", interlocking.getRouteRuntimeForTrain(trainId));
+                if (eventLog != null) eventLog.add("INFO", "SIGNAL",
+                        "进路 " + routeId + " 原子建立并绑定 " + trainId, String.valueOf(routeId));
+                return ApiResponse.ok("进路 " + routeId + " 已建立并绑定 " + trainId, data);
             }
             data.put("bound", false);
             if (eventLog != null) eventLog.add("INFO", "SIGNAL",
@@ -215,6 +217,7 @@ public class SignalController {
     public ApiResponse<Route> cancelRoute(@PathVariable int routeId) {
         try {
             Route route = interlocking.cancelRoute(routeId);
+            if (simulationService != null) simulationService.refreshSignalSafetyState();
             if (eventLog != null) eventLog.add("INFO", "SIGNAL",
                     "进路 " + routeId + " 已取消", String.valueOf(routeId));
             return ApiResponse.ok("route " + routeId + " cancelled", route);
@@ -230,6 +233,86 @@ public class SignalController {
         return ApiResponse.ok("built routes", interlocking.getBuiltRoutes());
     }
 
+    @GetMapping("/route/runtime")
+    public ApiResponse<java.util.List<com.bjtu.railtransit.signal.domain.RouteRuntimeState>> routeRuntime() {
+        return ApiResponse.ok("route runtime", interlocking.getRouteRuntimeStates());
+    }
+
+    /**
+     * Establish the complete, topology-verified CBI route sequence for one
+     * laboratory ATO station leg. This is intentionally separate from the
+     * generic single-route station operation endpoint.
+     */
+    @PostMapping("/laboratory/station-leg/build")
+    public ApiResponse<Map<String, Object>> buildLaboratoryStationLeg(
+            @RequestParam String trainId,
+            @RequestParam int fromStationId,
+            @RequestParam int toStationId) {
+        try {
+            double now = simulationService != null ? simulationService.getSimulationTimeSeconds() : Double.NaN;
+            List<Route> routes = interlocking.buildAndAssignLaboratoryStationLeg(
+                    trainId, fromStationId, toStationId, now);
+            if (simulationService != null) simulationService.refreshSignalSafetyState();
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("trainId", trainId);
+            data.put("fromStationId", fromStationId);
+            data.put("toStationId", toStationId);
+            data.put("routeIds", routes.stream().map(Route::getId).toList());
+            data.put("routes", routes);
+            data.put("runtime", interlocking.getRouteRuntimeForTrain(trainId));
+            return ApiResponse.ok("laboratory station leg established", data);
+        } catch (Exception e) {
+            return new ApiResponse<>(false, e.getMessage(), null);
+        }
+    }
+
+    @PostMapping("/laboratory/station-leg/cancel")
+    public ApiResponse<Map<String, Object>> cancelLaboratoryStationLeg(@RequestParam String trainId) {
+        try {
+            double now = simulationService != null ? simulationService.getSimulationTimeSeconds() : Double.NaN;
+            List<Route> routes = interlocking.cancelLaboratoryStationLeg(trainId, now);
+            if (simulationService != null) simulationService.refreshSignalSafetyState();
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("trainId", trainId);
+            data.put("routeIds", routes.stream().map(Route::getId).toList());
+            return ApiResponse.ok("laboratory station leg cancelled", data);
+        } catch (Exception e) {
+            return new ApiResponse<>(false, e.getMessage(), null);
+        }
+    }
+
+    @GetMapping("/laboratory/station-leg/capabilities")
+    public ApiResponse<List<SignalInterlockingService.LaboratoryStationLegCapability>>
+    laboratoryStationLegCapabilities() {
+        return ApiResponse.ok("laboratory station-leg capabilities",
+                interlocking.getLaboratoryStationLegCapabilities());
+    }
+
+    /** Diagnostic projection of the authority -> ATO lamp -> driver-start chain. */
+    @GetMapping("/driver-workflow")
+    public ApiResponse<Map<String, Object>> driverWorkflow(@RequestParam String trainId) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("trainId", trainId);
+        data.put("route", interlocking == null ? null : interlocking.getRouteRuntimeForTrain(trainId));
+        data.put("movementAuthority", registry.get(trainId));
+        if (vehicleBridge == null) {
+            data.put("workflow", "CONTROL_BRIDGE_UNAVAILABLE");
+            data.put("atoReady", false);
+            data.put("atoReadinessBlockingReason", "CONTROL_BRIDGE_UNAVAILABLE");
+        } else {
+            data.put("workflow", signalPlcDepartureService == null
+                    ? vehicleBridge.atoWorkflowState(trainId)
+                    : signalPlcDepartureService.atoWorkflowState(trainId));
+            data.put("control", vehicleBridge.snapshot(trainId));
+            data.put("atoReady", signalPlcDepartureService != null
+                    && signalPlcDepartureService.isAtoReady(trainId));
+            data.put("atoReadinessBlockingReason", signalPlcDepartureService == null
+                    ? "SIGNAL_DEPARTURE_SERVICE_UNAVAILABLE"
+                    : signalPlcDepartureService.atoReadinessBlockingReason(trainId));
+        }
+        return ApiResponse.ok("driver workflow", data);
+    }
+
     // ═══ G1: 进路绑定（车→进路）═══
 
     @PostMapping("/route/assign")
@@ -238,6 +321,7 @@ public class SignalController {
             @RequestParam int routeId) {
         try {
             Route route = interlocking.assignRoute(trainId, routeId);
+            if (simulationService != null) simulationService.refreshSignalSafetyState();
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("trainId", trainId);
             data.put("routeId", routeId);
@@ -255,6 +339,7 @@ public class SignalController {
     @PostMapping("/route/unassign")
     public ApiResponse<Map<String, Object>> unassignRoute(@RequestParam String trainId) {
         interlocking.unassignRoute(trainId);
+        if (simulationService != null) simulationService.refreshSignalSafetyState();
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("trainId", trainId);
         data.put("bound", false);
@@ -365,6 +450,9 @@ public class SignalController {
         data.put("movementAuthorityMeters", ma == null ? 0 : ma.getEndOfAuthorityM());
         data.put("speedLimitKmh", ma == null ? 0 : ma.getMaxSpeedKmh());
         data.put("movementAuthority", ma);
+        data.put("routeRuntime", interlocking != null ? interlocking.getRouteRuntimeForTrain(trainId) : null);
+        data.put("departureBlockingReason", interlocking != null
+                ? interlocking.departureBlockingReason(trainId) : "INTERLOCKING_UNAVAILABLE");
         data.put("communicationStatus", statusFusion != null && statusFusion.communicationStale(trainId) ? "STALE" : "ONLINE");
         data.put("safetyStatus", train != null && train.isEmergencyBraking() ? "EMERGENCY" : "NORMAL");
         data.put("signalSource", "SIGNAL_SYSTEM");

@@ -72,6 +72,9 @@ export function useSimulationWS(): UseSimulationWSReturn {
         setConnected(true);
         setError('');
         reconnectDelay.current = 2000;
+        // A paused or newly restored simulation may not emit a WebSocket tick.
+        // Always hydrate once from the authoritative snapshot before relying on pushes.
+        void pollOnce();
         stopPolling(); // WebSocket 连通后停止降级轮询
       };
 
@@ -108,7 +111,7 @@ export function useSimulationWS(): UseSimulationWSReturn {
         startPolling();
       }
     }
-  }, [stopPolling, startPolling]);
+  }, [stopPolling, startPolling, pollOnce]);
 
   // 标签页切回前台时强制重连，解决浏览器后台节流导致 WebSocket 断开问题
   const handleVisibilityChange = useCallback(() => {

@@ -62,7 +62,7 @@ public class HilSnapshotProvider {
         var control = bridge.snapshot(trainId);
         if (control == null || control.state() == null) return HilVehicleSnapshot.idle(trainId);
         TrainState state = control.state();
-        double position = state.getAbsolutePosition() != null ? state.getAbsolutePosition() : state.getPosition();
+        double position = control.absolutePositionM();
         List<Station> stations = lineLoader.getLineProfile().getStations().stream()
                 .sorted(Comparator.comparingDouble(Station::getPositionM)).toList();
         Station current = stations.isEmpty() ? null : stations.get(0);
@@ -89,7 +89,9 @@ public class HilSnapshotProvider {
         String command = control.lastCommand() == null ? "COAST" : control.lastCommand().toUpperCase();
         int visionDirection = control.toStationId() >= control.fromStationId() ? 1 : -1;
         boolean doorsClosed = control.doorsClosed();
-        boolean atoActive = "ATO".equalsIgnoreCase(control.mode());
+        // Mode selection alone is not an ATO departure. The physical active
+        // indication must follow the accepted ATO_START workflow state.
+        boolean atoActive = control.atoRunning();
         boolean atoAvailable = signalPlcDeparture.isAtoReady(trainId);
         return new HilVehicleSnapshot(trainId, state.getTime(), position, state.getVelocity(),
                 state.getAcceleration(), speedLimit,
@@ -124,4 +126,3 @@ public class HilSnapshotProvider {
 
     private record VisionEdge(int id, double startM, double endM) {}
 }
-

@@ -8,8 +8,6 @@ import {
   SettingOutlined,
   BellOutlined,
   SignalFilled,
-  PlayCircleOutlined,
-  PauseCircleOutlined,
   ReloadOutlined,
   WifiOutlined,
   ClockCircleOutlined,
@@ -48,7 +46,6 @@ const GOLD = {
 };
 
 function LayoutFrame({ children, currentModule, onModuleChange }: Props) {
-  const [running, setRunning] = useState(false);
   const [clock, setClock] = useState('');
 
   useEffect(() => {
@@ -138,15 +135,6 @@ function LayoutFrame({ children, currentModule, onModuleChange }: Props) {
           <span className="hidden sm:flex items-center gap-1 text-xs font-medium" style={{ color: '#00E676' }}>
             <WifiOutlined />
           </span>
-
-          <Button
-            size="small"
-            icon={running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-            onClick={() => setRunning(!running)}
-            className="app-btn-gold"
-          >
-            {running ? '暂停仿真' : '启动仿真'}
-          </Button>
 
           <Button
             size="small"

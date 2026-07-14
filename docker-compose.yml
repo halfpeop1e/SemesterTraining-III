@@ -6,14 +6,15 @@ services:
       context: ./backend
     restart: unless-stopped
     environment:
-      SERVER_PORT: "8080"
+      SERVER_PORT: "${BACKEND_PORT:-8080}"
       VEHICLE_PROTOCOL704_HOST: ${PLC_HOST:-192.168.100.123}
       VEHICLE_PROTOCOL704_PORTS: ${PLC_PORTS:-8001,8002,8003}
       VEHICLE_PROTOCOL704_CONTROL_PORT: ${PLC_CONTROL_PORT:-8001}
       VEHICLE_PROTOCOL704_AUTO_START: ${PLC_AUTO_START:-false}
-      VEHICLE_PROTOCOL704_PLC_OUTPUT_ENABLED: ${PLC_OUTPUT_ENABLED:-false}
       HIL_ENABLED: ${HIL_ENABLED:-false}
       HIL_TRAIN_ID: ${HIL_TRAIN_ID:-LB}
+      HIL_PLC_OUTPUT_ENABLED: ${PLC_OUTPUT_ENABLED:-false}
+      HIL_PLC_OUTPUT_FRAME_FORMAT: ${PLC_OUTPUT_FRAME_FORMAT:-capture-variant-28}
       HIL_SIGNAL_SCREEN_ENABLED: ${HIL_SIGNAL_SCREEN_ENABLED:-false}
       HIL_SIGNAL_SCREEN_HOST: ${SIGNAL_SCREEN_HOST:-192.168.100.122}
       HIL_SIGNAL_SCREEN_PORT: ${SIGNAL_SCREEN_PORT:-9999}
@@ -26,7 +27,7 @@ services:
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/api/health >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:$${SERVER_PORT:-8080}/api/health >/dev/null 2>&1"]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -39,6 +40,10 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    environment:
+      BACKEND_PORT: "${BACKEND_PORT:-8080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${CONTROL_CENTER_PORT:-5173}:80"
 
@@ -49,5 +54,9 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    environment:
+      BACKEND_PORT: "${BACKEND_PORT:-8080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${ONBOARD_PORT:-5174}:80"

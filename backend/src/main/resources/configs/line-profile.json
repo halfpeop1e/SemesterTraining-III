@@ -2,20 +2,20 @@
   "lineId": "line-9",
   "lineName": "北京地铁9号线",
   "direction": "郭公庄 → 国家图书馆",
-  "totalLengthKm": 16.049,
+  "totalLengthKm": 16.04892,
   "stations": [
     { "id": 1, "name": "郭公庄",      "code": "GGZ", "km": 0.313,  "platformDown": 1,  "platformUp": 2 },
-    { "id": 2, "name": "丰台科技园",  "code": "FSP", "km": 1.661,  "platformDown": 3,  "platformUp": 4 },
-    { "id": 3, "name": "科怡路",      "code": "KYL", "km": 2.449,  "platformDown": 5,  "platformUp": 6 },
-    { "id": 4, "name": "丰台南路",    "code": "FTN", "km": 3.429,  "platformDown": 7,  "platformUp": 8 },
-    { "id": 5, "name": "丰台东大街",  "code": "FTD", "km": 5.014,  "platformDown": 9,  "platformUp": 10 },
-    { "id": 6, "name": "七里庄",      "code": "QLZ", "km": 6.340,  "platformDown": 11, "platformUp": 12 },
-    { "id": 7, "name": "六里桥",      "code": "LLQ", "km": 8.119,  "platformDown": 13, "platformUp": 14 },
-    { "id": 8, "name": "六里桥东",    "code": "LLE", "km": 9.429,  "platformDown": 15, "platformUp": 16 },
-    { "id": 9, "name": "北京西站",    "code": "BWR", "km": 10.599, "platformDown": 17, "platformUp": 18 },
-    { "id": 10, "name": "军事博物馆", "code": "JBG", "km": 11.997, "platformDown": 19, "platformUp": 20 },
-    { "id": 11, "name": "白堆子",     "code": "BDZ", "km": 13.907, "platformDown": 21, "platformUp": 22 },
-    { "id": 12, "name": "白石桥南",   "code": "BQS", "km": 14.954, "platformDown": 23, "platformUp": 24 },
-    { "id": 13, "name": "国家图书馆", "code": "GTG", "km": 16.049, "platformDown": 25, "platformUp": 26 }
+    { "id": 2, "name": "丰台科技园",  "code": "FSP", "km": 1.66052, "platformDown": 3,  "platformUp": 4 },
+    { "id": 3, "name": "科怡路",      "code": "KYL", "km": 2.44861, "platformDown": 5,  "platformUp": 6 },
+    { "id": 4, "name": "丰台南路",    "code": "FTN", "km": 3.42932, "platformDown": 7,  "platformUp": 8 },
+    { "id": 5, "name": "丰台东大街",  "code": "FTD", "km": 5.01446, "platformDown": 9,  "platformUp": 10 },
+    { "id": 6, "name": "七里庄",      "code": "QLZ", "km": 6.33990, "platformDown": 11, "platformUp": 12 },
+    { "id": 7, "name": "六里桥",      "code": "LLQ", "km": 8.11883, "platformDown": 13, "platformUp": 14 },
+    { "id": 8, "name": "六里桥东",    "code": "LLE", "km": 9.42916, "platformDown": 15, "platformUp": 16 },
+    { "id": 9, "name": "北京西站",    "code": "BWR", "km": 10.59874,"platformDown": 17, "platformUp": 18 },
+    { "id": 10, "name": "军事博物馆", "code": "JBG", "km": 11.99697,"platformDown": 19, "platformUp": 20 },
+    { "id": 11, "name": "白堆子",     "code": "BDZ", "km": 13.90677,"platformDown": 21, "platformUp": 22 },
+    { "id": 12, "name": "白石桥南",   "code": "BQS", "km": 14.95401,"platformDown": 23, "platformUp": 24 },
+    { "id": 13, "name": "国家图书馆", "code": "GTG", "km": 16.04892,"platformDown": 25, "platformUp": 26 }
   ]
 }

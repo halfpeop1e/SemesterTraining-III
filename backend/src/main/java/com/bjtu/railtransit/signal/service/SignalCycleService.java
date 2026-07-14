@@ -3,10 +3,13 @@ package com.bjtu.railtransit.signal.service;
 import com.bjtu.railtransit.domain.model.TrainState;
 import com.bjtu.railtransit.signal.domain.Direction;
 import com.bjtu.railtransit.signal.domain.MovingAuthority;
+import com.bjtu.railtransit.signal.domain.RouteRuntimeState;
+import com.bjtu.railtransit.signal.domain.RouteLifecycleState;
 import com.bjtu.railtransit.signal.domain.SignalEvent;
 import com.bjtu.railtransit.signal.model.AxleCounterSection;
 import com.bjtu.railtransit.signal.model.LineProfile;
 import com.bjtu.railtransit.signal.model.Route;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -32,35 +35,79 @@ public class SignalCycleService {
     private final boolean simulatedInterlocking;
     private final SignalInterlockingService interlockingService;
     private final SignalEventLog eventLog;
+    private final SignalPlcDepartureService signalPlcDepartureService;
+    private final boolean autoLaboratoryStationLeg;
     private final Map<String, Route> activeRoutes = new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * The vehicle model uses verified station chainage, while the supplied CBI
+     * Seg graph has no confirmed mapping to that coordinate system. A lease
+     * therefore binds one lab route to one ATO station leg and is released only
+     * after the bridge reports that exact station stop.
+     */
+    private final Map<String, LaboratoryRouteLease> laboratoryRouteLeases =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
+    @Autowired
     public SignalCycleService(MovingAuthorityService movingAuthorityService,
                               MovementAuthorityRegistry registry,
                               LineProfileLoader loader,
                               SignalInterlockingService interlockingService,
                               SignalEventLog eventLog,
-                              @Value("${rail.signal.simulated-interlocking:true}") boolean simulatedInterlocking)
+                              SignalPlcDepartureService signalPlcDepartureService,
+                              @Value("${rail.signal.simulated-interlocking:true}") boolean simulatedInterlocking,
+                              @Value("${rail.signal.auto-laboratory-station-leg:true}") boolean autoLaboratoryStationLeg)
             throws IOException {
         this.movingAuthorityService = movingAuthorityService;
         this.registry = registry;
         this.interlockingService = interlockingService;
         this.eventLog = eventLog;
+        this.signalPlcDepartureService = signalPlcDepartureService;
         // 必须与联锁/GET /line 共用同一 LineProfile，否则扳道/设灯不影响 MA 周期
         this.lineProfile = loader.getLineProfile();
         this.simulatedInterlocking = simulatedInterlocking;
+        this.autoLaboratoryStationLeg = autoLaboratoryStationLeg;
         // A missing aspect is intentionally left unset. Both the frontend and the
         // interlocking API treat it as RED, which is the fail-safe protective state.
         // GREEN is set only by a built route or an explicit signal command.
     }
 
+    /** Compatibility constructor for isolated signal-domain tests. */
+    public SignalCycleService(MovingAuthorityService movingAuthorityService,
+                              MovementAuthorityRegistry registry,
+                              LineProfileLoader loader,
+                              SignalInterlockingService interlockingService,
+                              SignalEventLog eventLog,
+                              boolean simulatedInterlocking) throws IOException {
+        this(movingAuthorityService, registry, loader, interlockingService, eventLog,
+                null, simulatedInterlocking, false);
+    }
+
+    /** Compatibility constructor for tests and integrations that explicitly wire the PLC bridge. */
+    public SignalCycleService(MovingAuthorityService movingAuthorityService,
+                              MovementAuthorityRegistry registry,
+                              LineProfileLoader loader,
+                              SignalInterlockingService interlockingService,
+                              SignalEventLog eventLog,
+                              SignalPlcDepartureService signalPlcDepartureService,
+                              boolean simulatedInterlocking) throws IOException {
+        this(movingAuthorityService, registry, loader, interlockingService, eventLog,
+                signalPlcDepartureService, simulatedInterlocking, false);
+    }
+
     public synchronized Map<String, MovingAuthority> runCycle(
             Iterable<TrainState> runtimeTrains, double nowSeconds) {
+        List<TrainState> runtimeList = new ArrayList<>();
+        for (TrainState train : runtimeTrains) runtimeList.add(train);
+
+        refreshAxleOccupancy(runtimeList);
+        interlockingService.advanceRouteLifecycles(runtimeList, nowSeconds);
+
         // G1: 从联锁同步 trainId→Route 绑定到 activeRoutes（MA 只读）
-        Map<String, Integer> bindings = interlockingService.getRouteBindings();
+        Map<String, Integer> bindingsBeforeLeaseSync = interlockingService.getRouteBindings();
         // 清除不再绑定的车
-        activeRoutes.keySet().removeIf(tid -> !bindings.containsKey(tid));
+        activeRoutes.keySet().removeIf(tid -> !bindingsBeforeLeaseSync.containsKey(tid));
         // 写入/更新绑定的 Route
-        for (Map.Entry<String, Integer> entry : bindings.entrySet()) {
+        for (Map.Entry<String, Integer> entry : bindingsBeforeLeaseSync.entrySet()) {
             String trainId = entry.getKey();
             int routeId = entry.getValue();
             Route route = interlockingService.getBuiltRoutes().stream()
@@ -72,12 +119,19 @@ public class SignalCycleService {
                 activeRoutes.remove(trainId);
             }
         }
-
-        // G2: 按车 positionM 刷新 axleSections.occupied（compute 前生效）
-        refreshAxleOccupancy(runtimeTrains);
+        synchronizeLaboratoryRouteLeases(nowSeconds);
+        autoBuildLaboratoryStationLegs(nowSeconds);
+        Map<String, Integer> bindingsAfterLeaseSync = interlockingService.getRouteBindings();
+        activeRoutes.keySet().removeIf(tid -> !bindingsAfterLeaseSync.containsKey(tid));
+        for (Map.Entry<String, Integer> entry : bindingsAfterLeaseSync.entrySet()) {
+            interlockingService.getBuiltRoutes().stream()
+                    .filter(route -> route.getId() == entry.getValue())
+                    .findFirst()
+                    .ifPresent(route -> activeRoutes.put(entry.getKey(), route));
+        }
 
         List<com.bjtu.railtransit.signal.domain.TrainState> signalTrains = new ArrayList<>();
-        for (TrainState runtime : runtimeTrains) {
+        for (TrainState runtime : runtimeList) {
             if (!runtime.occupiesTrack()) continue;
             Direction direction;
             try {
@@ -103,10 +157,23 @@ public class SignalCycleService {
 
         Map<String, MovingAuthority> values = movingAuthorityService.compute(
                 lineProfile, signalTrains, activeRoutes, nowSeconds);
+        for (com.bjtu.railtransit.signal.domain.TrainState signalTrain : signalTrains) {
+            if (!activeRoutes.containsKey(signalTrain.getTrainId())) {
+                MovingAuthority blocked = new MovingAuthority();
+                blocked.setTrainId(signalTrain.getTrainId());
+                blocked.setEndOfAuthorityM(signalTrain.getPositionM());
+                blocked.setMaxSpeedKmh(0);
+                blocked.setBasis(com.bjtu.railtransit.signal.domain.AuthorityBasis.ROUTE_END);
+                blocked.setEvent(SignalEvent.ROUTE_BLOCKED);
+                blocked.setTimestamp(signalTrain.getTimestamp());
+                values.put(signalTrain.getTrainId(), blocked);
+            }
+        }
+        applyLaboratoryStationLegAuthorities(runtimeList, values);
         registry.replace(values, nowSeconds,
                 simulatedInterlocking ? "SIMULATED_INTERLOCKING" : "LAB_INTERLOCKING");
 
-        for (TrainState runtime : runtimeTrains) {
+        for (TrainState runtime : runtimeList) {
             MovingAuthority ma = values.get(runtime.getTrainId());
             if (ma != null) {
                 applyAtpConstraint(runtime, ma);
@@ -124,6 +191,11 @@ public class SignalCycleService {
                 }
             }
         }
+
+        // Run only after ATP has marked this cycle's unsafe authority. A
+        // route-build REST call and a generic ATS command are intentions only;
+        // neither may make the train movable by themselves.
+        syncLaboratoryDepartureAuthorizations(runtimeList, values);
         return values;
     }
 
@@ -137,12 +209,19 @@ public class SignalCycleService {
         double emergencyDistance = speedMps * speedMps / (2 * EMERGENCY_BRAKE_MPS2);
 
         boolean degraded = ma.getEvent() == SignalEvent.DEGRADED
-                || ma.getEvent() == SignalEvent.MA_EXPIRED;
-        if (degraded || remaining <= STOP_MARGIN_METERS
-                || (speedMps > 0.1 && remaining <= emergencyDistance + STOP_MARGIN_METERS)) {
+                || ma.getEvent() == SignalEvent.MA_EXPIRED
+                || ma.getEvent() == SignalEvent.POSITION_LOSS;
+        boolean movingIntoUnsafeAuthority = speedMps > 0.1
+                && (degraded || remaining <= emergencyDistance + STOP_MARGIN_METERS);
+        if (movingIntoUnsafeAuthority) {
             train.setEmergencyBraking(true);
             train.setMaxSpeedLimit(0);
             train.setActiveCommand("ATP_EMERGENCY_BRAKE");
+            return;
+        }
+        if (remaining <= STOP_MARGIN_METERS || degraded || ma.getEvent() == SignalEvent.ROUTE_BLOCKED) {
+            train.setMaxSpeedLimit(0);
+            if (!train.isEmergencyBraking()) train.setActiveCommand("WAITING_ROUTE");
             return;
         }
 
@@ -159,6 +238,163 @@ public class SignalCycleService {
     public LineProfile getLineProfile() { return lineProfile; }
     public boolean isSimulatedInterlocking() { return simulatedInterlocking; }
     public Map<String, Route> getActiveRoutes() { return Collections.unmodifiableMap(activeRoutes); }
+    public boolean isDeparturePermitted(String trainId) {
+        return interlockingService.isDeparturePermitted(trainId);
+    }
+    public String departureBlockingReason(String trainId) {
+        return interlockingService.departureBlockingReason(trainId);
+    }
+    public void removeTrain(String trainId) { interlockingService.removeTrain(trainId); }
+
+    private void synchronizeLaboratoryRouteLeases(double nowSeconds) {
+        if (signalPlcDepartureService == null) return;
+        Map<String, Integer> bindings = interlockingService.getRouteBindings();
+        laboratoryRouteLeases.keySet().removeIf(trainId -> !bindings.containsKey(trainId));
+
+        for (Map.Entry<String, Route> entry : new ArrayList<>(activeRoutes.entrySet())) {
+            String trainId = entry.getKey();
+            Route route = entry.getValue();
+            var control = signalPlcDepartureService.controlSnapshot(trainId);
+            if (control == null || control.state() == null) continue;
+
+            LaboratoryRouteLease lease = laboratoryRouteLeases.get(trainId);
+            if (lease != null && hasReachedLaboratoryLease(control, lease)) {
+                if (interlockingService.completeRouteAfterLaboratoryArrival(trainId, nowSeconds)) {
+                    activeRoutes.remove(trainId);
+                    laboratoryRouteLeases.remove(trainId);
+                    if (eventLog != null) {
+                        eventLog.add("INFO", "ROUTE", "列车 " + trainId
+                                + " 已停靠站 " + lease.targetStationId + "，实验进路 "
+                                + route.getId() + " 已释放", trainId);
+                    }
+                }
+                continue;
+            }
+
+            RouteRuntimeState runtime = interlockingService.getRouteRuntimeForTrain(trainId);
+            List<Route> routes = interlockingService.getBuiltRoutesForTrain(trainId);
+            if (runtime != null && "LAB_STATION_LEG".equals(runtime.source())
+                    && lease == null && !routes.isEmpty()) {
+                List<Integer> routeIds = routes.stream().map(Route::getId).toList();
+                if (interlockingService.hasEstablishedRouteSequence(trainId, routeIds)) {
+                    laboratoryRouteLeases.put(trainId, new LaboratoryRouteLease(
+                            routeIds, control.nextTargetStationId(),
+                            control.nextTargetAbsolutePositionM()));
+                }
+            }
+        }
+    }
+
+    /**
+     * Single-train laboratory convenience: once the cab has completed the
+     * station door cycle, establish the verified route chain to its next ATO
+     * target. Interlocking remains authoritative; any conflict leaves the train
+     * stopped without departure authorization.
+     */
+    private void autoBuildLaboratoryStationLegs(double nowSeconds) {
+        if (!autoLaboratoryStationLeg || signalPlcDepartureService == null) return;
+        for (String trainId : signalPlcDepartureService.activeLaboratoryTrainIds()) {
+            if (interlockingService.getRouteRuntimeForTrain(trainId) != null) continue;
+            var control = signalPlcDepartureService.controlSnapshot(trainId);
+            if (control == null || control.state() == null
+                    || control.atoRunning()
+                    || control.state().getVelocity() > 0.1
+                    || !control.keySwitchOn()
+                    || !control.keyPreparationComplete()
+                    || control.directionHandle() != 1
+                    || control.masterHandle() != 0
+                    || !control.doorsClosed()
+                    || control.doorCycleRequired()
+                    || control.nextTargetStationId() <= control.currentStationId()) {
+                continue;
+            }
+            try {
+                List<Route> routes = interlockingService.buildAndAssignLaboratoryStationLeg(
+                        trainId, control.currentStationId(), control.nextTargetStationId(), nowSeconds);
+                List<Integer> routeIds = routes.stream().map(Route::getId).toList();
+                if (interlockingService.hasEstablishedRouteSequence(trainId, routeIds)) {
+                    laboratoryRouteLeases.put(trainId, new LaboratoryRouteLease(
+                            routeIds, control.nextTargetStationId(), control.nextTargetAbsolutePositionM()));
+                }
+                if (eventLog != null) {
+                    eventLog.add("INFO", "ROUTE", "列车 " + trainId + " 已自动办理站 "
+                            + control.currentStationId() + " 至站 " + control.nextTargetStationId()
+                            + " 实验进路 " + routeIds, trainId);
+                }
+            } catch (RuntimeException ex) {
+                if (eventLog != null) {
+                    eventLog.addThrottled("WARN", "ROUTE", "列车 " + trainId
+                                    + " 自动办理下一站进路失败: " + ex.getMessage(),
+                            trainId, trainId + "|AUTO_LAB_ROUTE_FAILED");
+                }
+            }
+        }
+    }
+
+    private static boolean hasReachedLaboratoryLease(
+            com.bjtu.railtransit.vehicle.protocol704.Protocol704VehicleControlBridge.ControlStateSnapshot control,
+            LaboratoryRouteLease lease) {
+        return !control.atoRunning()
+                && control.currentStationId() == lease.targetStationId
+                && control.state().getVelocity() <= 0.1
+                && control.absolutePositionM() >= lease.targetAbsolutePositionM - STOP_MARGIN_METERS;
+    }
+
+    /**
+     * A lab station leg can never receive MA beyond the next selected platform.
+     * This remains conservative when the static route endpoint is nearer: the
+     * existing MA is retained in that case and ATO_READY remains false.
+     */
+    private void applyLaboratoryStationLegAuthorities(List<TrainState> trains,
+                                                       Map<String, MovingAuthority> values) {
+        if (signalPlcDepartureService == null) return;
+        for (TrainState train : trains) {
+            LaboratoryRouteLease lease = laboratoryRouteLeases.get(train.getTrainId());
+            MovingAuthority ma = values.get(train.getTrainId());
+            if (lease == null || ma == null || train.getDirectionSign() < 0) continue;
+            if (lease.targetAbsolutePositionM <= train.getPositionMeters() + STOP_MARGIN_METERS) continue;
+            if (!interlockingService.hasEstablishedRouteSequence(train.getTrainId(), lease.routeIds)) continue;
+            if (ma.getEvent() != SignalEvent.NONE && ma.getEvent() != SignalEvent.SIGNAL_BOUNDARY) continue;
+            ma.setEndOfAuthorityM(lease.targetAbsolutePositionM);
+            ma.setBasis(com.bjtu.railtransit.signal.domain.AuthorityBasis.ROUTE_END);
+            ma.setEvent(SignalEvent.NONE);
+            ma.setRouteId(lease.routeIds.get(0));
+        }
+    }
+
+    private void syncLaboratoryDepartureAuthorizations(List<TrainState> trains,
+                                                         Map<String, MovingAuthority> values) {
+        if (signalPlcDepartureService == null) return;
+        for (TrainState train : trains) {
+            String trainId = train.getTrainId();
+            MovingAuthority ma = values.get(trainId);
+            RouteRuntimeState route = interlockingService.getRouteRuntimeForTrain(trainId);
+            LaboratoryRouteLease lease = laboratoryRouteLeases.get(trainId);
+            boolean routeEstablished = lease != null
+                    ? interlockingService.hasEstablishedRouteSequence(trainId, lease.routeIds)
+                    : route != null && route.state() == RouteLifecycleState.ESTABLISHED;
+            var control = signalPlcDepartureService.controlSnapshot(trainId);
+            boolean validAuthority = ma != null
+                    && ma.getMaxSpeedKmh() > 0
+                    && ma.getEvent() != SignalEvent.ROUTE_BLOCKED
+                    && ma.getEvent() != SignalEvent.DEGRADED
+                    && ma.getEvent() != SignalEvent.MA_EXPIRED
+                    && ma.getEvent() != SignalEvent.POSITION_LOSS
+                    && (ma.getEndOfAuthorityM() - train.getPositionMeters())
+                    * train.getDirectionSign() > STOP_MARGIN_METERS
+                    && (control == null
+                    || signalPlcDepartureService.authorityCoversNextAtoStation(control, ma));
+            boolean authorized = routeEstablished
+                    && interlockingService.isDeparturePermitted(trainId)
+                    && validAuthority
+                    && !train.isEmergencyBraking();
+            if (authorized) signalPlcDepartureService.onDepartureAuthorized(trainId);
+            else signalPlcDepartureService.onDepartureRevoked(trainId);
+        }
+    }
+
+    private record LaboratoryRouteLease(List<Integer> routeIds, int targetStationId,
+                                        double targetAbsolutePositionM) {}
 
     /**
      * G2: 按车 positionM 刷新 axleSections.occupied。
@@ -187,7 +423,7 @@ public class SignalCycleService {
                     continue;
                 // 车体 [lo, hi] 与区段 [aStart, aEnd] 有交集 → occupied
                 if (hi >= aStart && lo <= aEnd) {
-                    a.setOccupied(true);
+                    a.addOccupyingTrain(t.getTrainId());
                 }
             }
         }

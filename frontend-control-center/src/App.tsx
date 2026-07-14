@@ -14,9 +14,9 @@ const pageComponents: Record<string, React.FC> = {
 };
 
 function App() {
-  const [module, setModule] = useState('dashboard');
+  const [module, setModule] = useState('linesignal');
 
-  const PageComponent = useMemo(() => pageComponents[module] || Dashboard, [module]);
+  const PageComponent = useMemo(() => pageComponents[module] || LineSignal, [module]);
 
   return (
     <LayoutFrame currentModule={module} onModuleChange={setModule}>
