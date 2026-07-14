@@ -2,6 +2,8 @@ package com.bjtu.railtransit.hil;
 
 import com.bjtu.railtransit.vehicle.protocol704.Protocol704Service;
 import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -17,6 +19,8 @@ import java.util.Map;
 
 @Service
 public class LabHilGateway {
+    private static final Logger log = LoggerFactory.getLogger(LabHilGateway.class);
+
     private final HilSnapshotProvider snapshots;
     private final Protocol704Service plcService;
 
@@ -88,12 +92,14 @@ public class LabHilGateway {
             return;
         }
         int sockets = plcService.writeOutbound(trainId, frame);
+        String hex = bytesToHex(frame);
         plcStatus.setConnected(sockets > 0);
         if (sockets > 0) {
             plcStatus.incrementFramesSent();
             plcStatus.addBytesSent((long) sockets * frame.length);
             plcStatus.setLastSendTime(System.currentTimeMillis());
             plcStatus.setLastError(null);
+            log.info("704 TX hil plc output len={} sockets={} hex={}", frame.length, sockets, hex);
         } else {
             plcStatus.setLastError("no connected 704 PLC socket for train " + trainId);
         }
@@ -207,5 +213,14 @@ public class LabHilGateway {
             out = null;
             socket = null;
         }
+    }
+
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 3);
+        for (int i = 0; i < bytes.length; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(String.format("%02X", bytes[i] & 0xFF));
+        }
+        return sb.toString();
     }
 }

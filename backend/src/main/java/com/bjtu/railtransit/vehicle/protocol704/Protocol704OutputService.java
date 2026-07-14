@@ -40,7 +40,7 @@ public final class Protocol704OutputService {
             if (status != null) {
                 status.setLastOutputFrame(hex);
             }
-            log.debug("704 local-v1 output frame sent, not validated with real PLC, len={}", frame.length);
+            log.info("704 TX plc output len={} hex={}", frame.length, hex);
         } catch (IOException e) {
             if (portStatus != null) {
                 portStatus.setOutputErrorCount(portStatus.getOutputErrorCount() + 1);
