@@ -286,6 +286,14 @@ public class SignalCycleService {
                 "DOWN".equalsIgnoreCase(direction)
                         ? com.bjtu.railtransit.signal.domain.Direction.DOWN
                         : com.bjtu.railtransit.signal.domain.Direction.UP;
+        if (routeDirection == Direction.DOWN) {
+            // The CBI export's reverse Seg coordinates are not on the same
+            // chainage as the dispatch trajectory. Use the verified station
+            // chainage corridor for software trains instead of mixing domains.
+            localStationLegLeases.put(trainId, new LocalStationLegLease(
+                    List.of(), toStationId, stationPosition(toStationId), false));
+            return List.of();
+        }
         try {
             List<Route> routes = interlockingService.buildAndAssignLocalStationLeg(
                     trainId, fromStationId, toStationId, routeDirection, nowSeconds);

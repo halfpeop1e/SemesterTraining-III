@@ -62,7 +62,7 @@ class SignalCycleIntegrationTest {
     }
 
     @Test
-    void localDownDirectionUsesSoftwareStationCorridorWhenReverseCbiDataIsUnavailable() throws Exception {
+    void localDownDirectionUsesSoftwareStationCorridor() throws Exception {
         MaConfig config = MaConfig.exampleConfig();
         MovementAuthorityRegistry registry = new MovementAuthorityRegistry();
         LineProfileLoader loader = new LineProfileLoader();

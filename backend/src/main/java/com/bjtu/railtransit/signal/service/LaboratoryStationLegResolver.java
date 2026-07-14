@@ -52,6 +52,39 @@ final class LaboratoryStationLegResolver {
         }
 
         int platformDirection = direction == Direction.UP ? UP_PLATFORM_DIRECTION : DOWN_PLATFORM_DIRECTION;
+        if (direction == Direction.UP) {
+            int firstStationId = lineProfile.getStations().stream()
+                    .map(Station::getId)
+                    .mapToInt(Integer::parseInt)
+                    .min()
+                    .orElseThrow(() -> new IllegalArgumentException("line has no stations"));
+            int currentSignalId = initialMainlineSignal(station(firstStationId), platformDirection);
+
+            // Retain the verified UP mainline through interchange stations;
+            // choosing any platform signal can select a non-mainline route.
+            for (int stationId = firstStationId; stationId <= fromStationId; stationId++) {
+                Station targetStation = station(stationId + 1);
+                List<RoutePath> candidates = bestRouteSequences(
+                        List.of(currentSignalId), stationSignals(targetStation, platformDirection, "target"));
+                if (candidates.isEmpty()) {
+                    throw new IllegalArgumentException("no directed CBI route sequence from station "
+                            + stationId + " to station " + (stationId + 1));
+                }
+                if (candidates.size() != 1) {
+                    throw new IllegalArgumentException("ambiguous directed CBI route sequence from station "
+                            + stationId + " to station " + (stationId + 1));
+                }
+                RoutePath selected = candidates.get(0);
+                if (stationId == fromStationId) {
+                    return new LaboratoryStationLeg(fromStationId, toStationId, direction,
+                            selected.routes().stream().map(Route::getId).toList(),
+                            targetStation.getPositionM(), selected.startSignalId(), selected.signalId());
+                }
+                currentSignalId = selected.signalId();
+            }
+            throw new IllegalArgumentException("cannot resolve UP laboratory station leg");
+        }
+
         Station fromStation = station(fromStationId);
         Station toStation = station(toStationId);
 
@@ -78,6 +111,28 @@ final class LaboratoryStationLegResolver {
                 .filter(station -> String.valueOf(stationId).equals(station.getId()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("unknown station " + stationId));
+    }
+
+    private int initialMainlineSignal(Station station, int direction) {
+        Set<Integer> platformIds = new HashSet<>(station.getPlatformIds());
+        List<Platform> platforms = lineProfile.getPlatforms().stream()
+                .filter(platform -> platformIds.contains(platform.getId()))
+                .filter(platform -> platform.getDir() == direction)
+                .toList();
+        if (platforms.size() != 1) {
+            throw new IllegalArgumentException("station " + station.getId()
+                    + " has no unique initial platform for this direction");
+        }
+        List<Integer> signals = lineProfile.getSignals().stream()
+                .filter(signal -> signal.getSegId() == platforms.get(0).getSegId())
+                .filter(signal -> signal.getProtectDir() == direction)
+                .map(Signal::getId)
+                .toList();
+        if (signals.size() != 1) {
+            throw new IllegalArgumentException("station " + station.getId()
+                    + " has no unique initial signal for this direction");
+        }
+        return signals.get(0);
     }
 
     private List<Integer> stationSignals(Station station, int direction, String role) {
