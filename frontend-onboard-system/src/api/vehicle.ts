@@ -25,16 +25,33 @@ export interface TimetableEntry {
   plannedDwell: number;
 }
 
+export interface SignalStationArrival {
+  trainId: string;
+  stationName: string;
+  stationIndex: number;
+  arrivalTimeSeconds: number;
+  departureTimeSeconds: number;
+  dwellSeconds: number;
+  plannedArrivalSeconds: number;
+  plannedDepartureSeconds: number;
+  plannedDwellSeconds: number;
+  arrivalDeviation: number;
+  departureDeviation: number;
+}
+
 export interface OnboardSnapshot {
   currentTimeSeconds: number;
   train: {
     trainId: string;
-    positionM: number;
+    positionMeters: number;
     speedKmh: number;
     accelerationMps2: number;
-    lengthM: number;
+    trainLengthMeters: number;
     direction: string;
-    timestamp: number;
+    drivingMode: string;
+    status: string;
+    currentStationId?: string;
+    nextStationId?: string;
     faultSpeedLimitKmh?: number | null;
     positionLost?: boolean;
     integrityLost?: boolean;
@@ -46,6 +63,7 @@ export interface OnboardSnapshot {
   communicationStatus: string;
   safetyStatus: string;
   timetable: TimetableEntry[];
+  stationArrivals?: SignalStationArrival[];
   signalSource?: string;
 }
 
@@ -57,6 +75,7 @@ export interface SignalManagedTrain {
   nextStationIndex: number;
   originStationId?: number;
   destinationStationId?: number;
+  drivingMode?: string;
 }
 
 async function integrationRequest<T>(path: string, init?: RequestInit): Promise<T> {

@@ -23,6 +23,7 @@ import type {
   SidingStatus,
   SimulationResult,
   StationStop,
+  StopResult,
   TrainState,
 } from "../../types/vehicle";
 import { STATIONS } from "./data/lineMap";
@@ -70,11 +71,9 @@ function mapSignalSnapshotToTrainState(
           : "coast";
 
   return {
-    time: Number.isFinite(train.timestamp)
-      ? train.timestamp
-      : snapshot.currentTimeSeconds,
-    position: Math.max(0, (train.positionM - startPosition) * directionSign),
-    absolutePosition: train.positionM,
+    time: snapshot.currentTimeSeconds,
+    position: Math.max(0, (train.positionMeters - startPosition) * directionSign),
+    absolutePosition: train.positionMeters,
     velocity: speedKmh / 3.6,
     acceleration,
     phase,
@@ -281,17 +280,22 @@ function Vehicle() {
               train.direction === "DOWN" ? 1 : STATIONS[STATIONS.length - 1].stationId,
             );
             const base = existing ?? createInstance(train.trainId);
+            const drivingMode: DrivingMode = train.drivingMode === "ATO"
+              ? "ato"
+              : train.drivingMode === "EMERGENCY"
+                ? "emergency"
+                : "manual";
             next.set(train.trainId, {
               ...base,
               status: train.status === "FINISHED" ? "finished" : "playing",
               result: null,
               frameIndex: 0,
-              isPaused: true,
-              departureAuthorized: false,
+              isPaused: train.status === "READY_TO_DEPART" || train.status === "DWELLING",
+              departureAuthorized: drivingMode === "ato",
               fromStationId: originStationId,
               toStationId: destinationStationId,
               controlSourceMode: "SIGNAL_SYSTEM",
-              drivingMode: "ato",
+              drivingMode,
             });
           });
           Array.from(next.entries()).forEach(([trainId, instance]) => {
@@ -1025,7 +1029,39 @@ function Vehicle() {
         ai.fromStationId,
         ai.toStationId,
       )
-    : ai.result?.stopResult?.targetStopPosition ?? 1200;
+      : ai.result?.stopResult?.targetStopPosition ?? 1200;
+  const signalStationStops: StationStop[] = (activeSignalSnapshot?.stationArrivals ?? []).map((arrival) => {
+    const station = STATIONS.find((item) => item.stationId === arrival.stationIndex + 1);
+    const origin = STATIONS.find((item) => item.stationId === ai.fromStationId);
+    const targetPosition = station && origin
+      ? Math.abs(station.positionM - origin.positionM)
+      : 0;
+    return {
+      stationId: arrival.stationIndex + 1,
+      stationName: arrival.stationName,
+      segmentStartPosition: targetPosition,
+      targetPosition,
+      actualPosition: targetPosition,
+      stopError: 0,
+      inWindow: true,
+      arrivalTime: arrival.arrivalTimeSeconds,
+      dwellTime: arrival.dwellSeconds,
+    };
+  });
+  const displayedStationStops = signalControlledMode ? signalStationStops : ai.result?.stationStops;
+  const latestSignalStop = signalStationStops.length > 0
+    ? signalStationStops[signalStationStops.length - 1]
+    : undefined;
+  const displayedStopResult: StopResult | null = signalControlledMode && latestSignalStop
+    ? {
+      targetStopPosition: latestSignalStop.targetPosition,
+      actualStopPosition: latestSignalStop.actualPosition,
+      stopError: latestSignalStop.stopError,
+      success: latestSignalStop.inWindow,
+      reason: null,
+      stopWindowState: latestSignalStop.inWindow ? "IN_WINDOW" : "OUT_OF_WINDOW",
+    }
+    : ai.result?.stopResult ?? null;
   const speedLimitValue =
     signalControlledMode && activeSignalSnapshot
       ? activeSignalSnapshot.speedLimitKmh / 3.6
@@ -1648,10 +1684,10 @@ function Vehicle() {
           startPosition={0}
           targetStopPosition={targetStopPosition}
           speedLimit={speedLimitValue}
-          stopResult={ai.result?.stopResult ?? null}
+          stopResult={displayedStopResult}
           safetyEventCount={ai.allSafetyEvents.length}
           isPaused={signalControlledMode ? false : ai.isPaused}
-          stationStops={ai.result?.stationStops}
+          stationStops={displayedStationStops}
           externalDriveMode={ai.drivingMode}
           onRequestManual={() => handleRequestManual(activeTrainId)}
           onTractionLevel={(level, percent) =>
@@ -1703,9 +1739,9 @@ function Vehicle() {
               startPosition={0}
               targetStopPosition={targetStopPosition}
               speedLimit={speedLimitValue}
-              stopResult={ai.result?.stopResult ?? null}
+              stopResult={displayedStopResult}
               positionOffset={lineStartPosition}
-              stationStops={ai.result?.stationStops}
+              stationStops={displayedStationStops}
             />
           )}
           <div
@@ -1726,9 +1762,11 @@ function Vehicle() {
             <TimetableView
               currentState={viewState}
               status={ai.status}
-              stationStops={ai.result?.stationStops}
+              stationStops={displayedStationStops}
               fromStationId={ai.fromStationId}
               toStationId={ai.toStationId}
+              authoritativeTimetable={signalControlledMode ? activeSignalSnapshot?.timetable : undefined}
+              authoritativeTimeSeconds={signalControlledMode ? activeSignalSnapshot?.currentTimeSeconds : undefined}
             />
           )}
         </div>

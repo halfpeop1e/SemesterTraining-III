@@ -66,5 +66,11 @@ frontend-control-center/test-results/
 # PDF 文档（仓外管理）
 *.pdf
 
+# Agent / IDE 临时目录
+.agents/
+.lark-slides/
+deliverables/
+skills-lock.json
+
 # 仓外辅助目录（保持在仓外即可，不纳入 git）
 # .docs/ .docx/ .harness/ .history/ verify/ 均位于 git 仓库根之外

@@ -33,6 +33,7 @@ export interface ApiResponse<T> {
 // ===== 运行时数据（对应后端 signal/domain） =====
 export interface TrainState {
   trainId: string;
+  drivingMode?: 'MANUAL' | 'ATO';
   positionM: number;       // 车头里程 m
   speedKmh: number;
   accelerationMps2: number;

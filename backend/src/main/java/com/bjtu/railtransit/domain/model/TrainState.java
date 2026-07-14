@@ -31,6 +31,7 @@ public class TrainState {
     private double positionMeters;
     private double speed;              // km/h
     private String status;             // DEPOT_WAITING | DEPARTING | ACCELERATING | CRUISING | BRAKING | DWELLING | TURNING_BACK | FINISHED
+    private String drivingMode = "MANUAL"; // MANUAL until the operator explicitly switches this train to ATO
     private int currentStationIndex;   // 当前所在站 (DWELLING时为刚到达的站，运行中为已通过的最后站)
     private int nextStationIndex;      // 下一站索引
     private double nextStationKm;      // 下一站里程
@@ -170,6 +171,9 @@ public class TrainState {
 
     public String getStatus() { return status; }
     public void setStatus(String v) { this.status = v; }
+
+    public String getDrivingMode() { return drivingMode; }
+    public void setDrivingMode(String v) { this.drivingMode = v; }
 
     public int getCurrentStationIndex() { return currentStationIndex; }
     public void setCurrentStationIndex(int v) { this.currentStationIndex = v; }

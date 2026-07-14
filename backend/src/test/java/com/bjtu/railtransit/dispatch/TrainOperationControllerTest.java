@@ -16,6 +16,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -117,6 +118,71 @@ class TrainOperationControllerTest {
         mockMvc.perform(get("/api/simulations/snapshot"))
                 .andExpect(jsonPath("$.data.trains.length()").value(1))
                 .andExpect(jsonPath("$.data.trains[0].trainId").value("LOCAL_DOWN"));
+    }
+
+    @Test
+    void localSignalTrainIsVisibleToOnboardMonitoringAndDispatchDepartureUsesAto() throws Exception {
+        mockMvc.perform(post("/api/dispatch/trains")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"trainId\":\"SYNC_1\",\"headLinkId\":1,\"direction\":\"UP\",\"stationId\":1,\"destinationStationId\":3}"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.drivingMode").value("MANUAL"));
+
+        mockMvc.perform(get("/api/onboard/monitoring"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].trainId").value("SYNC_1"))
+                .andExpect(jsonPath("$.data[0].sourceType").value("SIGNAL_SIMULATION"))
+                .andExpect(jsonPath("$.data[0].report.operatingMode").value("MANUAL"));
+
+        mockMvc.perform(get("/api/signal/train/SYNC_1/snapshot"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.communicationStatus").value("LOCAL_SIMULATION"))
+                .andExpect(jsonPath("$.data.train.positionMeters").exists())
+                .andExpect(jsonPath("$.data.train.drivingMode").value("MANUAL"));
+
+        simulationService.startSimulation();
+        mockMvc.perform(post("/api/dispatch/commands")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"trainId\":\"SYNC_1\",\"commandType\":\"DEPART\",\"reason\":\"dispatch departure\",\"priority\":80}"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.commandType").value("DEPART"))
+                .andExpect(jsonPath("$.data.source").value("DISPATCHER"));
+
+        mockMvc.perform(get("/api/simulations/snapshot"))
+                .andExpect(jsonPath("$.data.trains[0].trainId").value("SYNC_1"))
+                .andExpect(jsonPath("$.data.trains[0].drivingMode").value("ATO"));
+    }
+
+    @Test
+    void localAtoStopsAtTheNextPlatformAndRecordsTheArrival() throws Exception {
+        simulationService.startSimulation();
+        simulationService.addTrain("STOP_1", 1, "UP", 1, "FULL", 3);
+        simulationService.requestDeparture("STOP_1");
+
+        java.lang.reflect.Field lastStep = SimulationService.class.getDeclaredField("lastStepSystemTimeMs");
+        lastStep.setAccessible(true);
+        boolean arrived = false;
+        for (int tick = 0; tick < 240; tick++) {
+            lastStep.setLong(simulationService, 0L);
+            simulationService.stepSimulation(1);
+            var arrivals = simulationService.getSnapshot().getStationArrivals();
+            if (arrivals.stream().anyMatch(arrival -> "STOP_1".equals(arrival.getTrainId())
+                    && arrival.getStationIndex() == 1)) {
+                arrived = true;
+                break;
+            }
+        }
+
+        var train = simulationService.findTrain("STOP_1");
+        assertTrue(arrived, "ATO should write an arrival record for the next platform");
+        assertEquals(1719.52, train.getPositionMeters(), 0.01,
+                "signal-side platform stop must use the authoritative station chainage");
+        assertEquals(0.0, train.getSpeed(), 0.01);
+        assertEquals("DWELLING", train.getStatus());
+
+        mockMvc.perform(get("/api/signal/train/STOP_1/snapshot"))
+                .andExpect(jsonPath("$.data.stationArrivals[0].stationIndex").value(1))
+                .andExpect(jsonPath("$.data.stationArrivals[0].arrivalTimeSeconds").exists());
     }
 
     @Test

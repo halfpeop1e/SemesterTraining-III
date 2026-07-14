@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { StationStop, TrainState } from "../../../types/vehicle";
+import type { TimetableEntry } from "../../../api/vehicle";
 import { STATIONS } from "../data/lineMap";
 import "./TimetableView.css";
 
@@ -9,6 +10,8 @@ export interface TimetableViewProps {
   stationStops?: StationStop[];
   fromStationId: number;
   toStationId: number;
+  authoritativeTimetable?: TimetableEntry[];
+  authoritativeTimeSeconds?: number;
 }
 
 interface TimetableRow {
@@ -65,15 +68,19 @@ function TimetableView({
   stationStops = [],
   fromStationId,
   toStationId,
+  authoritativeTimetable,
+  authoritativeTimeSeconds,
 }: TimetableViewProps) {
-  const currentTime = currentState?.time ?? 0;
+  const currentTime = authoritativeTimeSeconds ?? currentState?.time ?? 0;
   const currentAbsPos = currentState?.absolutePosition;
 
   // 推算时刻表
-  const schedule = useMemo(
-    () => estimateSchedule(STATIONS, fromStationId, toStationId, 15.0, 30.0),
-    [fromStationId, toStationId],
-  );
+  const schedule = useMemo(() => {
+    if (authoritativeTimetable && authoritativeTimetable.length > 0) {
+      return new Map(authoritativeTimetable.map((entry) => [entry.stationId, entry.plannedArrival]));
+    }
+    return estimateSchedule(STATIONS, fromStationId, toStationId, 15.0, 30.0);
+  }, [authoritativeTimetable, fromStationId, toStationId]);
 
   // 已到站的实际时间（仅限当前仿真时间已到达的站）
   const actualMap = useMemo(() => {

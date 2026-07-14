@@ -42,35 +42,47 @@ final class LaboratoryStationLegResolver {
     }
 
     LaboratoryStationLeg resolve(int fromStationId, int toStationId, Direction direction) {
-        if (direction != Direction.UP) {
-            throw new IllegalArgumentException("laboratory station-leg adapter currently supports UP only");
+        if (direction != Direction.UP && direction != Direction.DOWN) {
+            throw new IllegalArgumentException("station leg direction must be UP or DOWN");
         }
-        if (toStationId != fromStationId + 1) {
-            throw new IllegalArgumentException("laboratory station leg must use adjacent stations");
+        int stationStep = direction == Direction.UP ? 1 : -1;
+        if (toStationId != fromStationId + stationStep) {
+            throw new IllegalArgumentException("station leg must use adjacent stations in its travel direction");
         }
 
         int platformDirection = direction == Direction.UP ? UP_PLATFORM_DIRECTION : DOWN_PLATFORM_DIRECTION;
-        int firstStationId = lineProfile.getStations().stream()
-                .map(Station::getId)
-                .mapToInt(Integer::parseInt)
-                .min()
-                .orElseThrow(() -> new IllegalArgumentException("line has no stations"));
-        int currentSignalId = initialMainlineSignal(station(firstStationId), platformDirection);
+        int boundaryStationId;
+        if (direction == Direction.UP) {
+            boundaryStationId = lineProfile.getStations().stream()
+                    .map(Station::getId)
+                    .mapToInt(Integer::parseInt)
+                    .min()
+                    .orElseThrow(() -> new IllegalArgumentException("line has no stations"));
+        } else {
+            boundaryStationId = lineProfile.getStations().stream()
+                    .map(Station::getId)
+                    .mapToInt(Integer::parseInt)
+                    .max()
+                    .orElseThrow(() -> new IllegalArgumentException("line has no stations"));
+        }
+        int currentSignalId = initialMainlineSignal(station(boundaryStationId), platformDirection);
 
-        // Derive the source signal by following the already-selected mainline
-        // from the line origin. This preserves the verified 1->6 platform while
-        // carrying the actual arrival signal through interchange station 7.
-        for (int stationId = firstStationId; stationId <= fromStationId; stationId++) {
-            Station targetStation = station(stationId + 1);
+        // Derive the source signal by following the selected direction from its
+        // terminal. This preserves the verified platform through interchange
+        // stations instead of inferring a signal from a station number.
+        for (int stationId = boundaryStationId;
+             direction == Direction.UP ? stationId <= fromStationId : stationId >= fromStationId;
+             stationId += stationStep) {
+            Station targetStation = station(stationId + stationStep);
             List<RoutePath> candidates = bestRouteSequences(
                     List.of(currentSignalId), stationSignals(targetStation, platformDirection, "target"));
             if (candidates.isEmpty()) {
                 throw new IllegalArgumentException("no directed CBI route sequence from station "
-                        + stationId + " to station " + (stationId + 1));
+                        + stationId + " to station " + (stationId + stationStep));
             }
             if (candidates.size() != 1) {
                 throw new IllegalArgumentException("ambiguous directed CBI route sequence from station "
-                        + stationId + " to station " + (stationId + 1));
+                        + stationId + " to station " + (stationId + stationStep));
             }
             RoutePath selected = candidates.get(0);
             if (stationId == fromStationId) {

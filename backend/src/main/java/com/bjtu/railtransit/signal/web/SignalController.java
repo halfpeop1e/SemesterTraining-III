@@ -451,9 +451,13 @@ public class SignalController {
         data.put("speedLimitKmh", ma == null ? 0 : ma.getMaxSpeedKmh());
         data.put("movementAuthority", ma);
         data.put("routeRuntime", interlocking != null ? interlocking.getRouteRuntimeForTrain(trainId) : null);
+        data.put("stationArrivals", simulationService != null
+                ? simulationService.getStationArrivals(trainId) : Collections.emptyList());
         data.put("departureBlockingReason", interlocking != null
                 ? interlocking.departureBlockingReason(trainId) : "INTERLOCKING_UNAVAILABLE");
-        data.put("communicationStatus", statusFusion != null && statusFusion.communicationStale(trainId) ? "STALE" : "ONLINE");
+        data.put("communicationStatus", simulationService != null && simulationService.isLocalSimulationTrain(trainId)
+                ? "LOCAL_SIMULATION"
+                : statusFusion != null && statusFusion.communicationStale(trainId) ? "STALE" : "ONLINE");
         data.put("safetyStatus", train != null && train.isEmergencyBraking() ? "EMERGENCY" : "NORMAL");
         data.put("signalSource", "SIGNAL_SYSTEM");
 

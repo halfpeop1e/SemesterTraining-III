@@ -18,6 +18,7 @@ export interface TrainState {
   positionMeters: number;
   speed: number; // km/h
   status: 'DEPOT_WAITING' | 'DEPARTING' | 'ACCELERATING' | 'CRUISING' | 'BRAKING' | 'ARRIVING' | 'DWELLING' | 'TURNING_BACK' | 'FINISHED';
+  drivingMode?: 'MANUAL' | 'ATO';
   currentStationIndex: number;
   nextStationIndex: number;
   departureTime: string;

@@ -40,12 +40,24 @@ public class OnboardIntegrationController {
         if ("DEPART".equals(commandType) && simulation.isDriverDeskControlled(trainId)) {
             return ApiResponse.error("driver-desk-controlled train requires a physical ATO_START");
         }
-        TrainCommand issued = commands.issue(
-                trainId, commandType,
-                number(body.get("targetValue")), String.valueOf(body.getOrDefault("reason", "Dispatcher request")),
-                (int) number(body.getOrDefault("priority", 50)), String.valueOf(body.getOrDefault("source", "MANUAL")),
-                simulation.getSimulationTimeSeconds());
-        return ApiResponse.ok("command issued", issued);
+        String reason = String.valueOf(body.getOrDefault("reason", "Dispatcher request"));
+        int priority = (int) number(body.getOrDefault("priority", 50));
+        String source = String.valueOf(body.getOrDefault("source", "MANUAL"));
+        try {
+            // Local signal trains do not have a separate physical onboard process
+            // to consume CommandBus messages. Route the dispatch intent into the
+            // same ATO state machine used by the signal-page start button.
+            if ("DEPART".equals(commandType) && simulation.isLocalSimulationTrain(trainId)) {
+                TrainCommand issued = simulation.requestDispatcherDeparture(trainId, reason, priority);
+                return ApiResponse.ok("local ATO departure requested", issued);
+            }
+            TrainCommand issued = commands.issue(
+                    trainId, commandType, number(body.get("targetValue")), reason, priority, source,
+                    simulation.getSimulationTimeSeconds());
+            return ApiResponse.ok("command issued", issued);
+        } catch (Exception e) {
+            return ApiResponse.error(e.getMessage());
+        }
     }
 
     @PostMapping("/dispatch/commands/confirm")
@@ -73,7 +85,7 @@ public class OnboardIntegrationController {
 
     @GetMapping("/onboard/monitoring")
     public ApiResponse<List<Map<String, Object>>> monitoring() {
-        return ApiResponse.ok("onboard monitoring", fusion.monitoring());
+        return ApiResponse.ok("onboard monitoring", currentMonitoring());
     }
 
     @PostMapping("/dispatch/report/event")
@@ -93,7 +105,8 @@ public class OnboardIntegrationController {
         data.put("movementAuthorityMeters", ma == null ? 0 : ma.getEndOfAuthorityM());
         data.put("speedLimitKmh", ma == null ? 0 : ma.getMaxSpeedKmh());
         data.put("movementAuthority", ma);
-        data.put("communicationStatus", fusion.communicationStale(trainId) ? "STALE" : "ONLINE");
+        data.put("communicationStatus", simulation.isLocalSimulationTrain(trainId)
+                ? "LOCAL_SIMULATION" : fusion.communicationStale(trainId) ? "STALE" : "ONLINE");
         data.put("safetyStatus", train != null && train.isEmergencyBraking() ? "EMERGENCY" : "NORMAL");
         // 该车辆的时刻表
         List<Map<String, Object>> timetableList = new ArrayList<>();
@@ -125,13 +138,25 @@ public class OnboardIntegrationController {
         data.put("pendingManualConfirmations", commands.pendingConfirmations());
         data.put("onboardReports", fusion.reports());
         data.put("onboardEvents", events.events());
-        data.put("onboardMonitoring", fusion.monitoring());
-        boolean communicationHealthy = fusion.monitoring().stream()
+        List<Map<String, Object>> monitoring = currentMonitoring();
+        data.put("onboardMonitoring", monitoring);
+        boolean communicationHealthy = monitoring.stream()
                 .anyMatch(item -> Boolean.TRUE.equals(item.get("online")));
         data.put("communicationStatus", Map.of("mode", "HTTP_ONBOARD", "healthy", communicationHealthy));
         data.put("protocolAdapterStatus",
                 Map.of("signal", "READY", "vehicle", "READY", "driverDesk", "READY", "vision", "READY"));
         return ApiResponse.ok("dispatcher workstation", data);
+    }
+
+    private List<Map<String, Object>> currentMonitoring() {
+        List<Map<String, Object>> monitoring = new ArrayList<>(fusion.monitoring());
+        Set<String> reportedTrainIds = new LinkedHashSet<>();
+        for (Map<String, Object> item : monitoring) {
+            Object trainId = item.get("trainId");
+            if (trainId != null) reportedTrainIds.add(String.valueOf(trainId));
+        }
+        monitoring.addAll(simulation.getLocalOnboardMonitoring(reportedTrainIds));
+        return monitoring;
     }
 
     private double number(Object v) {

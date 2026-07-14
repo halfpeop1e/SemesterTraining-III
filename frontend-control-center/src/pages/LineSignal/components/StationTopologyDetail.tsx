@@ -7,7 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { Button, Segmented, Select, Tag, message } from 'antd';
-import { DatabaseOutlined, LeftOutlined, NodeIndexOutlined, RightOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, LeftOutlined, NodeIndexOutlined, PlayCircleOutlined, RightOutlined } from '@ant-design/icons';
 import type { LineProfile, MovingAuthority, SignalAspect, TrainState } from '../../../types/signal';
 import type { SelectedEntity } from './TrackDiagram';
 import {
@@ -30,6 +30,8 @@ interface Props {
   onStationChange: (stationId: string) => void;
   onBuildRoute: (routeId: number, trainId?: string) => void;
   onCancelRoute: (routeId: number) => void;
+  onStartTrain: (trainId: string) => void;
+  actionLoading?: boolean;
 }
 
 interface StationCanvasProps {
@@ -335,6 +337,8 @@ export default function StationTopologyDetail({
   onStationChange,
   onBuildRoute,
   onCancelRoute,
+  onStartTrain,
+  actionLoading = false,
 }: Props) {
   const [routeStartSignalId, setRouteStartSignalId] = useState<number>();
   const [routeEndSignalId, setRouteEndSignalId] = useState<number>();
@@ -533,16 +537,42 @@ export default function StationTopologyDetail({
             matchedRoute ? <Tag color="green">匹配 {matchedRoute.name || `#${matchedRoute.id}`}</Tag>
               : <Tag color="red">无匹配真实进路</Tag>
           )}
-          <Select size="small" allowClear style={{ width: 110 }} placeholder="绑定列车"
+          <Select
+            className="station-route-train-select"
+            size="small"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            popupMatchSelectWidth={false}
+            style={{ width: 170, minWidth: 170 }}
+            placeholder="选择绑定列车"
+            title={routeTrainId ? `已选择 ${routeTrainId}` : '选择要绑定进路的列车'}
             options={trains.map((train) => ({ value: train.trainId, label: train.trainId }))}
-            value={routeTrainId} onChange={setRouteTrainId} />
-          <Button size="small" type="primary" disabled={!matchedRoute} onClick={() => {
+            optionRender={(option) => (
+              <span title={String(option.label ?? option.value)}>{option.label}</span>
+            )}
+            value={routeTrainId}
+            onChange={setRouteTrainId}
+          />
+          <Button size="small" type="primary" disabled={!matchedRoute || actionLoading} onClick={() => {
             if (!matchedRoute) {
               message.warning('请按顺序选择有效的始端和终端信号机');
               return;
             }
             onBuildRoute(Number(matchedRoute.id), routeTrainId);
           }}>办理进路</Button>
+          <Button
+            size="small"
+            icon={<PlayCircleOutlined />}
+            loading={actionLoading}
+            disabled={!routeTrainId}
+            title="先建立并绑定进路，再请求列车发车；信号、MA或追踪间隔不满足时会继续等待"
+            onClick={() => {
+              if (routeTrainId) onStartTrain(routeTrainId);
+            }}
+          >
+            启动列车
+          </Button>
           <Button size="small" onClick={() => {
             setRouteStartSignalId(undefined);
             setRouteEndSignalId(undefined);

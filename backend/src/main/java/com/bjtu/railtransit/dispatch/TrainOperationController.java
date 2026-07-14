@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -49,6 +50,17 @@ public class TrainOperationController {
             return ApiResponse.ok("列车已下线并删除", simulationService.removeTrain(trainId));
         }
         catch (Exception e) { return ApiResponse.error(e.getMessage()); }
+    }
+
+    @PostMapping("/{trainId}/start")
+    public ApiResponse<TrainState> start(@PathVariable String trainId) {
+        try {
+            TrainState train = simulationService.findTrain(trainId);
+            if (train == null) throw new IllegalArgumentException("列车不存在: " + trainId);
+            return ApiResponse.ok("ATO 发车请求已提交，等待信号与移动授权", simulationService.requestDeparture(trainId));
+        } catch (Exception e) {
+            return ApiResponse.error(e.getMessage());
+        }
     }
 
     @DeleteMapping

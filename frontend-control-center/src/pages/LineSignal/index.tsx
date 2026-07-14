@@ -28,7 +28,7 @@ import {
   patchSwitchState,
   patchRouteBuilt,
 } from '../../api/signal';
-import { removeDispatchTrain } from '../../api/dispatch';
+import { removeDispatchTrain, requestDispatchTrainStart, startSimulation } from '../../api/dispatch';
 import { useSimulation } from '../../context/SimulationContext';
 import type {
   LineProfile,
@@ -59,6 +59,7 @@ function mapDispatchTrains(src: DispatchTrainState[], simTime: number): TrainSta
     .filter((t) => t.status !== 'FINISHED')
     .map((t) => ({
       trainId: t.trainId,
+      drivingMode: t.drivingMode,
       positionM: t.positionMeters,
       speedKmh: t.speed,
       accelerationMps2: 0,
@@ -77,6 +78,7 @@ function LineSignal() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [deletingTrainId, setDeletingTrainId] = useState<string | null>(null);
+  const [startingTrainId, setStartingTrainId] = useState<string | null>(null);
   const [stationId, setStationId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'overview' | 'station'>('overview');
   const [leftMenu, setLeftMenu] = useState<'route' | 'switch' | 'signal' | 'tsr' | 'status'>('route');
@@ -517,6 +519,26 @@ function LineSignal() {
     }
   }, [loadBindings, loadEvents, pushLocalEvent, refreshSimulation]);
 
+  const handleStartTrain = useCallback(async (trainId: string) => {
+    setStartingTrainId(trainId);
+    setActionLoading(true);
+    try {
+      await startSimulation(3600);
+      await requestDispatchTrainStart(trainId);
+      message.success(`${trainId} 已切换 ATO，系统已自动办理下一站进路并提交发车请求`);
+      pushLocalEvent(`列车 ${trainId} 已切换 ATO，自动办理进路并提交发车请求`, 'INFO');
+      await refreshSimulation();
+      await loadBindings();
+      await loadEvents();
+    } catch (error: any) {
+      message.error(error?.message || `启动 ${trainId} 失败`);
+      pushLocalEvent(error?.message || `启动 ${trainId} 失败`, 'ERROR');
+    } finally {
+      setActionLoading(false);
+      setStartingTrainId(null);
+    }
+  }, [loadBindings, loadEvents, pushLocalEvent, refreshSimulation]);
+
   const stationOptions = useMemo(() => {
     if (!lineProfile) return [];
     return sortedStations(lineProfile).map((s) => ({
@@ -729,6 +751,8 @@ function LineSignal() {
               onStationChange={setStationId}
               onBuildRoute={(id, tid) => void handleBuildRoute(id, tid)}
               onCancelRoute={(id) => void handleCancelRoute(id)}
+              onStartTrain={(trainId) => void handleStartTrain(trainId)}
+              actionLoading={actionLoading}
             />
           ) : null}
         </div>
@@ -741,9 +765,12 @@ function LineSignal() {
         entity={selected}
         lineProfile={lineProfile}
         maMap={maMap}
+        routeBindings={routeBindings}
         trains={trains}
         deletingTrainId={deletingTrainId}
         onDeleteTrain={(trainId) => void handleDeleteTrain(trainId)}
+        startingTrainId={startingTrainId}
+        onStartTrain={(trainId) => void handleStartTrain(trainId)}
         onClose={() => setSelected(null)}
       />
     </div>

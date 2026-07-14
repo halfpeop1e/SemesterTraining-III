@@ -192,6 +192,9 @@ export const addDispatchTrain = (payload: AddDispatchTrainRequest) =>
 export const removeDispatchTrain = (trainId: string) =>
   request<unknown>(`/dispatch/trains/${encodeURIComponent(trainId)}`, { method: 'DELETE' });
 
+export const requestDispatchTrainStart = (trainId: string) =>
+  request<unknown>(`/dispatch/trains/${encodeURIComponent(trainId)}/start`, { method: 'POST' });
+
 export const clearDispatchTrains = () =>
   request<{ removed: number }>('/dispatch/trains', { method: 'DELETE' });
 

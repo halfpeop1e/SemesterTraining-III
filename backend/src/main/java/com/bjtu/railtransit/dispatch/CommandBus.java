@@ -73,6 +73,18 @@ public class CommandBus {
                 && type.equals(c.getCommandType()) && !TERMINAL.contains(c.getStatus()));
     }
 
+    /** Returns the newest open command of a type so a repeated UI action remains idempotent. */
+    public synchronized TrainCommand latestOpenCommand(String trainId, String type) {
+        TrainCommand latest = null;
+        for (TrainCommand command : commands.values()) {
+            if (trainId.equals(command.getTrainId()) && type.equals(command.getCommandType())
+                    && !TERMINAL.contains(command.getStatus())) {
+                latest = command;
+            }
+        }
+        return latest;
+    }
+
     /** Marks outstanding commands of a type complete after the train reports execution. */
     public synchronized void completeOpenCommands(String trainId, String type, double now) {
         commands.values().stream()

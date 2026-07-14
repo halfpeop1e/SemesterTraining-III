@@ -1,4 +1,5 @@
-import { Button, Descriptions, Drawer, Popconfirm, Tag } from 'antd';
+import { Button, Descriptions, Modal, Popconfirm, Tag } from 'antd';
+import { PlayCircleOutlined } from '@ant-design/icons';
 import type { SelectedEntity } from './TrackDiagram';
 import type { LineProfile, MovingAuthority, TrainState, SignalAspect, SignalEvent, AuthorityBasis } from '../../../types/signal';
 
@@ -6,9 +7,12 @@ interface MaPanelProps {
   entity: SelectedEntity | null;
   lineProfile: LineProfile;
   maMap: Record<string, MovingAuthority>;
+  routeBindings?: Record<string, number>;
   trains: TrainState[];
   deletingTrainId?: string | null;
   onDeleteTrain?: (trainId: string) => void;
+  startingTrainId?: string | null;
+  onStartTrain?: (trainId: string) => void;
   onClose: () => void;
 }
 
@@ -48,9 +52,12 @@ export default function MaPanel({
   entity,
   lineProfile,
   maMap,
+  routeBindings,
   trains,
   deletingTrainId,
   onDeleteTrain,
+  startingTrainId,
+  onStartTrain,
   onClose,
 }: MaPanelProps) {
   const open = entity !== null;
@@ -62,46 +69,82 @@ export default function MaPanel({
       const train = trains.find(t => t.trainId === entity.id);
       const ma = maMap[entity.id as string];
       if (!train) return <p>未找到列车</p>;
+      const isAto = train.drivingMode === 'ATO';
       return (
         <>
           <Descriptions title="列车状态" column={1} size="small" bordered>
             <Descriptions.Item label="列车ID">{train.trainId}</Descriptions.Item>
             <Descriptions.Item label="车头里程">{(train.positionM / 1000).toFixed(3)} km</Descriptions.Item>
             <Descriptions.Item label="当前速度">{train.speedKmh.toFixed(1)} km/h</Descriptions.Item>
+            <Descriptions.Item label="运行状态">
+              <Tag color={train.speedKmh > 0.1 ? 'green' : 'gold'}>
+                {train.speedKmh > 0.1 ? '运行中' : '停车等待'}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="驾驶模式">
+              <Tag color={isAto ? 'green' : 'gold'}>{isAto ? 'ATO' : 'MANUAL'}</Tag>
+              <span className="ml-2 text-xs text-slate-500">{isAto ? '自动驾驶已接管' : '可切换 ATO 自动驾驶'}</span>
+            </Descriptions.Item>
             <Descriptions.Item label="方向">{train.direction}</Descriptions.Item>
             <Descriptions.Item label="列车长度">{train.lengthM.toFixed(1)} m</Descriptions.Item>
           </Descriptions>
-          {ma && (
-            <Descriptions title="移动授权 MA" column={1} size="small" bordered style={{ marginTop: 16 }}>
-              <Descriptions.Item label="授权终点">{(ma.endOfAuthorityM / 1000).toFixed(3)} km</Descriptions.Item>
-              <Descriptions.Item label="最大速度">{ma.maxSpeedKmh.toFixed(1)} km/h</Descriptions.Item>
-              <Descriptions.Item label="约束来源">{BASIS_LABEL[ma.basis] || ma.basis}</Descriptions.Item>
-              <Descriptions.Item label="事件状态">
-                <Tag color={EVENT_TAG[ma.event]?.color || 'default'}>
-                  {EVENT_TAG[ma.event]?.text || ma.event}
-                </Tag>
-              </Descriptions.Item>
-              {ma.capSignalId !== null && (
-                <Descriptions.Item label="截断信号机">#{ma.capSignalId}</Descriptions.Item>
-              )}
-            </Descriptions>
-          )}
-          {onDeleteTrain && (
-            <div className="mt-5 border-t border-slate-200 pt-4">
-              <Popconfirm
-                title={`删除列车 ${train.trainId}？`}
-                description="将解除进路、清除线路占用、MA 和 704 司机台连接。"
-                okText="确认删除"
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-                onConfirm={() => onDeleteTrain(train.trainId)}
-              >
-                <Button danger block loading={deletingTrainId === train.trainId}>
-                  删除车辆并解除线路占用
-                </Button>
-              </Popconfirm>
+          <Descriptions title="信号与移动授权" column={1} size="small" bordered style={{ marginTop: 16 }}>
+            <Descriptions.Item label="绑定进路">
+              {routeBindings?.[train.trainId] ? `进路 #${routeBindings[train.trainId]}` : '未绑定'}
+            </Descriptions.Item>
+            <Descriptions.Item label="授权终点">
+              {ma ? `${(ma.endOfAuthorityM / 1000).toFixed(3)} km` : '未建立'}
+            </Descriptions.Item>
+            <Descriptions.Item label="最大速度">
+              {ma ? `${ma.maxSpeedKmh.toFixed(1)} km/h` : '0.0 km/h'}
+            </Descriptions.Item>
+            <Descriptions.Item label="约束来源">
+              {ma ? (BASIS_LABEL[ma.basis] || ma.basis) : '等待进路/MA'}
+            </Descriptions.Item>
+            <Descriptions.Item label="事件状态">
+              <Tag color={EVENT_TAG[ma?.event || 'ROUTE_BLOCKED']?.color || 'default'}>
+                {EVENT_TAG[ma?.event || 'ROUTE_BLOCKED']?.text || '等待信号放行'}
+              </Tag>
+            </Descriptions.Item>
+            {ma?.capSignalId !== null && ma?.capSignalId !== undefined && (
+              <Descriptions.Item label="截断信号机">#{ma.capSignalId}</Descriptions.Item>
+            )}
+          </Descriptions>
+          <div className="mt-5 border-t border-slate-200 pt-4">
+            <div className="mb-3 text-xs text-slate-500">
+              {isAto
+                ? 'ATO 已接管；系统会自动办理下一站信号进路并申请 MA，条件不足时列车保持停车等待。'
+                : '当前是 MANUAL；切换 ATO 后，系统会自动办理下一站信号进路并申请 MA。'}
             </div>
-          )}
+            {onStartTrain && (
+              <Button
+                type="primary"
+                block
+                icon={<PlayCircleOutlined />}
+                loading={startingTrainId === train.trainId}
+                disabled={isAto || Boolean(startingTrainId && startingTrainId !== train.trainId)}
+                onClick={() => onStartTrain(train.trainId)}
+              >
+                {isAto ? (train.speedKmh > 0.1 ? '列车运行中' : 'ATO 已启动') : '切换 ATO 并启动'}
+              </Button>
+            )}
+            {onDeleteTrain && (
+              <div className="mt-3">
+                <Popconfirm
+                  title={`删除列车 ${train.trainId}？`}
+                  description="将解除进路、清除线路占用、MA 和 704 司机台连接。"
+                  okText="确认删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => onDeleteTrain(train.trainId)}
+                >
+                  <Button danger block loading={deletingTrainId === train.trainId}>
+                    删除车辆并解除线路占用
+                  </Button>
+                </Popconfirm>
+              </div>
+            )}
+          </div>
         </>
       );
     }
@@ -157,14 +200,18 @@ export default function MaPanel({
   };
 
   return (
-    <Drawer
+    <Modal
       title="详情面板"
-      placement="right"
+      centered
       open={open}
-      onClose={onClose}
-      size="default"
+      onCancel={onClose}
+      footer={null}
+      width={480}
+      destroyOnClose
     >
-      {renderContent()}
-    </Drawer>
+      <div className="max-h-[68vh] overflow-y-auto pr-1">
+        {renderContent()}
+      </div>
+    </Modal>
   );
 }
