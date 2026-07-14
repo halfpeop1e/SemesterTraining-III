@@ -487,9 +487,10 @@ public class SignalCycleService {
                 double aEnd = axleSectionEndM(a);
                 if (Double.isNaN(aStart) || Double.isNaN(aEnd))
                     continue;
-                // 车体 [lo, hi] 与区段 [aStart, aEnd] 有交集 → occupied
+                // 车体 [lo, hi] 与区段 [aStart, aEnd] 有交集 → occupied（含方向）
                 if (hi >= aStart && lo <= aEnd) {
-                    a.addOccupyingTrain(t.getTrainId());
+                    int dir = t.isUpDirection() ? 0x55 : 0xAA;
+                    a.addOccupyingTrain(t.getTrainId(), dir);
                 }
             }
         }

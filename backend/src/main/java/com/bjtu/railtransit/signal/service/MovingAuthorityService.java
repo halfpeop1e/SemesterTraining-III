@@ -228,11 +228,13 @@ public class MovingAuthorityService {
         return (dir == Direction.UP) ? (boundary > pos - 1e-6) : (boundary < pos + 1e-6);
     }
 
-    /** 找前车：沿行车方向最近的一辆（UP=位更大的最小者；DOWN=位更小的最大者）。 */
+    /** 找前车：同向列车中，沿行车方向最近的一辆（UP=位更大的最小者；DOWN=位更小的最大者）。 */
     private TrainState findPreceding(TrainState self, List<TrainState> all) {
         TrainState best = null;
         for (TrainState o : all) {
             if (o == self || o.getTrainId().equals(self.getTrainId())) continue;
+            // 上下行列车在不同轨道运行，不应互相视为前车
+            if (self.getDirection() != o.getDirection()) continue;
             if (self.getDirection() == Direction.UP) {
                 if (o.getPositionM() > self.getPositionM()) {
                     if (best == null || o.getPositionM() < best.getPositionM()) best = o;

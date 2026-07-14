@@ -485,9 +485,14 @@ public class SignalInterlockingService {
     }
 
     private void checkRouteResourcesAvailable(Route route, String ownerTrainId) {
+        // 从始端信号机获取进路方向，用于上下行隔离判断
+        int routeDir = 0;
+        Signal startSig = findSignal(String.valueOf(route.getStartSignalId()));
+        if (startSig != null) routeDir = startSig.getProtectDir();
+
         for (Integer sectionId : routeResourceSections(route)) {
             AxleCounterSection section = findAxleSection(sectionId);
-            if (section != null && section.isOccupiedByOtherThan(ownerTrainId)) {
+            if (section != null && section.isOccupiedByOtherThan(ownerTrainId, routeDir)) {
                 throw new IllegalStateException("进路区段占用: axleSectionId=" + sectionId);
             }
         }

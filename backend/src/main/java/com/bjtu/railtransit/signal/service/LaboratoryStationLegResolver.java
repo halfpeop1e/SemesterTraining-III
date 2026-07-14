@@ -21,7 +21,8 @@ import java.util.Set;
 /**
  * Resolves one physical laboratory station leg to a CBI route sequence.
  *
- * <p>The supplied data has platform Seg IDs and directed CBI routes but no
+ * <p>
+ * The supplied data has platform Seg IDs and directed CBI routes but no
  * direct station-to-route table. Interchange and terminal stations may place
  * the forward signal on the other platform Seg, and the export contains exact
  * duplicate route rows. This resolver therefore searches every station
@@ -51,48 +52,28 @@ final class LaboratoryStationLegResolver {
         }
 
         int platformDirection = direction == Direction.UP ? UP_PLATFORM_DIRECTION : DOWN_PLATFORM_DIRECTION;
-        int boundaryStationId;
-        if (direction == Direction.UP) {
-            boundaryStationId = lineProfile.getStations().stream()
-                    .map(Station::getId)
-                    .mapToInt(Integer::parseInt)
-                    .min()
-                    .orElseThrow(() -> new IllegalArgumentException("line has no stations"));
-        } else {
-            boundaryStationId = lineProfile.getStations().stream()
-                    .map(Station::getId)
-                    .mapToInt(Integer::parseInt)
-                    .max()
-                    .orElseThrow(() -> new IllegalArgumentException("line has no stations"));
-        }
-        int currentSignalId = initialMainlineSignal(station(boundaryStationId), platformDirection);
 
-        // Derive the source signal by following the selected direction from its
-        // terminal. This preserves the verified platform through interchange
-        // stations instead of inferring a signal from a station number.
-        for (int stationId = boundaryStationId;
-             direction == Direction.UP ? stationId <= fromStationId : stationId >= fromStationId;
-             stationId += stationStep) {
-            Station targetStation = station(stationId + stationStep);
-            List<RoutePath> candidates = bestRouteSequences(
-                    List.of(currentSignalId), stationSignals(targetStation, platformDirection, "target"));
-            if (candidates.isEmpty()) {
-                throw new IllegalArgumentException("no directed CBI route sequence from station "
-                        + stationId + " to station " + (stationId + stationStep));
-            }
-            if (candidates.size() != 1) {
-                throw new IllegalArgumentException("ambiguous directed CBI route sequence from station "
-                        + stationId + " to station " + (stationId + stationStep));
-            }
-            RoutePath selected = candidates.get(0);
-            if (stationId == fromStationId) {
-                return new LaboratoryStationLeg(fromStationId, toStationId, direction,
-                        selected.routes().stream().map(Route::getId).toList(),
-                        targetStation.getPositionM(), selected.startSignalId(), selected.signalId());
-            }
-            currentSignalId = selected.signalId();
+        // 直接从起点站查找出发信号，而非从边界终端站追溯。
+        // 避免终端站缺少下行出发进路时阻断非终端区间的路由解析。
+        Station fromStation = station(fromStationId);
+        Station toStation = station(toStationId);
+
+        List<Integer> startSignalIds = stationSignals(fromStation, platformDirection, "source");
+        List<Integer> targetSignalIds = stationSignals(toStation, platformDirection, "target");
+
+        List<RoutePath> candidates = bestRouteSequences(startSignalIds, targetSignalIds);
+        if (candidates.isEmpty()) {
+            throw new IllegalArgumentException("no directed CBI route sequence from station "
+                    + fromStationId + " to station " + toStationId);
         }
-        throw new IllegalArgumentException("cannot resolve laboratory station leg");
+        if (candidates.size() != 1) {
+            throw new IllegalArgumentException("ambiguous directed CBI route sequence from station "
+                    + fromStationId + " to station " + toStationId);
+        }
+        RoutePath selected = candidates.get(0);
+        return new LaboratoryStationLeg(fromStationId, toStationId, direction,
+                selected.routes().stream().map(Route::getId).toList(),
+                toStation.getPositionM(), selected.startSignalId(), selected.signalId());
     }
 
     private Station station(int stationId) {
@@ -100,28 +81,6 @@ final class LaboratoryStationLegResolver {
                 .filter(station -> String.valueOf(stationId).equals(station.getId()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("unknown station " + stationId));
-    }
-
-    private int initialMainlineSignal(Station station, int direction) {
-        Set<Integer> platformIds = new HashSet<>(station.getPlatformIds());
-        List<Platform> platforms = lineProfile.getPlatforms().stream()
-                .filter(platform -> platformIds.contains(platform.getId()))
-                .filter(platform -> platform.getDir() == direction)
-                .toList();
-        if (platforms.size() != 1) {
-            throw new IllegalArgumentException("station " + station.getId()
-                    + " has no unique initial platform for this direction");
-        }
-        List<Integer> signals = lineProfile.getSignals().stream()
-                .filter(signal -> signal.getSegId() == platforms.get(0).getSegId())
-                .filter(signal -> signal.getProtectDir() == direction)
-                .map(Signal::getId)
-                .toList();
-        if (signals.size() != 1) {
-            throw new IllegalArgumentException("station " + station.getId()
-                    + " has no unique initial signal for this direction");
-        }
-        return signals.get(0);
     }
 
     private List<Integer> stationSignals(Station station, int direction, String role) {
@@ -176,18 +135,22 @@ final class LaboratoryStationLegResolver {
         while (!pending.isEmpty()) {
             RoutePath current = pending.remove();
             PathCost currentCost = current.cost();
-            if (bestTargetCost != null && currentCost.compareTo(bestTargetCost) > 0) break;
+            if (bestTargetCost != null && currentCost.compareTo(bestTargetCost) > 0)
+                break;
             PathCost knownCost = bestAtSignal.get(current.signalId());
-            if (knownCost != null && currentCost.compareTo(knownCost) > 0) continue;
+            if (knownCost != null && currentCost.compareTo(knownCost) > 0)
+                continue;
             if (!current.routes().isEmpty() && targetSet.contains(current.signalId())) {
                 bestTargetCost = currentCost;
                 matches.add(current);
                 continue;
             }
-            if (current.routes().size() >= MAX_ROUTE_HOPS) continue;
+            if (current.routes().size() >= MAX_ROUTE_HOPS)
+                continue;
 
             for (Route route : outgoing.getOrDefault(current.signalId(), List.of())) {
-                if (current.visitedSignals().contains(route.getEndSignalId())) continue;
+                if (current.visitedSignals().contains(route.getEndSignalId()))
+                    continue;
                 List<Route> nextPath = new ArrayList<>(current.routes());
                 nextPath.add(route);
                 Set<Integer> visited = new HashSet<>(current.visitedSignals());
@@ -222,13 +185,15 @@ final class LaboratoryStationLegResolver {
     }
 
     private int reverseSwitchTraversals(Route route, Map<Integer, AxleCounterSection> axleSections,
-                                        Set<Integer> reverseSwitchSegIds) {
+            Set<Integer> reverseSwitchSegIds) {
         Set<Integer> routeReverseSegIds = new HashSet<>();
         for (int sectionId : safeList(route.getAxleSectionIds())) {
             AxleCounterSection section = axleSections.get(sectionId);
-            if (section == null || section.getSegIds() == null) continue;
+            if (section == null || section.getSegIds() == null)
+                continue;
             for (int segId : section.getSegIds()) {
-                if (reverseSwitchSegIds.contains(segId)) routeReverseSegIds.add(segId);
+                if (reverseSwitchSegIds.contains(segId))
+                    routeReverseSegIds.add(segId);
             }
         }
         return routeReverseSegIds.size();
@@ -239,8 +204,8 @@ final class LaboratoryStationLegResolver {
     }
 
     record LaboratoryStationLeg(int fromStationId, int toStationId, Direction direction,
-                                List<Integer> routeIds, double targetPositionM,
-                                int startSignalId, int targetSignalId) {
+            List<Integer> routeIds, double targetPositionM,
+            int startSignalId, int targetSignalId) {
         LaboratoryStationLeg {
             routeIds = List.copyOf(routeIds);
         }
@@ -251,19 +216,21 @@ final class LaboratoryStationLegResolver {
     }
 
     private record RouteSignature(int startSignalId, int endSignalId, List<Integer> axleSectionIds,
-                                  List<Integer> overlapIds, int ciZoneId) {}
+            List<Integer> overlapIds, int ciZoneId) {
+    }
 
     private record PathCost(int routeHops, int reverseSwitchTraversals) implements Comparable<PathCost> {
         @Override
         public int compareTo(PathCost other) {
             int byHops = Integer.compare(routeHops, other.routeHops);
-            return byHops != 0 ? byHops : Integer.compare(reverseSwitchTraversals,
-                    other.reverseSwitchTraversals);
+            return byHops != 0 ? byHops
+                    : Integer.compare(reverseSwitchTraversals,
+                            other.reverseSwitchTraversals);
         }
     }
 
     private record RoutePath(int signalId, int startSignalId, List<Route> routes,
-                             Set<Integer> visitedSignals, int reverseSwitchTraversals) {
+            Set<Integer> visitedSignals, int reverseSwitchTraversals) {
         PathCost cost() {
             return new PathCost(routes.size(), reverseSwitchTraversals);
         }
