@@ -23,7 +23,7 @@ signal:
 vehicle:
   protocol704:
     host: 192.168.100.123
-    ports: 8001,8002,8003
+    ports: 8001
     # The teacher PLC mirrors the same 46B desk frame on all three sockets.
     # Read every port for diagnosis, but only this socket is allowed to drive
     # the simulated train so mirrored frames cannot overwrite one lifecycle.
@@ -42,8 +42,8 @@ vehicle:
 
 # Hardware-in-the-loop output gateway. Keep disabled outside the laboratory.
 hil:
-  enabled: false
-  train-id: T1
+  enabled: true
+  train-id: OB2
   connect-timeout-ms: 1000
   screen-period-ms: 200
   signal-screen:
@@ -56,7 +56,7 @@ hil:
     host: 192.168.100.121
     port: 8888
   plc-output:
-    enabled: false
+    enabled: true
     period-ms: 500
     # Teacher ICD says 26B/dataLen=2. Its field table conflicts by placing a
     # speed WORD at offset 26, so no PLC-output variant is hardware-accepted.
