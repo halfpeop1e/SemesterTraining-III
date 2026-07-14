@@ -171,14 +171,9 @@ public class Protocol704VehicleControlBridge {
         ActiveSimulationContext context = contexts.get(trainId);
         if (context == null) return;
         synchronized (context) {
-            context.emergencyLatched = false;
-            context.emergencyBrakeRunning = false;
-            context.emergencyTrajectory = List.of();
-            context.emergencyFrameIndex = 0;
-            if (context.mode == DrivingMode.EMERGENCY) {
-                context.mode = DrivingMode.MANUAL;
-            }
+            clearEmergencyLatch(context, SOURCE_WEB_HMI);
             context.lastUpdatedAt = System.currentTimeMillis();
+            publishToDispatch(context);
         }
     }
 
@@ -365,8 +360,9 @@ public class Protocol704VehicleControlBridge {
         ActiveSimulationContext context = contexts.get(trainId);
         if (context == null) return;
         synchronized (context) {
+            boolean keyRisingEdge = false;
             if (fields.containsKey("key_switch_on")) {
-                updateKeyPreparation(context, bool(fields.get("key_switch_on")));
+                keyRisingEdge = updateKeyPreparation(context, bool(fields.get("key_switch_on")));
             }
             Integer directionHandle = integer(fields.get("direction_handle"));
             if (directionHandle != null) context.directionHandle = directionHandle;
@@ -411,6 +407,19 @@ public class Protocol704VehicleControlBridge {
             context.rightDoorClosePressed = closeRight;
             context.leftDoorOpenPressed = openLeft;
             context.leftDoorClosePressed = closeLeft;
+
+            // A stale PLC image is a real ATP intervention, so reconnection by
+            // itself must not clear it. The physical desk explicitly resets a
+            // stopped train with master/direction neutral and a fresh key-on edge.
+            if (keyRisingEdge && canAcknowledgeEmergencyRecoveryFromCab(context)) {
+                if (context.emergencyLatched) {
+                    clearEmergencyLatch(context, SOURCE_PLC);
+                } else {
+                    context.controlSource = SOURCE_PLC;
+                }
+                context.lastCommand = "EMERGENCY_RESET_KEY_CYCLE";
+                startPendingAutomaticDoorCycle(context);
+            }
             context.lastUpdatedAt = System.currentTimeMillis();
             publishToDispatch(context);
         }
@@ -744,7 +753,7 @@ public class Protocol704VehicleControlBridge {
      * open -> closed -> open. A cyclic PLC image only carries its current bit,
      * so retain this small transition history per registered desk session.
      */
-    private static void updateKeyPreparation(ActiveSimulationContext context, boolean keySwitchOn) {
+    private static boolean updateKeyPreparation(ActiveSimulationContext context, boolean keySwitchOn) {
         boolean previous = context.keySwitchOn;
         context.keySwitchOn = keySwitchOn;
 
@@ -757,6 +766,27 @@ public class Protocol704VehicleControlBridge {
         } else if (previous && !keySwitchOn && context.keyOpenedOnce) {
             context.keyClosedAfterOpen = true;
         }
+        return !previous && keySwitchOn;
+    }
+
+    private static boolean canAcknowledgeEmergencyRecoveryFromCab(ActiveSimulationContext context) {
+        return (context.emergencyLatched || context.stationArrivalPendingEmergencyRecovery)
+                && !context.emergencyBrakeRunning
+                && context.currentState.getVelocity() <= STOPPED_SPEED_MPS
+                && context.directionHandle == 0
+                && context.masterHandle == 0
+                && context.doorsClosed;
+    }
+
+    private static void clearEmergencyLatch(ActiveSimulationContext context, String controlSource) {
+        context.emergencyLatched = false;
+        context.emergencyBrakeRunning = false;
+        context.emergencyTrajectory = List.of();
+        context.emergencyFrameIndex = 0;
+        if (context.mode == DrivingMode.EMERGENCY) {
+            context.mode = DrivingMode.MANUAL;
+        }
+        context.controlSource = controlSource;
     }
 
     /** Advances backend-owned ATO and ATP emergency-brake trajectories. */
@@ -896,6 +926,10 @@ public class Protocol704VehicleControlBridge {
         context.currentState.setAcceleration(0.0);
         context.currentState.setPhase(SimulationPhase.STOPPED);
         context.lastCommand = "ATP_EMERGENCY_BRAKE";
+        // An ATP stop can legitimately finish a few metres short of the nominal
+        // head marker. Register an arrival only inside the same 12 m platform
+        // tolerance used by normal station protection; keep the emergency latch.
+        updateStationStop(context);
         context.lastUpdatedAt = System.currentTimeMillis();
         publishToDispatch(context);
     }
@@ -1026,15 +1060,37 @@ public class Protocol704VehicleControlBridge {
             context.doorState = "TERMINAL_DWELL";
         }
         if (context.laboratoryAutoDeparture && context.currentStationId > context.fromStationId) {
-            context.automaticDoorCycleActive = true;
-            context.automaticDoorDwellTicks = AUTOMATIC_DOOR_DWELL_TICKS;
-            context.doorsClosed = false;
-            context.doorCycleRequired = true;
-            context.doorOpenedAtStop = true;
-            context.doorState = "RIGHT_OPEN";
-            context.departureState = "DOOR_OPEN";
-            context.lastCommand = "AUTO_DOOR_OPEN";
+            if (context.emergencyLatched) {
+                // Arrival is recorded so the old route can be released, but a
+                // disconnected desk must never cause automatic door operation.
+                context.stationArrivalPendingEmergencyRecovery = true;
+                context.automaticDoorCycleActive = false;
+                context.doorsClosed = true;
+                context.doorCycleRequired = true;
+                context.doorState = "WAITING_EMERGENCY_RESET";
+                context.departureState = "ATP_EMERGENCY_BRAKE";
+                context.lastCommand = "ATP_EMERGENCY_BRAKE";
+            } else {
+                startAutomaticDoorCycle(context);
+            }
         }
+    }
+
+    private static void startPendingAutomaticDoorCycle(ActiveSimulationContext context) {
+        if (!context.stationArrivalPendingEmergencyRecovery) return;
+        startAutomaticDoorCycle(context);
+    }
+
+    private static void startAutomaticDoorCycle(ActiveSimulationContext context) {
+        context.stationArrivalPendingEmergencyRecovery = false;
+        context.automaticDoorCycleActive = true;
+        context.automaticDoorDwellTicks = AUTOMATIC_DOOR_DWELL_TICKS;
+        context.doorsClosed = false;
+        context.doorCycleRequired = true;
+        context.doorOpenedAtStop = true;
+        context.doorState = "RIGHT_OPEN";
+        context.departureState = "DOOR_OPEN";
+        context.lastCommand = "AUTO_DOOR_OPEN";
     }
 
     private void publishToDispatch(ActiveSimulationContext context) {
@@ -1211,6 +1267,7 @@ public class Protocol704VehicleControlBridge {
         boolean atoStartRisingEdge;
         boolean atoRunning;
         boolean automaticDoorCycleActive;
+        boolean stationArrivalPendingEmergencyRecovery;
         int automaticDoorDwellTicks;
         List<TrainState> atoTrajectory = List.of();
         int atoFrameIndex;

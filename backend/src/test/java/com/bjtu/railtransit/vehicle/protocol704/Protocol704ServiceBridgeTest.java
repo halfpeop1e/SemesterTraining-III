@@ -33,6 +33,8 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 class Protocol704ServiceBridgeTest {
     private Protocol704Service service;
@@ -164,6 +166,40 @@ class Protocol704ServiceBridgeTest {
 
         assertFalse(status.getRealtimeVehicleState().isAtoReady());
         assertNotEquals("ATO_READY", status.getRealtimeVehicleState().getDepartureState());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void staleInputWatchdogStartsTheScheduledAtpBrakeTrajectory() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 2)));
+        bridge.registerSimulation("STALE_WATCHDOG", 1, 2, result, DrivingMode.ATO, true);
+        TrainState moving = new TrainState(40.0, 500.0, 12.0, 0.0,
+                SimulationPhase.TRACTION, "STALE_WATCHDOG");
+        moving.setAbsolutePosition(931.0);
+        bridge.syncCurrentState("STALE_WATCHDOG", moving, DrivingMode.ATO, 1, 2, true);
+
+        Protocol704Status status = service.getStatus("STALE_WATCHDOG");
+        status.setReceivedValidFrame(true);
+        status.setLastValidFrameTime(System.currentTimeMillis() - 1000);
+        ReflectionTestUtils.setField(service, "staleInputMs", 1L);
+        Map<String, AtomicBoolean> running = (ConcurrentHashMap<String, AtomicBoolean>)
+                ReflectionTestUtils.getField(service, "runningFlags");
+        assertNotNull(running);
+        running.put("STALE_WATCHDOG", new AtomicBoolean(true));
+
+        ReflectionTestUtils.invokeMethod(service, "checkStaleInputs");
+
+        assertTrue(bridge.isEmergencyLatched("STALE_WATCHDOG"));
+        assertEquals("EMERGENCY", bridge.snapshot("STALE_WATCHDOG").mode());
+        assertTrue(bridge.snapshot("STALE_WATCHDOG").state().getVelocity() > 0.0,
+                "the watchdog must schedule a physical brake curve instead of teleporting to a stop");
+        assertNotNull(status.getLastCommandLifecycle());
+        assertEquals(Protocol704VehicleControlBridge.SOURCE_EMERGENCY,
+                status.getLastCommandLifecycle().getSource());
+
+        double before = bridge.snapshot("STALE_WATCHDOG").state().getPosition();
+        bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("STALE_WATCHDOG").state().getPosition() >= before);
     }
 
     @Test
@@ -313,7 +349,7 @@ class Protocol704ServiceBridgeTest {
 
         MovingAuthority ma = new MovingAuthority();
         ma.setTrainId(trainId);
-        ma.setEndOfAuthorityM(1_660.52);
+        ma.setEndOfAuthorityM(1_778.52);
         ma.setMaxSpeedKmh(65);
         ma.setEvent(SignalEvent.NONE);
         Map<String, MovingAuthority> authorities = new LinkedHashMap<>();

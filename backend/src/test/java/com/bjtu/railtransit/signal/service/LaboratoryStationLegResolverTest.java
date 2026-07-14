@@ -19,7 +19,7 @@ class LaboratoryStationLegResolverTest {
         LaboratoryStationLegResolver.LaboratoryStationLeg leg = resolver.resolve(1, 2, Direction.UP);
 
         assertEquals(List.of(9, 28), leg.routeIds());
-        assertEquals(1_660.520, leg.targetPositionM(), 0.001);
+        assertEquals(1_719.520, leg.targetPositionM(), 0.001);
         assertEquals(9, leg.startSignalId());
         assertEquals(62, leg.targetSignalId());
     }
@@ -32,7 +32,7 @@ class LaboratoryStationLegResolverTest {
         LaboratoryStationLegResolver.LaboratoryStationLeg leg = resolver.resolve(2, 3, Direction.UP);
 
         assertEquals(List.of(29), leg.routeIds());
-        assertEquals(2_448.610, leg.targetPositionM(), 0.001);
+        assertEquals(2_507.610, leg.targetPositionM(), 0.001);
     }
 
     @Test

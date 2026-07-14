@@ -355,7 +355,7 @@ class Protocol704VehicleControlBridgeTest {
         Protocol704VehicleControlBridge.ControlStateSnapshot snapshot = bridge.snapshot("MIDLINE");
 
         assertEquals(0.0, snapshot.state().getPosition(), 0.001);
-        assertEquals(1660.52, snapshot.absolutePositionM(), 0.001);
+        assertEquals(1778.52, snapshot.absolutePositionM(), 0.001);
         assertEquals(snapshot.absolutePositionM(), snapshot.state().getAbsolutePosition(), 0.001);
     }
 
@@ -668,6 +668,67 @@ class Protocol704VehicleControlBridgeTest {
         assertEquals(0.0, stopped.getVelocity(), 0.001);
         assertEquals(SimulationPhase.STOPPED, stopped.getPhase());
         assertTrue(bridge.isEmergencyLatched("ATP_EB"));
+    }
+
+    @Test
+    void staleEmergencyInsidePlatformToleranceRegistersArrivalAndWaitsForSafeKeyReset() {
+        SimulationResult result = vehicleService.run(provider.buildScenario(loader.buildLineProfile(1, 3)));
+        bridge.registerSimulation("STALE_AT_PLATFORM", 1, 3, result,
+                DrivingMode.MANUAL, true, false, true);
+        preparePhysicalDesk("STALE_AT_PLATFORM");
+
+        double origin = loader.listStations().stream()
+                .filter(station -> station.id == 1).findFirst().orElseThrow().km * 1000.0;
+        double stationTwo = loader.listStations().stream()
+                .filter(station -> station.id == 2).findFirst().orElseThrow().km * 1000.0;
+        TrainState approaching = new TrainState(80.0, stationTwo - origin - 8.0,
+                2.0, 0.0, SimulationPhase.BRAKING, "STALE_AT_PLATFORM");
+        approaching.setAbsolutePosition(stationTwo - 8.0);
+        bridge.syncCurrentState("STALE_AT_PLATFORM", approaching, DrivingMode.ATO, 1, 3, true);
+
+        bridge.applyAtpEmergencyBrake("STALE_AT_PLATFORM");
+
+        // Reconnection or an early key operation cannot clear a moving EB.
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+        assertTrue(bridge.isEmergencyLatched("STALE_AT_PLATFORM"));
+
+        for (int i = 0; i < 40; i++) bridge.advanceAtoSessions();
+
+        Protocol704VehicleControlBridge.ControlStateSnapshot stopped = bridge.snapshot("STALE_AT_PLATFORM");
+        assertEquals(2, stopped.currentStationId());
+        assertEquals(3, stopped.nextTargetStationId());
+        assertEquals(stationTwo, stopped.absolutePositionM(), 0.001);
+        assertEquals(0.0, stopped.state().getVelocity(), 0.001);
+        assertTrue(stopped.emergencyLatched());
+        assertTrue(stopped.doorsClosed());
+        assertEquals("WAITING_EMERGENCY_RESET", stopped.doorState());
+
+        for (int i = 0; i < 12; i++) bridge.advanceAtoSessions();
+        assertTrue(bridge.snapshot("STALE_AT_PLATFORM").doorsClosed(),
+                "automatic doors must remain closed while the emergency latch is active");
+
+        // A software reset alone still cannot advance the station workflow;
+        // the bridge waits for a fresh physical key acknowledgement.
+        bridge.resetEmergencyLatch("STALE_AT_PLATFORM");
+        assertFalse(bridge.isEmergencyLatched("STALE_AT_PLATFORM"));
+        assertTrue(bridge.snapshot("STALE_AT_PLATFORM").doorsClosed());
+        assertEquals("WAITING_EMERGENCY_RESET", bridge.snapshot("STALE_AT_PLATFORM").doorState());
+
+        // A fresh 8001 key cycle with both handles neutral is the explicit reset.
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", false, "direction_handle", 0, "master_handle", 0));
+        bridge.updateCabInputs("STALE_AT_PLATFORM", java.util.Map.of(
+                "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
+
+        Protocol704VehicleControlBridge.ControlStateSnapshot recovered = bridge.snapshot("STALE_AT_PLATFORM");
+        assertFalse(recovered.emergencyLatched());
+        assertEquals("MANUAL", recovered.mode());
+        assertFalse(recovered.doorsClosed());
+        assertEquals("RIGHT_OPEN", recovered.doorState());
+        assertFalse(recovered.atoRunning());
     }
 
     @Test

@@ -53,7 +53,12 @@ type DeskStatus = {
 type DriverWorkflow = {
   atoReady?: boolean;
   atoReadinessBlockingReason?: string;
-  control?: { currentStationId?: number; nextTargetStationId?: number };
+  control?: {
+    fromStationId?: number;
+    toStationId?: number;
+    currentStationId?: number;
+    nextTargetStationId?: number;
+  };
 };
 
 interface Props {
@@ -180,6 +185,15 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  useEffect(() => {
+    const activeFrom = workflow?.control?.fromStationId;
+    const activeTo = workflow?.control?.toStationId;
+    if (activeFrom && activeTo && activeTo > activeFrom) {
+      setFromStationId(activeFrom);
+      setToStationId(activeTo);
+    }
+  }, [workflow?.control?.fromStationId, workflow?.control?.toStationId]);
+
   const start = async () => {
     const id = trainId.trim();
     if (!/^[A-Za-z0-9_-]+$/.test(id)) {
@@ -304,7 +318,7 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
     controlPort?.connected
     && desk?.receivedValidFrame
     && desk.lastFrameLength === 46
-    && validFrameAgeMs <= 1500
+    && validFrameAgeMs <= 5000
     && !desk.staleInputFailSafeTriggered,
   );
   const plcInputLabel = plcInputContinuous
@@ -316,18 +330,19 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
   return (
     <section className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-amber-500/20 bg-slate-950/70 px-4 py-2">
       <div className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-amber-100"><LinkOutlined /> 实验列车</div>
-      <Input aria-label="实验列车编号" size="small" value={trainId}
+      <Input aria-label="实验列车编号" size="small" value={trainId} disabled={Boolean(desk?.simulationReady)}
         onChange={(event) => setTrainId(event.target.value.toUpperCase())} style={{ width: 88 }} />
       <Select aria-label="实验列车起点站" size="small" value={fromStationId} options={stationOptions}
+        disabled={Boolean(desk?.simulationReady)}
         onChange={(stationId) => {
           setFromStationId(stationId);
           setToStationId(stationId + 1);
         }} style={{ width: 150 }} />
       <Select aria-label="实验列车终点站" size="small" value={toStationId}
-        options={destinationOptions} disabled={!canStartFromSelectedStation}
+        options={destinationOptions} disabled={!canStartFromSelectedStation || Boolean(desk?.simulationReady)}
         onChange={setToStationId} style={{ width: 150 }} placeholder="选择终点站" />
       <Button type="primary" size="small" icon={<PlusOutlined />} loading={starting}
-        disabled={!canStartSelectedTrip} onClick={() => void start()} className="app-btn-gold">
+        disabled={!canStartSelectedTrip || Boolean(desk?.simulationReady)} onClick={() => void start()} className="app-btn-gold">
         创建并连接司机台
       </Button>
       <Popconfirm
@@ -353,6 +368,9 @@ export default function LabTrainQuickStart({ lineProfile, trains, initialStation
       </Button>
       <Button size="small" icon={<ReloadOutlined />} loading={refreshing} onClick={() => void refresh()}>刷新设备</Button>
       <div className="ml-auto flex flex-wrap items-center gap-1 text-xs">
+        {workflow?.control?.fromStationId && workflow?.control?.toStationId && (
+          <Tag color="gold">当前任务 站{workflow.control.fromStationId} → 站{workflow.control.toStationId}</Tag>
+        )}
         <Tag color={desk?.simulationReady ? 'green' : 'default'}>仿真 {desk?.simulationReady ? '已准备' : desk?.simulationReadiness || '未准备'}</Tag>
         <Tag color={plcInputContinuous ? 'green' : controlPort?.connected ? 'orange' : 'default'}>
           PLC {plcInputLabel}

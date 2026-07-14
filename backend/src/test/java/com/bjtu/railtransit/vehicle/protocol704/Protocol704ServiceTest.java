@@ -106,6 +106,17 @@ public class Protocol704ServiceTest {
     }
 
     @Test
+    public void recentLogsAreReturnedAsASerializationSafeSnapshot() {
+        Protocol704Status status = service.injectTestFrame("T1", "coast");
+        java.util.List<Protocol704LogEntry> snapshot = status.getRecentLogs();
+
+        snapshot.clear();
+
+        assertFalse(status.getRecentLogs().isEmpty(),
+                "API serialization must not iterate or mutate the live writer list");
+    }
+
+    @Test
     public void testRealtimeStateUsesRequestedTrainIdAndIsIsolated() {
         Protocol704Status first = service.getStatus("OB1");
         Protocol704Status second = service.getStatus("OB2");

@@ -47,8 +47,8 @@ public class Protocol704Service {
     @Value("${vehicle.protocol704.fail-safe-on-stale:true}")
     private boolean failSafeOnStale = true;
 
-    @Value("${vehicle.protocol704.stale-input-ms:1500}")
-    private long staleInputMs = 1500;
+    @Value("${vehicle.protocol704.stale-input-ms:5000}")
+    private long staleInputMs = 5000;
 
     private final List<Integer> ports = new ArrayList<>();
     private final Map<String, Map<Integer, PortClient>> portClients = new ConcurrentHashMap<>();
@@ -133,7 +133,7 @@ public class Protocol704Service {
             status.setPorts(new ArrayList<>(ports));
             status.setConnected(false);
             status.setStartTime(System.currentTimeMillis());
-            status.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
+            status.setRecentLogs(new ArrayList<>());
             status.setConnectionNote("PLC input only; screen and PLC lamp output are owned by LabHilGateway");
             status.setOutputEnabled(false);
             refreshSimulationReadiness(trainId, status);
@@ -217,7 +217,7 @@ public class Protocol704Service {
                 pss.put(p, ps);
             }
             s.setPortStatuses(pss);
-            s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
+            s.setRecentLogs(new ArrayList<>());
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             s.setConnectionNote("PLC input only; screen and PLC lamp output are owned by LabHilGateway");
             s.setOutputEnabled(false);
@@ -241,7 +241,7 @@ public class Protocol704Service {
                 pss.put(p, ps);
             }
             s.setPortStatuses(pss);
-            s.setRecentLogs(Collections.synchronizedList(new LinkedList<>()));
+            s.setRecentLogs(new ArrayList<>());
             s.setRealtimeVehicleState(realtimeStates.computeIfAbsent(k, this::createRealtimeState));
             s.setConnectionNote("custom PLC local-v1; not IEC 60870-5-104");
             return s;
@@ -351,12 +351,7 @@ public class Protocol704Service {
     }
 
     private void addLog(Protocol704Status status, Protocol704LogEntry entry) {
-        List<Protocol704LogEntry> logs = status.getRecentLogs();
-        if (logs == null) return;
-        synchronized (logs) {
-            logs.add(entry);
-            while (logs.size() > 200) logs.remove(0);
-        }
+        status.addRecentLog(entry, 200);
     }
 
     private class PortClient implements Runnable {
@@ -732,7 +727,13 @@ public class Protocol704Service {
             emergency.setTargetDecel(2.5);
             emergency.setDirection("ZERO");
             emergency.setNote("FAIL_SAFE: PLC input stale for more than " + staleInputMs + "ms");
-            Protocol704CommandLifecycle lifecycle = vehicleControlBridge.execute(trainId, emergency);
+            // Stale input is an ATP intervention, not a one-sample desk command.
+            // Start the complete scheduled brake trajectory, then obtain the
+            // idempotent lifecycle snapshot for the status API.
+            vehicleControlBridge.applyAtpEmergencyBrake(trainId);
+            Protocol704CommandLifecycle lifecycle = vehicleControlBridge.execute(
+                    trainId, emergency, Protocol704VehicleControlBridge.SOURCE_EMERGENCY,
+                    "plc-stale-watchdog", controlPort);
             status.setLastMappedCommand(emergency);
             status.setLastCommandLifecycle(lifecycle);
             status.setStaleInputFailSafeTriggered(true);

@@ -60,7 +60,7 @@ class SignalPlcDepartureServiceTest {
 
         assertFalse(service.isAtoReady("T1"), "an EoA before station 2 must not start an ATO leg");
 
-        putMa("T1", 1_660.52);
+        putMa("T1", 1_778.52);
         assertTrue(service.isAtoReady("T1"));
     }
 
@@ -68,7 +68,7 @@ class SignalPlcDepartureServiceTest {
     void atoReadyRequiresThePhysicalKeyPreparation() {
         register("T1", DrivingMode.MANUAL);
         bridge.syncDepartureAuth("T1", true);
-        putMa("T1", 1_660.52);
+        putMa("T1", 1_778.52);
 
         assertEquals("KEY_SWITCH_OFF", service.atoReadinessBlockingReason("T1"));
         assertFalse(service.isAtoReady("T1"));
@@ -88,7 +88,7 @@ class SignalPlcDepartureServiceTest {
     void atoReadyRequiresForwardDirectionAndZeroMasterHandleAfterKeyPreparation() {
         register("T1", DrivingMode.MANUAL);
         bridge.syncDepartureAuth("T1", true);
-        putMa("T1", 1_660.52);
+        putMa("T1", 1_778.52);
 
         bridge.updateCabInputs("T1", Map.of(
                 "key_switch_on", true, "direction_handle", 0, "master_handle", 0));
@@ -117,7 +117,7 @@ class SignalPlcDepartureServiceTest {
         assertFalse(service.isAtoReady("T1"));
         assertEquals("WAITING_MOVEMENT_AUTHORITY", service.atoWorkflowState("T1"));
 
-        putMa("T1", 1_660.52);
+        putMa("T1", 1_778.52);
         assertEquals("ATO_READY", service.atoWorkflowState("T1"));
     }
 
@@ -194,7 +194,7 @@ class SignalPlcDepartureServiceTest {
         train.setTrainId("T1");
         train.setDirection("UP");
         train.setStatus("READY_TO_DEPART");
-        train.setPositionMeters(313.0);
+        train.setPositionMeters(431.0);
         train.setSpeed(0.0);
         train.setTrainLengthMeters(114.0);
 
@@ -220,7 +220,7 @@ class SignalPlcDepartureServiceTest {
         SignalCycleService cycle = new SignalCycleService(
                 new MovingAuthorityService(MaConfig.exampleConfig()), maRegistry,
                 new LineProfileLoader(), interlocking, new SignalEventLog(), service, true);
-        TrainState train = trainAt("T1", 313.0, "READY_TO_DEPART");
+        TrainState train = trainAt("T1", 431.0, "READY_TO_DEPART");
 
         interlocking.buildAndAssignLaboratoryStationLeg("T1", 1, 2, 0.0);
         cycle.runCycle(List.of(train), 0.0);
@@ -237,9 +237,9 @@ class SignalPlcDepartureServiceTest {
         assertFalse(bridge.snapshot("T1").atoRunning(), "ATO must stop at station 2");
         assertEquals(2, bridge.snapshot("T1").currentStationId());
         assertEquals(3, bridge.snapshot("T1").nextTargetStationId());
-        assertEquals(1_660.52, bridge.snapshot("T1").absolutePositionM(), 0.001);
+        assertEquals(1_778.52, bridge.snapshot("T1").absolutePositionM(), 0.001);
 
-        train.setPositionMeters(1_660.52);
+        train.setPositionMeters(1_778.52);
         train.setStatus("READY_TO_DEPART");
         train.setSpeed(0.0);
         cycle.runCycle(List.of(train), 1.0);
@@ -271,7 +271,7 @@ class SignalPlcDepartureServiceTest {
         SignalCycleService cycle = new SignalCycleService(
                 new MovingAuthorityService(MaConfig.exampleConfig()), maRegistry,
                 new LineProfileLoader(), interlocking, new SignalEventLog(), service, true, true);
-        TrainState runtime = trainAt("T1", 313.0, "READY_TO_DEPART");
+        TrainState runtime = trainAt("T1", 431.0, "READY_TO_DEPART");
 
         // The cab must report neutral handles while the key completes
         // open -> closed -> open, then select forward. None of these cyclic
@@ -286,7 +286,7 @@ class SignalPlcDepartureServiceTest {
         cycle.runCycle(List.of(runtime), 0.0);
         assertEquals(List.of(9, 28), interlocking.getBuiltRoutesForTrain("T1").stream()
                 .map(route -> route.getId()).toList());
-        assertEquals(1_660.520, maRegistry.get("T1").getEndOfAuthorityM(), 0.001);
+        assertEquals(1_778.520, maRegistry.get("T1").getEndOfAuthorityM(), 0.001);
         assertTrue(service.isAtoReady("T1"));
 
         // byte34 bit7 is emitted only after the desk has interlocked the two
@@ -300,9 +300,9 @@ class SignalPlcDepartureServiceTest {
 
         assertEquals(2, bridge.snapshot("T1").currentStationId());
         assertEquals(3, bridge.snapshot("T1").nextTargetStationId());
-        assertEquals(1_660.520, bridge.snapshot("T1").absolutePositionM(), 0.001);
+        assertEquals(1_778.520, bridge.snapshot("T1").absolutePositionM(), 0.001);
 
-        runtime = trainAt("T1", 1_660.520, "READY_TO_DEPART");
+        runtime = trainAt("T1", 1_778.520, "READY_TO_DEPART");
         cycle.runCycle(List.of(runtime), 1.0);
         assertNull(interlocking.getRouteRuntimeForTrain("T1"),
                 "arrival releases the complete old CBI route chain");
@@ -321,7 +321,7 @@ class SignalPlcDepartureServiceTest {
         cycle.runCycle(List.of(runtime), 2.0);
         assertEquals(List.of(29), interlocking.getBuiltRoutesForTrain("T1").stream()
                 .map(route -> route.getId()).toList());
-        assertEquals(2_448.610, maRegistry.get("T1").getEndOfAuthorityM(), 0.001);
+        assertEquals(2_566.610, maRegistry.get("T1").getEndOfAuthorityM(), 0.001);
         assertTrue(service.isAtoReady("T1"));
 
         // The release frame above re-arms edge detection. The second ATO press
@@ -339,7 +339,7 @@ class SignalPlcDepartureServiceTest {
         SignalCycleService cycle = new SignalCycleService(
                 new MovingAuthorityService(MaConfig.exampleConfig()), maRegistry,
                 new LineProfileLoader(), interlocking, new SignalEventLog(), service, true, true);
-        TrainState runtime = trainAt("T1", 313.0, "READY_TO_DEPART");
+        TrainState runtime = trainAt("T1", 431.0, "READY_TO_DEPART");
 
         cycle.runCycle(List.of(runtime), 0.0);
 
@@ -354,7 +354,7 @@ class SignalPlcDepartureServiceTest {
         assertEquals("EXECUTED", bridge.execute("T1", atoStart).getStatus());
         advanceAtoToStation("T1");
 
-        runtime = trainAt("T1", 1_660.520, "READY_TO_DEPART");
+        runtime = trainAt("T1", 1_778.520, "READY_TO_DEPART");
         cycle.runCycle(List.of(runtime), 1.0);
         assertNull(interlocking.getRouteRuntimeForTrain("T1"));
 

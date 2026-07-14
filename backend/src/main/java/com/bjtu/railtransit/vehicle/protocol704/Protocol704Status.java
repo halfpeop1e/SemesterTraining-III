@@ -17,6 +17,7 @@ public class Protocol704Status {
     private Parsed704Frame lastParsedFrame;
     private MappedControlCommand lastMappedCommand;
     private RealtimeVehicleState realtimeVehicleState;
+    private final Object recentLogsLock = new Object();
     private List<Protocol704LogEntry> recentLogs = new ArrayList<>();
     private String connectionNote;
     /** Socket-level state is separate from whether a valid local-v1 frame has arrived. */
@@ -66,8 +67,23 @@ public class Protocol704Status {
     public RealtimeVehicleState getRealtimeVehicleState() { return realtimeVehicleState; }
     public void setRealtimeVehicleState(RealtimeVehicleState realtimeVehicleState) { this.realtimeVehicleState = realtimeVehicleState; }
 
-    public List<Protocol704LogEntry> getRecentLogs() { return recentLogs; }
-    public void setRecentLogs(List<Protocol704LogEntry> recentLogs) { this.recentLogs = recentLogs; }
+    /** Jackson and API callers always iterate an immutable-in-practice snapshot. */
+    public List<Protocol704LogEntry> getRecentLogs() {
+        synchronized (recentLogsLock) {
+            return new ArrayList<>(recentLogs);
+        }
+    }
+    public void setRecentLogs(List<Protocol704LogEntry> recentLogs) {
+        synchronized (recentLogsLock) {
+            this.recentLogs = recentLogs == null ? new ArrayList<>() : new ArrayList<>(recentLogs);
+        }
+    }
+    void addRecentLog(Protocol704LogEntry entry, int maximumSize) {
+        synchronized (recentLogsLock) {
+            recentLogs.add(entry);
+            while (recentLogs.size() > maximumSize) recentLogs.remove(0);
+        }
+    }
 
     public String getConnectionNote() { return connectionNote; }
     public void setConnectionNote(String connectionNote) { this.connectionNote = connectionNote; }

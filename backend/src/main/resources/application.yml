@@ -34,14 +34,15 @@ vehicle:
     connect-timeout-ms: 3000
     read-timeout-ms: 1000
     auto-start: false
-    # After real PLC control has started, stale input must not leave traction latched.
+    # The physical PLC normally emits every 100 ms. Allow short Windows/Docker
+    # scheduling gaps, but retain emergency braking for a genuine disconnect.
     fail-safe-on-stale: true
-    stale-input-ms: 1500
+    stale-input-ms: 5000
     # Retained only for backwards-compatible configuration files. Protocol704Service
     # is always input-only; LabHilGateway is the sole PLC physical-output owner.
-    plc-output-enabled: false
-    hmi-output-enabled: false
-    mmi-output-enabled: false
+    plc-output-enabled: true
+    hmi-output-enabled: true
+    mmi-output-enabled: true
 
 # Hardware-in-the-loop output gateway. Keep disabled outside the laboratory.
 hil:

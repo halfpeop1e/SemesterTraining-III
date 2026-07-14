@@ -55,7 +55,7 @@ class HilSnapshotProviderTest {
         bridge.updateCabInputs("T1", Map.of(
                 "key_switch_on", true, "direction_handle", 1, "master_handle", 0));
         bridge.syncDepartureAuth("T1", true);
-        putMa(1_660.520);
+        putMa(1_778.520);
     }
 
     @Test
@@ -64,7 +64,8 @@ class HilSnapshotProviderTest {
 
         assertTrue(state.atoAvailable());
         assertFalse(state.atoActive());
-        assertEquals(313.0, state.positionM(), 0.001);
+        assertEquals(431.0, state.positionM(), 0.001);
+        assertEquals(11, state.visionEdgeId());
         assertEquals(65.0, state.speedLimitKmh(), 0.001);
 
         byte[] plc = TeacherDeviceFrameCodec.plcOutput(state,
@@ -98,6 +99,19 @@ class HilSnapshotProviderTest {
         assertEquals(28, plc.length);
         assertEquals(1, (plc[25] >>> 2) & 1);
         assertEquals(0, plc[25] & 0x01);
+    }
+
+    @Test
+    void positiveMileageUsesTheLatestPhysicalDownVisionEdges() {
+        assertEquals(3, HilSnapshotProvider.visionEdgeFor(100.0, 1));
+        assertEquals(11, HilSnapshotProvider.visionEdgeFor(431.0, 1));
+        assertEquals(17, HilSnapshotProvider.visionEdgeFor(1_778.520, 1));
+        assertEquals(21, HilSnapshotProvider.visionEdgeFor(6_459.274, 1));
+        assertEquals(24, HilSnapshotProvider.visionEdgeFor(8_346.5, 1));
+        assertEquals(28, HilSnapshotProvider.visionEdgeFor(9_547.344, 1));
+        assertEquals(36, HilSnapshotProvider.visionEdgeFor(16_169.01966, 1));
+        assertEquals(43, HilSnapshotProvider.visionEdgeFor(16_220.0, 1));
+        assertEquals(47, HilSnapshotProvider.visionEdgeFor(16_480.0, 1));
     }
 
     private void putMa(double endOfAuthorityM) {
