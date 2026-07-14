@@ -115,8 +115,17 @@ public final class TeacherDeviceFrameCodec {
 
         for (int car = 0; car < 6; car++) {
             frame.putShort(144 + car * 2, (short) 800); // main reservoir kPa
-            frame.putShort(156 + car * 2, (short) (state.emergencyBrake() ? 350 :
-                    ("BRAKE".equals(state.handle()) ? 100 + state.handleLevelPercent() * 3 : 0)));
+
+            // Brake cylinder pressure: EB = 350 kPa; service brake capped at 350
+            int brakeKpa = 0;
+            if (state.emergencyBrake()) {
+                brakeKpa = 350;
+            } else if ("BRAKE".equals(state.handle())) {
+                brakeKpa = (int) Math.round(100 + state.handleLevelPercent() * 2.5);
+                if (brakeKpa > 350) brakeKpa = 350;
+            }
+            frame.putShort(156 + car * 2, (short) brakeKpa);
+
             frame.put(168 + car, (byte) 50); // AW load placeholder, documented default
             frame.put(174 + car, (byte) clampU8(Math.round(Math.abs(state.lineCurrentA()))));
         }

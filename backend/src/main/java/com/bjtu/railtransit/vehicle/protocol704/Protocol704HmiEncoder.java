@@ -68,8 +68,8 @@ public final class Protocol704HmiEncoder {
         // 39: _nPowerState (车间电源: 0=无)
         frame[39] = (byte) 0;
 
-        // 40-43: _nSpeed FLOAT LE
-        bb.putFloat(40, (float) s.getVelocityMs());
+        // 40-43: _nSpeed FLOAT LE (协议要求 km/h)
+        bb.putFloat(40, (float) (s.getVelocityMs() * 3.6));
         // 44-47: _fAcceleration FLOAT LE
         bb.putFloat(44, (float) s.getAccelerationMs2());
         // 48-49: _nPowerPull WORD (总牵引力, local-v1: 0)
